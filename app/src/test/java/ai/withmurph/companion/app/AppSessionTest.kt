@@ -106,6 +106,7 @@ class AppSessionTest {
         val fixture = fixture(now = now)
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.api.status = CompanionSyncStatus(
             lastDataReceivedAt = now.minusSeconds(600),
             resources = mapOf(
@@ -119,6 +120,34 @@ class AppSessionTest {
         assertEquals(listOf("health_connect"), fixture.api.statusSources)
         assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
         assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun revokedPermissionsOverrideARecentBackendReceiptAfterReturningToTheApp() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(600),
+            resources = mapOf(
+                "sleep" to CompanionSyncStatus.ResourceStatus(now.minusSeconds(600)),
+            ),
+        )
+        fixture.session.start()
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+
+        fixture.health.grantedCount = 0
+        fixture.session.didBecomeActive()
+
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(
+            "Health Connect access is off. Reconnect and choose at least one category.",
+            fixture.session.state.value.healthMessage,
+        )
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
     }
 
     @Test
@@ -229,6 +258,7 @@ class AppSessionTest {
         var connectCalls = 0
         var syncCalls = 0
         var signOutCalls = 0
+        var grantedCount = 0
 
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
@@ -237,7 +267,7 @@ class AppSessionTest {
             configureCalls += 1
         }
         override fun isBackgroundSyncEnabled(): Boolean = false
-        override fun grantedResourceCount(): Int = if (connectCalls > 0) totalResourceCount else 0
+        override fun grantedResourceCount(): Int = grantedCount
 
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             assertTrue(memberKey.isNotBlank())
@@ -248,6 +278,7 @@ class AppSessionTest {
 
         override suspend fun connectAfterPermissionRequest() {
             connectCalls += 1
+            grantedCount = totalResourceCount
         }
 
         override suspend fun refreshPermissionState() = Unit

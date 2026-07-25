@@ -153,7 +153,11 @@ class AppSession(
         }
 
     suspend fun syncNow() {
-        if (_state.value.phase != AppPhase.Ready || !healthWasRequested()) return
+        if (
+            _state.value.phase != AppPhase.Ready ||
+            !healthWasRequested() ||
+            health.grantedResourceCount() == 0
+        ) return
         healthMutex.withLock {
             val epoch = sessionEpoch
             syncAndRefresh(epoch)
@@ -168,14 +172,34 @@ class AppSession(
         } catch (_: Exception) {
             // Availability and backend receipt status remain independently useful.
         }
+        val availability = health.availability()
+        val grantedResourceCount = health.grantedResourceCount()
+        val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
         _state.update { current ->
             current.copy(
-                healthAvailability = health.availability(),
+                healthAvailability = availability,
+                healthSync = if (needsPermissionRecovery) {
+                    HealthSyncState.NotConnected
+                } else {
+                    current.healthSync
+                },
                 backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
-                grantedResourceCount = health.grantedResourceCount(),
+                grantedResourceCount = grantedResourceCount,
+                healthMessage = if (
+                    needsPermissionRecovery &&
+                    availability == HealthConnectAvailability.Available
+                ) {
+                    HEALTH_PERMISSION_RECOVERY_MESSAGE
+                } else {
+                    current.healthMessage
+                },
             )
         }
-        if (_state.value.phase == AppPhase.Ready && healthWasRequested()) {
+        if (
+            _state.value.phase == AppPhase.Ready &&
+            healthWasRequested() &&
+            grantedResourceCount > 0
+        ) {
             syncNow()
         }
     }
@@ -288,22 +312,32 @@ class AppSession(
             }
         }
 
+        val grantedResourceCount = health.grantedResourceCount()
+        val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
                 authVerifiedOnline = authState.verifiedOnline,
                 healthAvailability = health.availability(),
-                healthSync = deriveCachedHealthState(),
-                grantedResourceCount = health.grantedResourceCount(),
-                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
-                healthMessage = if (authState.verifiedOnline) {
-                    null
+                healthSync = if (needsPermissionRecovery) {
+                    HealthSyncState.NotConnected
                 } else {
-                    "You're offline. Murph will verify the session and resume sync when the connection returns."
+                    deriveCachedHealthState()
+                },
+                grantedResourceCount = grantedResourceCount,
+                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
+                healthMessage = when {
+                    needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
+                    authState.verifiedOnline -> null
+                    else -> "You're offline. Murph will verify the session and resume sync when the connection returns."
                 },
             )
         }
-        if (healthWasRequested() && authState.verifiedOnline) {
+        if (
+            healthWasRequested() &&
+            authState.verifiedOnline &&
+            grantedResourceCount > 0
+        ) {
             healthMutex.withLock { syncAndRefresh(epoch) }
         }
     }
@@ -557,5 +591,7 @@ class AppSession(
         const val HEALTH_CONNECT_SOURCE = "health_connect"
         const val CONSENT_REQUIRED_MESSAGE =
             "Murph needs your latest health consent. Complete it at withmurph.ai, then try again."
+        const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
+            "Health Connect access is off. Reconnect and choose at least one category."
     }
 }
