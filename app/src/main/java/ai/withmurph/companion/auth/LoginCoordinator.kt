@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 data class LoginUiState(
     val method: LoginMethod = LoginMethod.Phone,
     val destination: String = "",
+    val phoneCountry: CountryDialCode = CountryDialCode.Default,
     val code: String = "",
     val codeSent: Boolean = false,
     val isInFlight: Boolean = false,
@@ -18,13 +19,13 @@ data class LoginUiState(
 ) {
     val normalizedDestination: String
         get() = when (method) {
-            LoginMethod.Phone -> destination.filterNot(Char::isWhitespace)
+            LoginMethod.Phone -> phoneCountry.compose(destination)
             LoginMethod.Email -> destination.trim()
         }
 
     val canSendCode: Boolean
         get() = !codeSent && !isInFlight && when (method) {
-            LoginMethod.Phone -> PHONE_PATTERN.matches(normalizedDestination)
+            LoginMethod.Phone -> CountryDialCode.isPlausibleE164(normalizedDestination)
             LoginMethod.Email -> EMAIL_PATTERN.matches(normalizedDestination)
         }
 
@@ -32,7 +33,6 @@ data class LoginUiState(
         get() = codeSent && !isInFlight && code.count(Char::isDigit) == 6
 
     private companion object {
-        val PHONE_PATTERN = Regex("^\\+[1-9][0-9]{7,14}$")
         val EMAIL_PATTERN = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
     }
 }
@@ -43,7 +43,17 @@ class LoginCoordinator(private val auth: AuthProvider) {
 
     fun setMethod(method: LoginMethod) {
         if (_state.value.isInFlight) return
-        _state.value = LoginUiState(method = method)
+        _state.value = LoginUiState(
+            method = method,
+            phoneCountry = _state.value.phoneCountry,
+        )
+    }
+
+    fun setPhoneCountry(country: CountryDialCode) {
+        if (_state.value.isInFlight || _state.value.codeSent) return
+        _state.update { current ->
+            current.copy(phoneCountry = country, errorMessage = null)
+        }
     }
 
     fun setDestination(destination: String) {

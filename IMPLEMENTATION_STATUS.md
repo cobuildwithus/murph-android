@@ -9,7 +9,10 @@
 - Explicit Junction Health Connect configuration, four minimum-necessary resources, 30-day backfill, manual sync, setup-time history permission, and optional background sync with separately requested background-read access.
 - Account-switch, reinstall distrust, stale-session replacement, and fail-closed sign-out safeguards.
 - Backend-receipt sync-state derivation with 36-hour and 72-hour thresholds.
-- Compose login, setup, status, WHOOP guidance, settings, and failure screens.
+- Compose login, setup, status, WHOOP guidance, consent, settings, and failure
+  screens matched to the shared `murph-ios` visual system.
+- Debug-only deterministic visual fixtures for phone login, email login, OTP,
+  setup, waiting, synced, delayed, attention, and failure states.
 - Unit tests for sync-state derivation, external-ID stability, explicit connect/resume behavior, backend receipt truth, and member-switch teardown.
 
 ## Executable verification
@@ -50,5 +53,5 @@ physical-device gate because an emulator has no member-owned wearable history.
 - Samsung Health.
 - Push notifications beyond Junction's required foreground-service notification.
 - Analytics and crash reporting.
-- UI screenshot fixtures and instrumentation tests.
+- Instrumentation screenshot regression tests.
 - Any local health-value cache or database.

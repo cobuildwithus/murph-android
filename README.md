@@ -68,6 +68,11 @@ Apply the accompanying backend patch before testing. Current Murph `main` reject
 
 The verification script runs `./gradlew --no-daemon test lintDebug assembleDebug`.
 
+Debug builds also include a deterministic screenshot activity for visual
+comparison without using a real account or health data. Supported `scenario`
+values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
+`attention`, and `failure`.
+
 Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
 
 ## Data requested

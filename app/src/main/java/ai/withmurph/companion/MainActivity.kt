@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
                     loginState = loginState,
                     actions = MurphActions(
                         onLoginMethodChanged = graph.login::setMethod,
+                        onPhoneCountryChanged = graph.login::setPhoneCountry,
                         onLoginDestinationChanged = graph.login::setDestination,
                         onLoginCodeChanged = graph.login::setCode,
                         onSendLoginCode = {

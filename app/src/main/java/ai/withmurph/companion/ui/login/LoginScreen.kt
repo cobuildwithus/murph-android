@@ -1,6 +1,17 @@
 package ai.withmurph.companion.ui.login
 
+import ai.withmurph.companion.auth.CountryDialCode
+import ai.withmurph.companion.auth.LoginUiState
+import ai.withmurph.companion.core.LoginMethod
+import ai.withmurph.companion.ui.components.MurphLinkButton
+import ai.withmurph.companion.ui.components.MurphLogo
+import ai.withmurph.companion.ui.components.MurphPrimaryButton
+import ai.withmurph.companion.ui.components.MurphTextField
+import ai.withmurph.companion.ui.theme.MurphColors
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,26 +20,57 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.withmurph.companion.auth.LoginUiState
-import ai.withmurph.companion.core.LoginMethod
-import ai.withmurph.companion.ui.components.MurphPrimaryButton
-import ai.withmurph.companion.ui.theme.MurphColors
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     state: LoginUiState,
     onMethodChanged: (LoginMethod) -> Unit,
+    onPhoneCountryChanged: (CountryDialCode) -> Unit,
     onDestinationChanged: (String) -> Unit,
     onCodeChanged: (String) -> Unit,
     onSendCode: () -> Unit,
@@ -38,115 +80,439 @@ fun LoginScreen(
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
 ) {
+    var showsCountryPicker by rememberSaveable { mutableStateOf(false) }
+    val destinationFocus = remember { FocusRequester() }
+    val codeFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(state.method, state.codeSent, showsCountryPicker) {
+        if (showsCountryPicker) return@LaunchedEffect
+        delay(450)
+        if (state.codeSent) {
+            codeFocus.requestFocus()
+        } else {
+            destinationFocus.requestFocus()
+        }
+        keyboard?.show()
+    }
+
     Box(
-        modifier = Modifier.fillMaxSize().background(MurphColors.Cream).padding(28.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MurphColors.Cream),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().align(Alignment.Center),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(28.dp),
         ) {
-            Text(
-                text = "Murph",
-                style = MaterialTheme.typography.displayLarge,
-                color = MurphColors.Slate,
-            )
-            Text(
-                text = if (state.codeSent) {
-                    "We sent a code to ${state.normalizedDestination}."
-                } else {
-                    "Sign in with your existing Murph account to connect Health Connect."
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = MurphColors.SlateMuted,
-            )
+            Spacer(Modifier.weight(1f))
 
-            if (!state.codeSent) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LoginMethod.entries.forEach { method ->
-                        TextButton(onClick = { onMethodChanged(method) }) {
-                            Text(
-                                text = method.name,
-                                color = if (state.method == method) {
-                                    MurphColors.SageDark
-                                } else {
-                                    MurphColors.SlateMuted
-                                },
-                            )
-                        }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                MurphLogo()
+
+                if (state.codeSent) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "We sent a code to ${state.normalizedDestination}.",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MurphColors.SlateMuted,
+                            maxLines = 2,
+                        )
+                        MurphLinkButton(
+                            text = "Resend",
+                            onClick = onResendCode,
+                            enabled = !state.isInFlight,
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier.height(44.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Text(
+                            text = "Health challenges with friends.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MurphColors.SlateMuted,
+                        )
                     }
                 }
-                OutlinedTextField(
-                    value = state.destination,
-                    onValueChange = onDestinationChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = {
-                        Text(if (state.method == LoginMethod.Phone) "Phone number" else "Email")
-                    },
-                    placeholder = {
-                        Text(if (state.method == LoginMethod.Phone) "+14155552671" else "you@example.com")
-                    },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (state.method == LoginMethod.Phone) {
-                            KeyboardType.Phone
-                        } else {
-                            KeyboardType.Email
-                        },
-                    ),
-                    shape = MaterialTheme.shapes.large,
-                )
-                if (state.method == LoginMethod.Phone) {
-                    Text(
-                        "Use full international format, including + and country code.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MurphColors.SlateMuted,
-                    )
-                }
-                MurphPrimaryButton(
-                    text = if (state.isInFlight) "Sending…" else "Send code",
-                    onClick = onSendCode,
-                    enabled = state.canSendCode,
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            if (state.codeSent) {
+                CodeStage(
+                    state = state,
+                    focusRequester = codeFocus,
+                    onCodeChanged = onCodeChanged,
+                    onConfirmCode = onConfirmCode,
+                    onChangeDestination = onChangeDestination,
                 )
             } else {
-                OutlinedTextField(
-                    value = state.code,
-                    onValueChange = onCodeChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("6-digit code") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    shape = MaterialTheme.shapes.large,
+                DestinationStage(
+                    state = state,
+                    focusRequester = destinationFocus,
+                    onChooseCountry = { showsCountryPicker = true },
+                    onDestinationChanged = onDestinationChanged,
+                    onSendCode = onSendCode,
+                    onMethodChanged = onMethodChanged,
                 )
-                MurphPrimaryButton(
-                    text = if (state.isInFlight) "Signing in…" else "Sign in",
-                    onClick = onConfirmCode,
-                    enabled = state.canConfirmCode,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    TextButton(onClick = onChangeDestination) { Text("Change") }
-                    TextButton(onClick = onResendCode) { Text("Resend") }
-                }
             }
 
             if (state.errorMessage != null) {
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    state.errorMessage,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MurphColors.Sienna,
+                    text = state.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MurphColors.SlateMuted,
                 )
             }
-            Spacer(Modifier.height(8.dp))
+
+            Spacer(Modifier.weight(2f))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MurphLinkButton("Privacy", onOpenPrivacy)
+                Spacer(Modifier.width(18.dp))
+                MurphLinkButton("Terms", onOpenTerms)
+            }
+        }
+    }
+
+    if (showsCountryPicker) {
+        CountryPicker(
+            selection = state.phoneCountry,
+            onSelect = {
+                onPhoneCountryChanged(it)
+                showsCountryPicker = false
+            },
+            onDismiss = { showsCountryPicker = false },
+        )
+    }
+}
+
+@Composable
+private fun DestinationStage(
+    state: LoginUiState,
+    focusRequester: FocusRequester,
+    onChooseCountry: () -> Unit,
+    onDestinationChanged: (String) -> Unit,
+    onSendCode: () -> Unit,
+    onMethodChanged: (LoginMethod) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        if (state.method == LoginMethod.Phone) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CountryButton(
+                    country = state.phoneCountry,
+                    enabled = !state.isInFlight,
+                    onClick = onChooseCountry,
+                )
+                MurphTextField(
+                    value = state.destination,
+                    onValueChange = onDestinationChanged,
+                    placeholder = "555 555 0100",
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Phone,
+                        imeAction = ImeAction.Send,
+                    ),
+                    keyboardActions = KeyboardActions(onSend = { onSendCode() }),
+                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                    enabled = !state.isInFlight,
+                )
+            }
+        } else {
+            MurphTextField(
+                value = state.destination,
+                onValueChange = onDestinationChanged,
+                placeholder = "you@example.com",
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Email,
+                    imeAction = ImeAction.Send,
+                ),
+                keyboardActions = KeyboardActions(onSend = { onSendCode() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                enabled = !state.isInFlight,
+            )
         }
 
+        MurphPrimaryButton(
+            text = if (state.isInFlight) "Sending…" else "Send code",
+            onClick = onSendCode,
+            enabled = state.canSendCode,
+        )
+
+        MurphLinkButton(
+            text = if (state.method == LoginMethod.Phone) {
+                "Use email instead"
+            } else {
+                "Use phone number instead"
+            },
+            onClick = {
+                onMethodChanged(
+                    if (state.method == LoginMethod.Phone) LoginMethod.Email else LoginMethod.Phone,
+                )
+            },
+            modifier = Modifier.align(Alignment.Start),
+            enabled = !state.isInFlight,
+        )
+    }
+}
+
+@Composable
+private fun CountryButton(
+    country: CountryDialCode,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(22.dp)
+    Row(
+        modifier = Modifier
+            .height(56.dp)
+            .clip(shape)
+            .background(MurphColors.Card.copy(alpha = 0.9f))
+            .border(1.dp, MurphColors.BorderWarm, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = country.dialCode,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MurphColors.Slate,
+        )
+        Canvas(Modifier.size(12.dp)) {
+            drawLine(
+                color = MurphColors.SlateMuted,
+                start = Offset(size.width * 0.18f, size.height * 0.38f),
+                end = Offset(size.width * 0.5f, size.height * 0.68f),
+                strokeWidth = 1.8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = MurphColors.SlateMuted,
+                start = Offset(size.width * 0.5f, size.height * 0.68f),
+                end = Offset(size.width * 0.82f, size.height * 0.38f),
+                strokeWidth = 1.8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CodeStage(
+    state: LoginUiState,
+    focusRequester: FocusRequester,
+    onCodeChanged: (String) -> Unit,
+    onConfirmCode: () -> Unit,
+    onChangeDestination: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        OtpInput(
+            value = state.code,
+            onValueChange = onCodeChanged,
+            focusRequester = focusRequester,
+            onComplete = onConfirmCode,
+        )
+        MurphPrimaryButton(
+            text = if (state.isInFlight) "Signing in…" else "Sign in",
+            onClick = onConfirmCode,
+            enabled = state.canConfirmCode,
+        )
+        MurphLinkButton(
+            text = if (state.method == LoginMethod.Email) {
+                "Use a different email"
+            } else {
+                "Use a different number"
+            },
+            onClick = onChangeDestination,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            enabled = !state.isInFlight,
+        )
+    }
+}
+
+@Composable
+private fun OtpInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    focusRequester: FocusRequester,
+    onComplete: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(value) {
+        if (value.length == 6) onComplete()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clickable { focusRequester.requestFocus() },
+    ) {
         Row(
-            modifier = Modifier.align(Alignment.BottomCenter),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(onClick = onOpenPrivacy) { Text("Privacy") }
-            TextButton(onClick = onOpenTerms) { Text("Terms") }
+            repeat(6) { index ->
+                val active = focused && index == minOf(value.length, 5) && value.length < 6
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MurphColors.Card.copy(alpha = 0.9f))
+                        .border(
+                            width = if (active) 2.dp else 1.dp,
+                            color = if (active) MurphColors.SageDark else MurphColors.BorderWarm,
+                            shape = RoundedCornerShape(12.dp),
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = value.getOrNull(index)?.toString().orEmpty(),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                        color = MurphColors.Slate,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+
+        BasicTextField(
+            value = value,
+            onValueChange = { onValueChange(it.filter(Char::isDigit).take(6)) },
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(focusRequester)
+                .onFocusChanged { focused = it.isFocused },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.NumberPassword,
+                imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(onDone = { onComplete() }),
+            cursorBrush = SolidColor(Color.Transparent),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.Transparent),
+            decorationBox = {},
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CountryPicker(
+    selection: CountryDialCode,
+    onSelect: (CountryDialCode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val results = remember(query) {
+        val trimmed = query.trim()
+        val digits = trimmed.filter(Char::isDigit)
+        if (trimmed.isEmpty()) {
+            CountryDialCode.SortedByName
+        } else {
+            CountryDialCode.SortedByName.filter { country ->
+                country.localizedName.contains(trimmed, ignoreCase = true) ||
+                    country.region.contains(trimmed, ignoreCase = true) ||
+                    (digits.isNotEmpty() && country.dialCode.drop(1).startsWith(digits))
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(500)
+        searchFocus.requestFocus()
+        keyboard?.show()
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MurphColors.Cream,
+        dragHandle = {
+            Box(
+                Modifier
+                    .padding(vertical = 10.dp)
+                    .width(40.dp)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MurphColors.SlateMuted.copy(alpha = 0.35f)),
+            )
+        },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 440.dp, max = 680.dp)
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            MurphTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = "Search countries",
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Done,
+                ),
+                modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
+            )
+
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                items(results, key = { it.region }) { country ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(country) }
+                            .padding(horizontal = 4.dp, vertical = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = country.localizedName,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp),
+                            color = MurphColors.Slate,
+                        )
+                        Text(
+                            text = country.dialCode,
+                            style = MaterialTheme.typography.labelMedium.copy(fontSize = 15.sp),
+                            color = MurphColors.SlateMuted,
+                        )
+                        if (country == selection) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                                color = MurphColors.SageDark,
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = MurphColors.BorderWarm)
+                }
+            }
         }
     }
 }

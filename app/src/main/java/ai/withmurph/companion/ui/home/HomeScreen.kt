@@ -1,177 +1,310 @@
 package ai.withmurph.companion.ui.home
 
+import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.ui.components.MurphCard
+import ai.withmurph.companion.ui.components.MurphIcon
+import ai.withmurph.companion.ui.components.MurphIconKind
+import ai.withmurph.companion.ui.components.MurphLinkButton
+import ai.withmurph.companion.ui.components.MurphOutlineButton
+import ai.withmurph.companion.ui.components.MurphPrimaryButton
+import ai.withmurph.companion.ui.theme.MurphColors
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.withmurph.companion.app.AppUiState
-import ai.withmurph.companion.core.HealthConnectAvailability
-import ai.withmurph.companion.core.HealthSyncState
-import ai.withmurph.companion.ui.components.MurphCard
-import ai.withmurph.companion.ui.components.MurphOutlineButton
-import ai.withmurph.companion.ui.components.MurphPrimaryButton
-import ai.withmurph.companion.ui.theme.MurphColors
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.time.Duration
+import java.time.Instant
 
 @Composable
 fun HomeScreen(
     state: AppUiState,
     onConnectHealth: () -> Unit,
     onOpenHealthConnect: () -> Unit,
+    onShowWhoopGuide: () -> Unit,
     onSyncNow: () -> Unit,
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
-            .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
-        Text("Health sync", style = MaterialTheme.typography.headlineLarge)
-
-        if (state.healthSync == HealthSyncState.NotConnected) {
-            SetupCard(
+        when (state.healthSync) {
+            HealthSyncState.NotConnected -> SetupContent(
                 state = state,
                 onConnectHealth = onConnectHealth,
                 onOpenHealthConnect = onOpenHealthConnect,
+                onShowWhoopGuide = onShowWhoopGuide,
+                modifier = Modifier.align(Alignment.Center),
             )
-        } else {
-            SyncStatusCard(state = state, onSyncNow = onSyncNow)
+            else -> SyncStatusContent(
+                state = state,
+                onSyncNow = onSyncNow,
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
+    }
+}
 
-        MurphCard {
-            Text("WHOOP ON ANDROID", style = MaterialTheme.typography.labelMedium)
+@Composable
+private fun SetupContent(
+    state: AppUiState,
+    onConnectHealth: () -> Unit,
+    onOpenHealthConnect: () -> Unit,
+    onShowWhoopGuide: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+        horizontalAlignment = Alignment.Start,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                "In WHOOP, open More → App Settings → Integrations → Health Connect and enable sharing. Then return here and connect Murph.",
+                text = "HEALTH CONNECT",
+                style = MaterialTheme.typography.labelMedium,
+                color = MurphColors.SlateMuted,
+            )
+            MurphIcon(
+                kind = MurphIconKind.HealthCard,
+                modifier = Modifier.size(40.dp),
+                contentDescription = null,
+            )
+            Text(
+                text = "Bring your health into Murph",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MurphColors.Slate,
+            )
+            Text(
+                text = "Connect sleep, workouts, steps, and activity to power your baselines and insights.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MurphColors.SlateMuted,
             )
-            MurphOutlineButton("Open Health Connect", onOpenHealthConnect)
         }
 
-        MurphCard {
-            Text("DATA ACCESS", style = MaterialTheme.typography.labelMedium)
-            Text(
-                "Murph requests four read-only Junction resource groups: sleep, workouts, steps, and active calories.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MurphColors.SlateMuted,
-            )
-            Text(
-                "You choose each category in Health Connect. Murph never writes to Health Connect. History is requested during setup; background-read access is requested only if you set up optional background sync.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MurphColors.SlateMuted,
-            )
-            Text(
-                "${state.grantedResourceCount} of ${state.totalResourceCount} Junction resource groups currently have usable read access.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MurphColors.SageDark,
-            )
+        when (state.healthAvailability) {
+            HealthConnectAvailability.Available -> {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    MurphPrimaryButton(
+                        text = if (state.isConnectingHealth) {
+                            "Connecting…"
+                        } else {
+                            "Connect Health Connect"
+                        },
+                        onClick = onConnectHealth,
+                        enabled = !state.isConnectingHealth,
+                    )
+                    MurphLinkButton(
+                        text = "Set up WHOOP first",
+                        onClick = onShowWhoopGuide,
+                        enabled = !state.isConnectingHealth,
+                    )
+                }
+            }
+
+            HealthConnectAvailability.InstallOrUpdateRequired -> {
+                MurphPrimaryButton(
+                    text = "Install or update Health Connect",
+                    onClick = onOpenHealthConnect,
+                )
+            }
+
+            HealthConnectAvailability.Unsupported -> {
+                Text(
+                    text = "This device doesn't support Health Connect.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MurphColors.SlateMuted,
+                )
+            }
+
+            HealthConnectAvailability.TemporarilyUnavailable -> {
+                Text(
+                    text = "Health Connect isn't ready yet. Update it or try again shortly.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MurphColors.SlateMuted,
+                )
+            }
         }
 
         if (state.healthMessage != null) {
             Text(
-                state.healthMessage,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MurphColors.Sienna,
+                text = state.healthMessage,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MurphColors.SlateMuted,
+                textAlign = TextAlign.Center,
             )
         }
     }
 }
 
 @Composable
-private fun SetupCard(
+private fun SyncStatusContent(
     state: AppUiState,
-    onConnectHealth: () -> Unit,
-    onOpenHealthConnect: () -> Unit,
+    onSyncNow: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    MurphCard {
-        Text("HEALTH CONNECT", style = MaterialTheme.typography.labelMedium)
-        Text("Bring your health into Murph", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            "Connect once and approved sleep, workout, steps, and active-calorie data can flow into Murph.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MurphColors.SlateMuted,
-        )
-        when (state.healthAvailability) {
-            HealthConnectAvailability.Available -> MurphPrimaryButton(
-                text = if (state.isConnectingHealth) "Connecting…" else "Connect Health Connect",
-                onClick = onConnectHealth,
-                enabled = !state.isConnectingHealth,
-            )
-            HealthConnectAvailability.InstallOrUpdateRequired -> MurphPrimaryButton(
-                text = "Install or update Health Connect",
-                onClick = onOpenHealthConnect,
-            )
-            HealthConnectAvailability.Unsupported -> Text(
-                "This device doesn't support Health Connect.",
-                color = MurphColors.SlateMuted,
-            )
-            HealthConnectAvailability.TemporarilyUnavailable -> Text(
-                "Health Connect isn't ready yet. Update it or try again shortly.",
-                color = MurphColors.SlateMuted,
-            )
+    val sync = state.healthSync
+    val icon: MurphIconKind
+    val tint: androidx.compose.ui.graphics.Color
+    val title: String
+    val detail: String
+
+    when (sync) {
+        HealthSyncState.NotConnected -> return
+        HealthSyncState.AwaitingFirstData -> {
+            icon = MurphIconKind.Refresh
+            tint = MurphColors.Sage
+            title = "You're connected"
+            detail = "Your first sync is underway. Android may delay background work, so the first data can take a little while."
+        }
+        is HealthSyncState.Synced -> {
+            icon = MurphIconKind.CheckCircle
+            tint = MurphColors.Sage
+            title = "Synced"
+            detail = relativeSentence(sync.lastDataReceivedAt)
+        }
+        is HealthSyncState.Delayed -> {
+            icon = MurphIconKind.Clock
+            tint = MurphColors.Amber
+            title = "Sync is on its way"
+            detail = "Sync can take up to a day. Last data ${relativeTime(sync.lastDataReceivedAt)}."
+        }
+        is HealthSyncState.NeedsAttention -> {
+            icon = MurphIconKind.Gear
+            tint = MurphColors.Amber
+            title = "Worth a quick check"
+            detail = "We haven't received new data in a while. It's usually a small settings thing."
         }
     }
-}
 
-@Composable
-private fun SyncStatusCard(state: AppUiState, onSyncNow: () -> Unit) {
-    MurphCard {
-        if (state.isSyncingHealth) {
-            CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                color = MurphColors.SageDark,
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            MurphIcon(
+                kind = icon,
+                modifier = Modifier.size(48.dp),
+                tint = tint,
+                contentDescription = null,
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineLarge,
+                color = MurphColors.Slate,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = detail,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MurphColors.SlateMuted,
+                textAlign = TextAlign.Center,
             )
         }
-        val title: String
-        val detail: String
-        when (val sync = state.healthSync) {
-            HealthSyncState.NotConnected -> {
-                title = "Not connected"
-                detail = "Connect Health Connect to begin."
+
+        if (sync is HealthSyncState.NeedsAttention) {
+            MurphCard {
+                GuidanceRow(
+                    number = "1",
+                    text = "Open Health Connect → App permissions → Murph, and confirm the categories you chose.",
+                )
+                GuidanceRow(
+                    number = "2",
+                    text = "Open WHOOP and confirm it is still sharing data with Health Connect.",
+                )
             }
-            HealthSyncState.AwaitingFirstData -> {
-                title = "You're connected"
-                detail = "The first sync is underway. Murph will call it synced only after the backend receives health data."
-            }
-            is HealthSyncState.Synced -> {
-                title = "Synced"
-                detail = "Last backend receipt ${formatInstant(sync.lastDataReceivedAt)}."
-            }
-            is HealthSyncState.Delayed -> {
-                title = "Sync is on its way"
-                detail = "Last backend receipt ${formatInstant(sync.lastDataReceivedAt)}. Android may defer background work."
-            }
-            is HealthSyncState.NeedsAttention -> {
-                title = "Worth a quick check"
-                detail = sync.lastDataReceivedAt?.let {
-                    "No new backend receipt since ${formatInstant(it)}. Check WHOOP sharing and Murph's Health Connect permissions."
-                } ?: "Murph hasn't received data yet. Check WHOOP sharing and Health Connect permissions."
+            if (sync.lastDataReceivedAt != null) {
+                Text(
+                    text = "Last data received ${relativeTime(sync.lastDataReceivedAt)}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MurphColors.SlateMuted,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
-        Text(title, style = MaterialTheme.typography.headlineMedium)
-        Text(detail, style = MaterialTheme.typography.bodyLarge, color = MurphColors.SlateMuted)
+
         MurphOutlineButton(
             text = if (state.isSyncingHealth) "Checking…" else "Check for new data",
             onClick = onSyncNow,
             enabled = !state.isSyncingHealth,
         )
+
+        if (state.healthMessage != null) {
+            Text(
+                text = state.healthMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MurphColors.SlateMuted,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
-private fun formatInstant(instant: java.time.Instant): String =
-    DateTimeFormatter.ofPattern("MMM d, h:mm a")
-        .withZone(ZoneId.systemDefault())
-        .format(instant)
+@Composable
+private fun GuidanceRow(number: String, text: String) {
+    androidx.compose.foundation.layout.Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = number,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MurphColors.SageDark,
+        )
+        Text(
+            text = text,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MurphColors.SlateMuted,
+        )
+    }
+}
+
+private fun relativeSentence(date: Instant): String {
+    val relative = relativeTime(date)
+    return relative.replaceFirstChar(Char::uppercaseChar) + "."
+}
+
+private fun relativeTime(date: Instant, now: Instant = Instant.now()): String {
+    val age = Duration.between(date, now).coerceAtLeast(Duration.ZERO)
+    return when {
+        age < Duration.ofMinutes(1) -> "just now"
+        age < Duration.ofHours(1) -> {
+            val minutes = age.toMinutes()
+            "$minutes ${if (minutes == 1L) "minute" else "minutes"} ago"
+        }
+        age < Duration.ofDays(1) -> {
+            val hours = age.toHours()
+            "$hours ${if (hours == 1L) "hour" else "hours"} ago"
+        }
+        else -> {
+            val days = age.toDays()
+            "$days ${if (days == 1L) "day" else "days"} ago"
+        }
+    }
+}
