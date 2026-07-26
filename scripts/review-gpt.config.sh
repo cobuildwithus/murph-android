@@ -144,6 +144,7 @@ managed_browser_background_mode="${managed_browser_background_mode:-balanced}"
 export REVIEW_GPT_SELECTED_BROWSER_LANE="$selected_lane"
 
 name_prefix="murph-android-$selected_lane-chatgpt-audit"
+package_script="scripts/package-review-context.sh"
 repo_context_url=""
 attach_artifacts=1
 include_tests=1

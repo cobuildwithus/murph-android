@@ -6,6 +6,7 @@ cd "$root_dir"
 
 bash -n scripts/review-gpt.config.sh
 bash -n scripts/repo-tools.config.sh
+bash -n scripts/package-review-context.sh
 
 node <<'NODE'
 const pkg = require("./package.json");
@@ -20,16 +21,14 @@ NODE
 grep -Fq 'model="gpt-5.6-sol"' scripts/review-gpt.config.sh
 grep -Fq 'app_connector="current"' scripts/review-gpt.config.sh
 grep -Fq 'browser_lanes=(eragon phlebas mountain)' scripts/review-gpt.config.sh
+grep -Fq 'package_script="scripts/package-review-context.sh"' scripts/review-gpt.config.sh
 grep -Fq 'review_gpt_register_dir_preset "android-review"' scripts/review-gpt.config.sh
 grep -Fq 'ANDROID_REVIEW_COMPLETE' scripts/chatgpt-review-presets/android-deep-review.md
 pnpm review:gpt --list-presets | grep -Fq 'android-review'
 
-source scripts/repo-tools.config.sh
 review_bundle_dir="$(mktemp -d "${TMPDIR:-/tmp}/murph-android-review-verify.XXXXXX")"
 trap 'rm -rf -- "$review_bundle_dir"' EXIT
-review_gpt_package_dir="$(dirname "$(node -p 'require.resolve("@cobuild/review-gpt/package.json")')")"
-review_packager="$review_gpt_package_dir/node_modules/.bin/cobuild-package-audit-context"
-"$review_packager" \
+scripts/package-review-context.sh \
   --zip \
   --out-dir "$review_bundle_dir" \
   --name verify \
