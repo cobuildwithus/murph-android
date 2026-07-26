@@ -2,6 +2,7 @@
 
 review_gpt_config_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 review_gpt_repo_root="$(CDPATH= cd -- "$review_gpt_config_dir/.." && pwd -P)"
+source "$review_gpt_config_dir/repo-tools.config.sh"
 
 review_gpt_invalid_browser_lane() {
   echo "Error: unsupported ReviewGPT browser lane '$1'. Use random, eragon, phlebas, or mountain." >&2
