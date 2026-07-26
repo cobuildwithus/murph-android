@@ -1,5 +1,6 @@
 package ai.withmurph.companion.storage
 
+import android.annotation.SuppressLint
 import android.content.Context
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.LocalState
@@ -34,6 +35,14 @@ class SharedPreferencesLocalState(context: Context) : LocalState {
         set(value) {
             preferences.writeInstant(KEY_LAST_DATA_RECEIVED_AT, value)
         }
+
+    @SuppressLint("ApplySharedPref")
+    override fun clearHealthSetupAuthorization(): Boolean =
+        // Sign-out must persist this revocation before either SDK is touched.
+        preferences.edit()
+            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .commit()
 
     override fun clearMemberScopedState() {
         preferences.edit()

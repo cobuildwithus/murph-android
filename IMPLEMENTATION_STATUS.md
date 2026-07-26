@@ -7,7 +7,7 @@
 - Existing companion sign-in-token and status API client, including an active-member and legal-consent bootstrap check.
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
 - Transactional Junction Health Connect setup, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, setup-time history permission, and optional background sync with separately requested background-read access.
-- Current-member and backend-consent preflight before health uploads or background enablement, plus account-switch, reinstall, incomplete-setup, stale-session, and fail-closed sign-out safeguards.
+- Current-member and backend-consent preflight before health uploads or background enablement, plus account-switch, reinstall, incomplete-setup, stale-session, and fail-closed sign-out safeguards. Sign-out durably invalidates setup authorization before Junction teardown begins.
 - Backend-receipt sync-state derivation with 36-hour and 72-hour thresholds, including an actionable no-receipt state after 72 hours.
 - Compose login, setup, status, WHOOP guidance, consent, settings, and failure
   screens matched to the shared `murph-ios` visual system.

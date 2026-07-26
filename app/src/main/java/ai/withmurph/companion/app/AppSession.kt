@@ -411,6 +411,18 @@ class AppSession(
             if (_state.value.phase == AppPhase.Launching) return@withLock
             _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
             invalidateSessionEpoch()
+            if (!localState.clearHealthSetupAuthorization()) {
+                _state.update {
+                    it.copy(
+                        phase = AppPhase.Failed(
+                            message = "We couldn't safely start signing out. Keep Murph open and try again.",
+                            canRetry = false,
+                            canSignOut = true,
+                        ),
+                    )
+                }
+                return@withLock
+            }
             try {
                 healthMutex.withLock { health.signOutSdk() }
             } catch (_: Exception) {

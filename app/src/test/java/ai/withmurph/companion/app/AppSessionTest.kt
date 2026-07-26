@@ -269,6 +269,92 @@ class AppSessionTest {
     }
 
     @Test
+    fun failedJunctionTeardownCannotResumeAfterProcessReconstruction() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.intents.clear()
+        val identifyCalls = fixture.health.identifyCalls
+        val syncCalls = fixture.health.syncCalls
+        fixture.health.signOutError = IllegalStateException("teardown failed")
+
+        fixture.session.signOut()
+
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+
+        fixture.health.signOutError = null
+        recreatedSession(fixture).start()
+
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertFalse(fixture.health.signedIn)
+    }
+
+    @Test
+    fun failedPrivyLogoutCannotResumeAfterProcessReconstruction() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.intents.clear()
+        val identifyCalls = fixture.health.identifyCalls
+        val syncCalls = fixture.health.syncCalls
+        fixture.auth.signOutError = IllegalStateException("logout failed")
+
+        fixture.session.signOut()
+
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertFalse(fixture.health.signedIn)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+
+        fixture.auth.signOutError = null
+        recreatedSession(fixture).start()
+
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun processDeathAfterDurableInvalidationCannotResumeJunction() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.intents.clear()
+        val gate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = gate
+        val signOut = launch { fixture.session.signOut() }
+        fixture.health.signOutEntered.await()
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+
+        val replacementHealth = FakeHealth(mutableListOf()).apply {
+            signedIn = true
+            grantedCount = totalResourceCount
+        }
+        recreatedSession(fixture, replacementHealth).start()
+
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, replacementHealth.identifyCalls)
+        assertEquals(0, replacementHealth.syncCalls)
+        assertFalse(replacementHealth.signedIn)
+
+        gate.complete(Unit)
+        signOut.join()
+    }
+
+    @Test
+    fun signOutDoesNotCrossSdkBoundariesWhenDurableInvalidationFails() = runTest {
+        val fixture = completedHealthFixture()
+        val priorSignOutCalls = fixture.health.signOutCalls
+        fixture.localState.clearHealthAuthorizationSucceeds = false
+
+        fixture.session.signOut()
+
+        assertEquals(priorSignOutCalls, fixture.health.signOutCalls)
+        assertTrue(fixture.auth.state is AuthSessionState.SignedIn)
+        assertTrue(fixture.localState.healthAccessRequestedAt != null)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+    }
+
+    @Test
     fun unavailableRestoredAuthKeepsHealthOperationsReadOnly() = runTest {
         val fixture = fixture()
         val now = Instant.parse("2026-07-25T18:00:00Z")
@@ -453,24 +539,44 @@ class AppSessionTest {
         val api = FakeApi(events)
         val health = FakeHealth(events)
         val localState = FakeLocalState()
-        val session = AppSession(
-            auth = auth,
-            api = api,
-            health = health,
-            localState = localState,
-            config = AppConfig(
-                backendBaseUrl = "https://example.test",
-                environment = AppEnvironment.Sandbox,
-                privyAppId = "privy-app",
-                privyAppClientId = "privy-client",
-                appVersion = "0.1.0",
-                junctionSdkVersion = "5.0.2",
-                privySdkVersion = "0.12.0",
-            ),
-            now = { now },
-        )
+        val session = createSession(auth, api, health, localState, now)
         return Fixture(session, auth, api, health, localState, events)
     }
+
+    private fun recreatedSession(
+        fixture: Fixture,
+        health: FakeHealth = fixture.health,
+        now: Instant = Instant.parse("2026-07-25T18:00:00Z"),
+    ): AppSession = createSession(
+        auth = fixture.auth,
+        api = fixture.api,
+        health = health,
+        localState = fixture.localState,
+        now = now,
+    )
+
+    private fun createSession(
+        auth: FakeAuth,
+        api: FakeApi,
+        health: FakeHealth,
+        localState: FakeLocalState,
+        now: Instant,
+    ) = AppSession(
+        auth = auth,
+        api = api,
+        health = health,
+        localState = localState,
+        config = AppConfig(
+            backendBaseUrl = "https://example.test",
+            environment = AppEnvironment.Sandbox,
+            privyAppId = "privy-app",
+            privyAppClientId = "privy-client",
+            appVersion = "0.1.0",
+            junctionSdkVersion = "5.0.2",
+            privySdkVersion = "0.12.0",
+        ),
+        now = { now },
+    )
 
     private suspend fun completedHealthFixture(): Fixture {
         val fixture = fixture()
@@ -494,6 +600,7 @@ class AppSessionTest {
 
     private class FakeAuth(var state: AuthSessionState) : AuthProvider {
         var currentStateGate: CompletableDeferred<Unit>? = null
+        var signOutError: Throwable? = null
 
         override suspend fun currentState(): AuthSessionState {
             currentStateGate?.await()
@@ -503,6 +610,7 @@ class AppSessionTest {
         override suspend fun confirmCode(method: LoginMethod, destination: String, code: String) = Unit
         override suspend fun identityToken(): String = "identity-token"
         override suspend fun signOut() {
+            signOutError?.let { throw it }
             state = AuthSessionState.SignedOut
         }
     }
@@ -546,6 +654,9 @@ class AppSessionTest {
         var disableBackgroundCalls = 0
         var identifyGate: CompletableDeferred<Unit>? = null
         val identifyEntered = CompletableDeferred<Unit>()
+        var signOutGate: CompletableDeferred<Unit>? = null
+        val signOutEntered = CompletableDeferred<Unit>()
+        var signOutError: Throwable? = null
 
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
@@ -587,6 +698,9 @@ class AppSessionTest {
 
         override suspend fun signOutSdk() {
             signOutCalls += 1
+            signOutEntered.complete(Unit)
+            signOutGate?.await()
+            signOutError?.let { throw it }
             signedIn = false
             backgroundEnabled = false
             events += "sign-out"
@@ -598,6 +712,14 @@ class AppSessionTest {
         override var memberKey: String? = null
         override var healthAccessRequestedAt: InstantValue? = null
         override var lastKnownDataReceivedAt: InstantValue? = null
+        var clearHealthAuthorizationSucceeds = true
+
+        override fun clearHealthSetupAuthorization(): Boolean {
+            if (!clearHealthAuthorizationSucceeds) return false
+            healthAccessRequestedAt = null
+            lastKnownDataReceivedAt = null
+            return true
+        }
 
         override fun clearMemberScopedState() {
             memberKey = null

@@ -43,6 +43,7 @@ interface LocalState {
     var healthAccessRequestedAt: InstantValue?
     var lastKnownDataReceivedAt: InstantValue?
 
+    fun clearHealthSetupAuthorization(): Boolean
     fun clearMemberScopedState()
 }
 
