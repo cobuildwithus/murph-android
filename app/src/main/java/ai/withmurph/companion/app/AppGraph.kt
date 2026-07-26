@@ -7,12 +7,16 @@ import ai.withmurph.companion.auth.LoginCoordinator
 import ai.withmurph.companion.auth.PrivyAuthService
 import ai.withmurph.companion.health.JunctionHealthSyncService
 import ai.withmurph.companion.storage.SharedPreferencesLocalState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class AppGraph private constructor(
     val session: AppSession,
     val login: LoginCoordinator,
     val health: JunctionHealthSyncService,
     val config: AppConfig,
+    val applicationScope: CoroutineScope,
 ) {
     companion object {
         fun create(context: Context): AppGraph {
@@ -47,6 +51,9 @@ class AppGraph private constructor(
                 login = LoginCoordinator(auth),
                 health = health,
                 config = config,
+                applicationScope = CoroutineScope(
+                    SupervisorJob() + Dispatchers.Main.immediate,
+                ),
             )
         }
     }

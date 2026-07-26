@@ -33,11 +33,12 @@ class AppSession(
 ) {
     private val startMutex = Mutex()
     private val healthMutex = Mutex()
-    private var hasStarted = false
+    private var hasCompletedStartup = false
     private var needsForegroundRefresh = false
     private var sessionEpoch = 0
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
+    private var pendingBackgroundSync: PendingBackgroundSync? = null
 
     private val _state = MutableStateFlow(
         AppUiState(totalResourceCount = health.totalResourceCount),
@@ -57,59 +58,90 @@ class AppSession(
     }
 
     private suspend fun reconcile(force: Boolean) = startMutex.withLock {
-        if (hasStarted && !force) return@withLock
-        hasStarted = true
-        _state.update { current ->
-            current.copy(
-                phase = AppPhase.Launching,
-                healthAvailability = health.availability(),
-                healthMessage = null,
-            )
-        }
-        when (val authState = auth.currentState()) {
-            AuthSessionState.SignedOut -> enterSignedOut()
-            AuthSessionState.TemporarilyUnavailable -> restoreOfflineIfPossible()
-            is AuthSessionState.SignedIn -> reconcileSignedIn(authState)
+        if (hasCompletedStartup && !force) return@withLock
+        try {
+            _state.update { current ->
+                current.copy(
+                    phase = AppPhase.Launching,
+                    healthAvailability = health.availability(),
+                    healthMessage = null,
+                )
+            }
+            when (val authState = auth.currentState()) {
+                AuthSessionState.SignedOut -> enterSignedOut()
+                AuthSessionState.TemporarilyUnavailable -> restoreOfflineIfPossible()
+                is AuthSessionState.SignedIn -> reconcileSignedIn(authState)
+            }
+            hasCompletedStartup = _state.value.phase != AppPhase.Launching
+        } catch (error: CancellationException) {
+            hasCompletedStartup = false
+            throw error
         }
     }
 
-    suspend fun prepareHealthConnection(): Boolean = healthMutex.withLock {
+    suspend fun prepareHealthConnection(): Boolean {
         if (
-            _state.value.phase != AppPhase.Ready ||
-            _state.value.isConnectingHealth ||
+            _state.value.phase == AppPhase.Ready &&
             !_state.value.authVerifiedOnline
         ) {
-            return false
+            reconcile(force = true)
         }
-        val memberKey = currentMemberKey ?: return false
-        return when (health.availability()) {
-            HealthConnectAvailability.Available -> {
-                val epoch = sessionEpoch
-                pendingHealthConnection = PendingHealthConnection(epoch, memberKey)
-                _state.update { it.copy(isConnectingHealth = true, healthMessage = null) }
-                true
+        return healthMutex.withLock {
+            if (
+                _state.value.phase != AppPhase.Ready ||
+                _state.value.isConnectingHealth ||
+                !_state.value.authVerifiedOnline
+            ) {
+                return false
             }
-            HealthConnectAvailability.InstallOrUpdateRequired -> {
-                _state.update { it.copy(healthMessage = "Install or update Health Connect, then try again.") }
-                false
-            }
-            HealthConnectAvailability.OnboardingRequired -> {
-                _state.update { it.copy(healthMessage = "Finish setting up Health Connect, then try again.") }
-                false
-            }
-            HealthConnectAvailability.AppNotAllowed -> {
-                _state.update {
-                    it.copy(healthMessage = "This build isn't authorized for Health Connect. Contact Murph support.")
+            val memberKey = currentMemberKey ?: return false
+            return when (health.availability()) {
+                HealthConnectAvailability.Available -> {
+                    val epoch = sessionEpoch
+                    pendingHealthConnection = PendingHealthConnection(epoch, memberKey)
+                    _state.update { it.copy(isConnectingHealth = true, healthMessage = null) }
+                    true
                 }
-                false
-            }
-            HealthConnectAvailability.Unsupported -> {
-                _state.update { it.copy(healthMessage = "Health Connect isn't supported on this device.") }
-                false
-            }
-            HealthConnectAvailability.TemporarilyUnavailable -> {
-                _state.update { it.copy(healthMessage = "Health Connect isn't ready yet. Try again in a moment.") }
-                false
+                HealthConnectAvailability.InstallOrUpdateRequired -> {
+                    _state.update {
+                        it.copy(
+                            healthMessage = "Install or update Health Connect, then try again.",
+                        )
+                    }
+                    false
+                }
+                HealthConnectAvailability.OnboardingRequired -> {
+                    _state.update {
+                        it.copy(
+                            healthMessage = "Finish setting up Health Connect, then try again.",
+                        )
+                    }
+                    false
+                }
+                HealthConnectAvailability.AppNotAllowed -> {
+                    _state.update {
+                        it.copy(
+                            healthMessage = "This build isn't authorized for Health Connect. Contact Murph support.",
+                        )
+                    }
+                    false
+                }
+                HealthConnectAvailability.Unsupported -> {
+                    _state.update {
+                        it.copy(
+                            healthMessage = "Health Connect isn't supported on this device.",
+                        )
+                    }
+                    false
+                }
+                HealthConnectAvailability.TemporarilyUnavailable -> {
+                    _state.update {
+                        it.copy(
+                            healthMessage = "Health Connect isn't ready yet. Try again in a moment.",
+                        )
+                    }
+                    false
+                }
             }
         }
     }
@@ -209,9 +241,24 @@ class AppSession(
     }
 
     suspend fun didBecomeActive() {
-        if (!needsForegroundRefresh) return
-        needsForegroundRefresh = false
-        if (!reconcileForegroundAuth()) return
+        if (!needsForegroundRefresh) {
+            if (
+                _state.value.phase == AppPhase.Ready &&
+                !_state.value.authVerifiedOnline
+            ) {
+                reconcile(force = true)
+            }
+            return
+        }
+        if (!reconcileForegroundAuth()) {
+            if (
+                _state.value.phase != AppPhase.Ready ||
+                _state.value.authVerifiedOnline
+            ) {
+                needsForegroundRefresh = false
+            }
+            return
+        }
         try {
             health.refreshPermissionState()
         } catch (error: CancellationException) {
@@ -249,6 +296,7 @@ class AppSession(
         ) {
             syncNow()
         }
+        needsForegroundRefresh = false
     }
 
     fun didEnterBackground() {
@@ -259,78 +307,150 @@ class AppSession(
         if (
             _state.value.phase != AppPhase.Ready ||
             !healthWasRequested() ||
-            health.grantedResourceCount() == 0
+            health.grantedResourceCount() == 0 ||
+            pendingBackgroundSync != null
         ) {
             return false
         }
-        fetchValidatedHealthStatus(sessionEpoch) != null
+        val memberKey = currentMemberKey ?: return false
+        val pending = PendingBackgroundSync(sessionEpoch, memberKey)
+        pendingBackgroundSync = pending
+        return try {
+            val validated = fetchValidatedHealthStatus(pending.epoch) != null &&
+                pendingBackgroundSync == pending
+            if (!validated) {
+                pendingBackgroundSync = null
+            }
+            validated
+        } catch (error: CancellationException) {
+            pendingBackgroundSync = null
+            throw error
+        }
     }
 
-    fun onBackgroundSyncResult(enabled: Boolean) {
+    suspend fun continueBackgroundSyncAfterPermission(granted: Boolean): Boolean =
+        healthMutex.withLock {
+            val pending = pendingBackgroundSync
+            if (!granted || !isCurrentBackgroundSync(pending)) {
+                pendingBackgroundSync = null
+                _state.update { current ->
+                    current.copy(
+                        backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
+                        healthMessage = "Background sync stayed off. Foreground sync still works.",
+                    )
+                }
+                return false
+            }
+            val pendingEpoch = pending?.epoch ?: return false
+            val validated = fetchValidatedHealthStatus(pendingEpoch) != null &&
+                pendingBackgroundSync == pending
+            if (!validated) {
+                pendingBackgroundSync = null
+            }
+            validated
+        }
+
+    suspend fun completeBackgroundSync(enabled: Boolean) = healthMutex.withLock {
+        val pending = pendingBackgroundSync
+        if (!enabled) {
+            pendingBackgroundSync = null
+            _state.update { current ->
+                current.copy(
+                    backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
+                    healthMessage = "Background sync stayed off. Foreground sync still works.",
+                )
+            }
+            return@withLock
+        }
+
+        val authorized = pending != null &&
+            isCurrentBackgroundSync(pending) &&
+            fetchValidatedHealthStatus(pending.epoch) != null
+        pendingBackgroundSync = null
+        if (!authorized) {
+            disableBackgroundSyncWhileLocked()
+            _state.update { current ->
+                current.copy(
+                    backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
+                    healthMessage = "Background sync was turned off because your session changed.",
+                )
+            }
+            return@withLock
+        }
+
         _state.update { current ->
             current.copy(
                 backgroundSyncEnabled = enabled || health.isBackgroundSyncEnabled(),
-                healthMessage = if (enabled) null else "Background sync stayed off. Foreground sync still works.",
+                healthMessage = null,
+            )
+        }
+    }
+
+    fun cancelBackgroundSyncFlow() {
+        pendingBackgroundSync = null
+        _state.update { current ->
+            current.copy(
+                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
+                healthMessage = "Background sync stayed off. Foreground sync still works.",
             )
         }
     }
 
     suspend fun disableBackgroundSync() {
-        try {
-            health.disableBackgroundSync()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            // Best effort: the SDK remains the source of truth for the rendered state.
+        healthMutex.withLock {
+            pendingBackgroundSync = null
+            disableBackgroundSyncWhileLocked()
         }
         _state.update { current ->
             current.copy(backgroundSyncEnabled = health.isBackgroundSyncEnabled())
         }
     }
 
-    suspend fun signOut() {
-        if (_state.value.phase == AppPhase.Launching) return
-        _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
-        invalidateSessionEpoch()
-        try {
-            healthMutex.withLock { health.signOutSdk() }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            _state.update {
-                it.copy(
-                    phase = AppPhase.Failed(
-                        message = "We couldn't safely reset health sync. Keep Murph open and try again.",
-                        canRetry = false,
-                        canSignOut = true,
-                    ),
-                )
+    suspend fun signOut() = withContext(NonCancellable) {
+        startMutex.withLock {
+            if (_state.value.phase == AppPhase.Launching) return@withLock
+            _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
+            invalidateSessionEpoch()
+            try {
+                healthMutex.withLock { health.signOutSdk() }
+            } catch (_: Exception) {
+                _state.update {
+                    it.copy(
+                        phase = AppPhase.Failed(
+                            message = "We couldn't safely reset health sync. Keep Murph open and try again.",
+                            canRetry = false,
+                            canSignOut = true,
+                        ),
+                    )
+                }
+                return@withLock
             }
-            return
-        }
-        try {
-            auth.signOut()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            _state.update {
-                it.copy(
-                    phase = AppPhase.Failed(
-                        message = "We couldn't finish signing out. Try once more.",
-                        canRetry = false,
-                        canSignOut = true,
-                    ),
-                )
+            try {
+                auth.signOut()
+            } catch (_: Exception) {
+                _state.update {
+                    it.copy(
+                        phase = AppPhase.Failed(
+                            message = "We couldn't finish signing out. Try once more.",
+                            canRetry = false,
+                            canSignOut = true,
+                        ),
+                    )
+                }
+                return@withLock
             }
-            return
+            currentMemberKey = null
+            localState.clearMemberScopedState()
+            _state.value = AppUiState(
+                phase = AppPhase.NeedsLogin,
+                healthAvailability = health.availability(),
+                totalResourceCount = health.totalResourceCount,
+            )
         }
-        currentMemberKey = null
-        localState.clearMemberScopedState()
-        _state.value = AppUiState(
-            phase = AppPhase.NeedsLogin,
-            healthAvailability = health.availability(),
-            totalResourceCount = health.totalResourceCount,
-        )
+    }
+
+    fun reportHealthConnectLaunchFailure(message: String) {
+        _state.update { it.copy(healthMessage = message) }
     }
 
     private suspend fun reconcileSignedIn(authState: AuthSessionState.SignedIn) {
@@ -359,6 +479,24 @@ class AppSession(
                 if (!resetHealthSdkAtTrustBoundary()) return
                 localState.healthAccessRequestedAt = null
                 localState.lastKnownDataReceivedAt = null
+            } catch (error: CompanionApiException.Unauthorized) {
+                publishAuthoritativeResumeFailure(
+                    message = connectionErrorMessage(error),
+                    canRetry = false,
+                )
+                return
+            } catch (error: CompanionApiException.NoAccount) {
+                publishAuthoritativeResumeFailure(
+                    message = connectionErrorMessage(error),
+                    canRetry = false,
+                )
+                return
+            } catch (error: CompanionApiException.ConsentRequired) {
+                publishAuthoritativeResumeFailure(
+                    message = connectionErrorMessage(error),
+                    canRetry = true,
+                )
+                return
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -521,27 +659,19 @@ class AppSession(
     private suspend fun syncAndRefresh(epoch: Int) {
         if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return
         _state.update { it.copy(isSyncingHealth = true, healthMessage = null) }
-        if (fetchValidatedHealthStatus(epoch) == null) {
-            _state.update { it.copy(isSyncingHealth = false) }
-            return
-        }
         try {
-            health.syncAllGrantedResources()
-        } catch (error: CancellationException) {
-            _state.update { it.copy(isSyncingHealth = false) }
-            throw error
-        } catch (_: Exception) {
-            // Status refresh below still reports the last backend-confirmed receipt.
-        }
-        if (epoch != sessionEpoch) return
-        try {
-            fetchValidatedHealthStatus(epoch)
-            if (epoch == sessionEpoch) {
-                _state.update { it.copy(isSyncingHealth = false) }
+            if (fetchValidatedHealthStatus(epoch) == null) return
+            try {
+                health.syncAllGrantedResources()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Status refresh below still reports the last backend-confirmed receipt.
             }
-        } catch (error: CancellationException) {
+            if (epoch != sessionEpoch) return
+            fetchValidatedHealthStatus(epoch)
+        } finally {
             _state.update { it.copy(isSyncingHealth = false) }
-            throw error
         }
     }
 
@@ -733,6 +863,22 @@ class AppSession(
         }
     }
 
+    private suspend fun publishAuthoritativeResumeFailure(
+        message: String,
+        canRetry: Boolean,
+    ) {
+        if (!resetHealthSdkAtTrustBoundary()) return
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = message,
+                    canRetry = canRetry,
+                    canSignOut = true,
+                ),
+            )
+        }
+    }
+
     private suspend fun rollbackIncompleteHealthSetup(epoch: Int): Boolean {
         if (
             epoch != sessionEpoch ||
@@ -772,6 +918,25 @@ class AppSession(
         }
     }
 
+    private fun isCurrentBackgroundSync(pending: PendingBackgroundSync?): Boolean =
+        pending != null &&
+            pending == pendingBackgroundSync &&
+            pending.epoch == sessionEpoch &&
+            pending.memberKey == currentMemberKey &&
+            pending.memberKey == localState.memberKey &&
+            _state.value.phase == AppPhase.Ready
+
+    /** Called only while [healthMutex] is held. */
+    private suspend fun disableBackgroundSyncWhileLocked() {
+        try {
+            health.disableBackgroundSync()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Best effort: the SDK remains the source of truth for the rendered state.
+        }
+    }
+
     private fun deriveCachedHealthState(): HealthSyncState {
         val cached = localState.lastKnownDataReceivedAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
         return HealthSyncState.derive(
@@ -789,6 +954,7 @@ class AppSession(
     private fun invalidateSessionEpoch() {
         sessionEpoch += 1
         pendingHealthConnection = null
+        pendingBackgroundSync = null
     }
 
     private fun connectionErrorMessage(error: Exception): String = when (error) {
@@ -801,6 +967,11 @@ class AppSession(
     }
 
     private data class PendingHealthConnection(
+        val epoch: Int,
+        val memberKey: String,
+    )
+
+    private data class PendingBackgroundSync(
         val epoch: Int,
         val memberKey: String,
     )

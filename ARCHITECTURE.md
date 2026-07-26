@@ -29,7 +29,9 @@ ui/        Compose surfaces and Murph theme
 9. **One foreground-sync owner.** Junction owns Health Connect reads, backfill, workers, and provider upload; `AppSession` owns when an explicit foreground sync may begin. SDK app-start sync stays disabled.
 10. **Minimum health scope.** The resource set is centralized in `JunctionHealthSyncService` and mirrored by the manifest. New health categories require a current product need and updated disclosures.
 11. **Optional permission timing.** History is requested during connection; background read is requested only when the member enables optional background sync.
-12. **Default to deletion.** Add a dependency or abstraction only after the current boundaries cannot express a real requirement.
+12. **Process-owned transitions.** `AppGraph` owns the application-lifetime coroutine scope used for session, login, sync, and sign-out work. Activity recreation can replace the renderer without cancelling those transitions.
+13. **Stale-result rejection.** Optional background setup carries the initiating session epoch and member across each system UI boundary. Missing, replaced, or backend-rejected transactions disable vendor background work before rendering a result.
+14. **Default to deletion.** Add a dependency or abstraction only after the current boundaries cannot express a real requirement.
 
 ## Data flow
 

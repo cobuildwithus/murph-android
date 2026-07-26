@@ -14,7 +14,9 @@
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
   setup, waiting, synced, delayed, attention, and failure states.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
-- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, pre-sync trust checks, process-scoped startup, provider availability, backend receipt truth, and member-switch teardown.
+- Application-lifetime session work across Activity recreation, stale-result rejection for optional background setup, login task-snapshot protection, safe external-action fallbacks, and scrollable trust-failure recovery.
+- Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
+- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, pre-sync trust checks, cancellation recovery, background setup epochs, OTP cleanup, provider availability, backend receipt truth, and member-switch teardown.
 
 ## Executable verification
 

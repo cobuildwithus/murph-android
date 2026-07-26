@@ -115,6 +115,10 @@ class LoginCoordinator(private val auth: AuthProvider) {
                 snapshot.normalizedDestination,
                 snapshot.code,
             )
+            _state.value = LoginUiState(
+                method = snapshot.method,
+                phoneCountry = snapshot.phoneCountry,
+            )
             true
         } catch (error: CancellationException) {
             throw error

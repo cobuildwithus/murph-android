@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -496,28 +497,35 @@ private fun FailureScreen(
     failure: AppPhase.Failed,
     actions: MurphActions,
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .safeDrawingPadding(),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = failure.message,
-            modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MurphColors.SlateMuted,
-            textAlign = TextAlign.Center,
-        )
-        if (failure.canRetry) {
-            Spacer(Modifier.height(20.dp))
-            MurphPrimaryButton("Try again", actions.onRetry)
-        }
-        if (failure.canSignOut) {
-            Spacer(Modifier.height(4.dp))
-            MurphLinkButton("Sign out and start fresh", actions.onSignOut)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = failure.message,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MurphColors.SlateMuted,
+                textAlign = TextAlign.Center,
+            )
+            if (failure.canRetry) {
+                Spacer(Modifier.height(20.dp))
+                MurphPrimaryButton("Try again", actions.onRetry)
+            }
+            if (failure.canSignOut) {
+                Spacer(Modifier.height(4.dp))
+                MurphLinkButton("Sign out and start fresh", actions.onSignOut)
+            }
         }
     }
 }

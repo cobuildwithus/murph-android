@@ -125,7 +125,14 @@ The app asks for Health Connect history access during initial setup where suppor
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
 - Foreground sync and background-sync enablement revalidate the current Privy
   member and backend consent before Junction can read or upload health data.
+- Session, login, sync, retry, and sign-out transitions run in the
+  application-lifetime `AppGraph` scope, so Activity recreation only replaces
+  the UI renderer.
+- Optional background setup revalidates the initiating member after each
+  Android system UI boundary and disables stale or restored vendor results.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
+- Login destinations and OTP digits are protected from Android task snapshots,
+  and a successful OTP is cleared before the app enters the signed-in session.
 - Signing out tears down the local Junction SDK before ending the Privy session.
 
 ## Release requirements
