@@ -54,6 +54,8 @@ data class CompanionSyncStatus(
 enum class HealthConnectAvailability {
     Available,
     InstallOrUpdateRequired,
+    OnboardingRequired,
+    AppNotAllowed,
     Unsupported,
     TemporarilyUnavailable,
 }
@@ -67,14 +69,22 @@ sealed interface HealthSyncState {
 
     companion object {
         fun derive(
-            requested: Boolean,
+            requestedAt: Instant?,
             status: CompanionSyncStatus?,
             now: Instant,
             delayedAfter: Duration = Duration.ofHours(36),
             attentionAfter: Duration = Duration.ofHours(72),
         ): HealthSyncState {
-            if (!requested) return NotConnected
-            val receivedAt = status?.lastDataReceivedAt ?: return AwaitingFirstData
+            if (requestedAt == null) return NotConnected
+            val receivedAt = status?.lastDataReceivedAt
+            if (receivedAt == null) {
+                val setupAge = Duration.between(requestedAt, now).coerceAtLeast(Duration.ZERO)
+                return if (setupAge >= attentionAfter) {
+                    NeedsAttention(lastDataReceivedAt = null)
+                } else {
+                    AwaitingFirstData
+                }
+            }
             val age = Duration.between(receivedAt, now).coerceAtLeast(Duration.ZERO)
             return when {
                 age >= attentionAfter -> NeedsAttention(receivedAt)

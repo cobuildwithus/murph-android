@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -63,6 +65,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -96,90 +99,96 @@ fun LoginScreen(
         keyboard?.show()
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(MurphColors.Cream),
+            .background(MurphColors.Cream)
+            .navigationBarsPadding()
+            .imePadding(),
     ) {
+        val topSpacing = (maxHeight * 0.14f).coerceIn(40.dp, 112.dp)
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .navigationBarsPadding()
-                .imePadding()
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
                 .padding(28.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Spacer(Modifier.weight(1f))
+            Column {
+                Spacer(Modifier.height(topSpacing))
 
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                MurphLogo()
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MurphLogo()
+
+                    if (state.codeSent) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "We sent a code to ${state.normalizedDestination}.",
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MurphColors.SlateMuted,
+                                maxLines = 2,
+                            )
+                            MurphLinkButton(
+                                text = "Resend",
+                                onClick = onResendCode,
+                                enabled = !state.isInFlight,
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier.height(44.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            Text(
+                                text = "Health challenges with friends.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MurphColors.SlateMuted,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
 
                 if (state.codeSent) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "We sent a code to ${state.normalizedDestination}.",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MurphColors.SlateMuted,
-                            maxLines = 2,
-                        )
-                        MurphLinkButton(
-                            text = "Resend",
-                            onClick = onResendCode,
-                            enabled = !state.isInFlight,
-                        )
-                    }
+                    CodeStage(
+                        state = state,
+                        focusRequester = codeFocus,
+                        onCodeChanged = onCodeChanged,
+                        onConfirmCode = onConfirmCode,
+                        onChangeDestination = onChangeDestination,
+                    )
                 } else {
-                    Box(
-                        modifier = Modifier.height(44.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        Text(
-                            text = "Health challenges with friends.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MurphColors.SlateMuted,
-                        )
-                    }
+                    DestinationStage(
+                        state = state,
+                        focusRequester = destinationFocus,
+                        onChooseCountry = { showsCountryPicker = true },
+                        onDestinationChanged = onDestinationChanged,
+                        onSendCode = onSendCode,
+                        onMethodChanged = onMethodChanged,
+                    )
+                }
+
+                if (state.errorMessage != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = state.errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MurphColors.SlateMuted,
+                    )
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            if (state.codeSent) {
-                CodeStage(
-                    state = state,
-                    focusRequester = codeFocus,
-                    onCodeChanged = onCodeChanged,
-                    onConfirmCode = onConfirmCode,
-                    onChangeDestination = onChangeDestination,
-                )
-            } else {
-                DestinationStage(
-                    state = state,
-                    focusRequester = destinationFocus,
-                    onChooseCountry = { showsCountryPicker = true },
-                    onDestinationChanged = onDestinationChanged,
-                    onSendCode = onSendCode,
-                    onMethodChanged = onMethodChanged,
-                )
-            }
-
-            if (state.errorMessage != null) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = state.errorMessage,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MurphColors.SlateMuted,
-                )
-            }
-
-            Spacer(Modifier.weight(2f))
-
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 48.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

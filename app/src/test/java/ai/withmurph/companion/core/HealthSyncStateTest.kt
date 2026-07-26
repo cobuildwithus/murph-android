@@ -11,15 +11,31 @@ class HealthSyncStateTest {
     fun notRequestedIsNotConnected() {
         assertEquals(
             HealthSyncState.NotConnected,
-            HealthSyncState.derive(requested = false, status = null, now = now),
+            HealthSyncState.derive(requestedAt = null, status = null, now = now),
         )
     }
 
     @Test
-    fun requestedWithoutReceiptWaitsForFirstData() {
+    fun recentRequestWithoutReceiptWaitsForFirstData() {
         assertEquals(
             HealthSyncState.AwaitingFirstData,
-            HealthSyncState.derive(requested = true, status = null, now = now),
+            HealthSyncState.derive(
+                requestedAt = now.minusSeconds(71 * 3_600),
+                status = null,
+                now = now,
+            ),
+        )
+    }
+
+    @Test
+    fun requestWithoutReceiptNeedsAttentionAtTheExistingThreshold() {
+        assertEquals(
+            HealthSyncState.NeedsAttention(lastDataReceivedAt = null),
+            HealthSyncState.derive(
+                requestedAt = now.minusSeconds(72 * 3_600),
+                status = null,
+                now = now,
+            ),
         )
     }
 
@@ -29,7 +45,7 @@ class HealthSyncStateTest {
         assertEquals(
             HealthSyncState.Synced(received),
             HealthSyncState.derive(
-                requested = true,
+                requestedAt = now.minusSeconds(3_600),
                 status = CompanionSyncStatus(received, emptyMap()),
                 now = now,
             ),
@@ -43,7 +59,7 @@ class HealthSyncStateTest {
         assertEquals(
             HealthSyncState.Delayed(delayed),
             HealthSyncState.derive(
-                requested = true,
+                requestedAt = now.minusSeconds(4 * 24 * 3_600),
                 status = CompanionSyncStatus(delayed, emptyMap()),
                 now = now,
             ),
@@ -51,7 +67,7 @@ class HealthSyncStateTest {
         assertEquals(
             HealthSyncState.NeedsAttention(attention),
             HealthSyncState.derive(
-                requested = true,
+                requestedAt = now.minusSeconds(4 * 24 * 3_600),
                 status = CompanionSyncStatus(attention, emptyMap()),
                 now = now,
             ),
@@ -64,7 +80,7 @@ class HealthSyncStateTest {
         assertEquals(
             HealthSyncState.Synced(future),
             HealthSyncState.derive(
-                requested = true,
+                requestedAt = now.minusSeconds(3_600),
                 status = CompanionSyncStatus(future, emptyMap()),
                 now = now,
             ),

@@ -6,4 +6,4 @@ if [ ! -x ./gradlew ]; then
   exit 1
 fi
 
-./gradlew --no-daemon test lintDebug assembleDebug
+./gradlew --no-daemon test lintDebug lintRelease assembleDebug assembleRelease

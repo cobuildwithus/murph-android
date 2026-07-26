@@ -22,11 +22,11 @@ ui/        Compose surfaces and Murph theme
 2. **One composition root.** `AppGraph` constructs all live objects. Tests construct pure objects or fakes directly. No Hilt, service locator, or reflection.
 3. **State machines over flag soup.** `AppPhase`, `AuthSessionState`, `HealthConnectAvailability`, and `HealthSyncState` are the vocabularies rendered by UI.
 4. **Backend evidence is truth.** Local permission completion means only that the system flow completed. “Synced” requires a backend receipt scoped to `health_connect`.
-5. **Backend membership before setup.** A verified Privy session must pass the read-only member/consent status check before the app renders health setup.
-6. **Explicit lifecycle.** First setup sends `connect`; passive restoration sends `resume`. Authentication alone never creates a device-sync connection.
+5. **Backend membership before health work.** A current, verified Privy member must pass the read-only member/consent status check before setup, every app-triggered health sync, or optional background-sync enablement.
+6. **Explicit, transactional lifecycle.** First setup requests system permission before obtaining a `connect` token or identifying Junction; passive restoration sends `resume`. An incomplete setup never becomes a durable local Junction identity.
 7. **Minimal persistence.** SharedPreferences contains an installation UUID, member key, setup timestamp, and last receipt timestamp. It never stores tokens or health values.
-8. **Trust-boundary teardown.** Account switching and sign-out clear the local Junction session before another member can own the app.
-9. **No duplicate ingestion engine.** Junction owns Health Connect reads, backfill, foreground workers, and provider upload. Murph does not maintain a second local health reader.
+8. **Trust-boundary teardown.** Account switching, sign-out, backend rejection, and a signed-in Junction SDK without a completed setup marker clear the local Junction session before more health work.
+9. **One foreground-sync owner.** Junction owns Health Connect reads, backfill, workers, and provider upload; `AppSession` owns when an explicit foreground sync may begin. SDK app-start sync stays disabled.
 10. **Minimum health scope.** The resource set is centralized in `JunctionHealthSyncService` and mirrored by the manifest. New health categories require a current product need and updated disclosures.
 11. **Optional permission timing.** History is requested during connection; background read is requested only when the member enables optional background sync.
 12. **Default to deletion.** Add a dependency or abstraction only after the current boundaries cannot express a real requirement.

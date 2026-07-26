@@ -128,6 +128,21 @@ private fun SetupContent(
                 )
             }
 
+            HealthConnectAvailability.OnboardingRequired -> {
+                MurphPrimaryButton(
+                    text = "Finish setting up Health Connect",
+                    onClick = onOpenHealthConnect,
+                )
+            }
+
+            HealthConnectAvailability.AppNotAllowed -> {
+                Text(
+                    text = "This build of Murph isn't authorized for Health Connect. Contact Murph support.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MurphColors.SlateMuted,
+                )
+            }
+
             HealthConnectAvailability.Unsupported -> {
                 Text(
                     text = "This device doesn't support Health Connect.",

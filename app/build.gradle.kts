@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -13,6 +15,37 @@ val developmentBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_DEV")
     .orElse("https://linq-webhook-dev.ourrevolution.wtf")
 val productionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
     .orElse("https://www.withmurph.ai")
+
+val validateReleaseConfiguration by tasks.registering {
+    doLast {
+        val requiredValues = mapOf(
+            "MURPH_PRIVY_APP_ID" to privyAppId.orNull,
+            "MURPH_PRIVY_APP_CLIENT_ID" to privyAppClientId.orNull,
+        )
+        val missing = requiredValues
+            .filterValues { it.isNullOrBlank() }
+            .keys
+            .sorted()
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Release configuration is missing: ${missing.joinToString()}. " +
+                    "Set the public native-client values in Gradle properties.",
+            )
+        }
+
+        val backendValue = productionBackend.get()
+        val backend = runCatching { URI(backendValue) }.getOrNull()
+        if (backend?.scheme != "https" || backend.host == null) {
+            throw GradleException(
+                "MURPH_BACKEND_BASE_URL_PROD must be an absolute HTTPS URL.",
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseConfiguration)
+}
 
 android {
     namespace = "ai.withmurph.companion"

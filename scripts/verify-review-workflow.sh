@@ -52,6 +52,7 @@ required_review_paths=(
   "app/src/main/java/ai/withmurph/companion/ui/login/LoginScreen.kt"
   "app/src/test/java/ai/withmurph/companion/app/AppSessionTest.kt"
   "gradle/libs.versions.toml"
+  "gradle/wrapper/gradle-wrapper.jar"
 )
 for required_path in "${required_review_paths[@]}"; do
   if ! grep -Fqx "$required_path" <<<"$review_manifest"; then

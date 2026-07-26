@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
                 val completed = try {
                     graph.health.permissionRequestCompleted(deferredOutcome)
                 } catch (error: CancellationException) {
+                    graph.session.cancelHealthPermissionFlow()
                     throw error
                 } catch (_: Exception) {
                     false
@@ -112,12 +113,16 @@ class MainActivity : ComponentActivity() {
                             lifecycleScope.launch { graph.session.syncNow() }
                         },
                         onEnableBackgroundSync = {
-                            val backgroundPermissions =
-                                graph.health.supportedBackgroundReadPermissions()
-                            if (backgroundPermissions.isNotEmpty()) {
-                                backgroundReadPermissionLauncher.launch(backgroundPermissions)
-                            } else {
-                                backgroundSyncLauncher.launch(Unit)
+                            lifecycleScope.launch {
+                                if (graph.session.prepareBackgroundSync()) {
+                                    val backgroundPermissions =
+                                        graph.health.supportedBackgroundReadPermissions()
+                                    if (backgroundPermissions.isNotEmpty()) {
+                                        backgroundReadPermissionLauncher.launch(backgroundPermissions)
+                                    } else {
+                                        backgroundSyncLauncher.launch(Unit)
+                                    }
+                                }
                             }
                         },
                         onDisableBackgroundSync = {
@@ -159,6 +164,13 @@ class MainActivity : ComponentActivity() {
         if (::graph.isInitialized) {
             lifecycleScope.launch { graph.session.didBecomeActive() }
         }
+    }
+
+    override fun onStop() {
+        if (::graph.isInitialized && !isChangingConfigurations) {
+            graph.session.didEnterBackground()
+        }
+        super.onStop()
     }
 
     private fun openHealthConnect() {

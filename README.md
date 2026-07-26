@@ -66,7 +66,9 @@ Apply the accompanying backend patch before testing. Current Murph `main` reject
 ./scripts/verify.sh
 ```
 
-The verification script runs `./gradlew --no-daemon test lintDebug assembleDebug`.
+The verification script runs unit tests, lint, and assembly for both Debug and
+Release. Release tasks fail before compilation when either public Privy
+identifier is blank or the production backend URL is not absolute HTTPS.
 
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
@@ -116,9 +118,13 @@ The app asks for Health Connect history access during initial setup where suppor
 
 - The app does not create a Junction connection merely because a member signs in.
 - Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
-- Tapping **Connect Health Connect** requests a backend token with `connectionIntent: "connect"`.
+- Tapping **Connect Health Connect** first opens the system permission flow.
+  After at least one category is granted, the app revalidates the member and
+  requests a backend token with `connectionIntent: "connect"`.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
+- Foreground sync and background-sync enablement revalidate the current Privy
+  member and backend consent before Junction can read or upload health data.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - Signing out tears down the local Junction SDK before ending the Privy session.
 

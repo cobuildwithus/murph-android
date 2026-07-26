@@ -6,14 +6,15 @@
 - Privy initialization, restored auth-state handling, phone/email OTP, identity-token bearer auth, and logout boundary.
 - Existing companion sign-in-token and status API client, including an active-member and legal-consent bootstrap check.
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
-- Explicit Junction Health Connect configuration, four minimum-necessary resources, 30-day backfill, manual sync, setup-time history permission, and optional background sync with separately requested background-read access.
-- Account-switch, reinstall distrust, stale-session replacement, and fail-closed sign-out safeguards.
-- Backend-receipt sync-state derivation with 36-hour and 72-hour thresholds.
+- Transactional Junction Health Connect setup, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, setup-time history permission, and optional background sync with separately requested background-read access.
+- Current-member and backend-consent preflight before health uploads or background enablement, plus account-switch, reinstall, incomplete-setup, stale-session, and fail-closed sign-out safeguards.
+- Backend-receipt sync-state derivation with 36-hour and 72-hour thresholds, including an actionable no-receipt state after 72 hours.
 - Compose login, setup, status, WHOOP guidance, consent, settings, and failure
   screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
   setup, waiting, synced, delayed, attention, and failure states.
-- Unit tests for sync-state derivation, external-ID stability, explicit connect/resume behavior, backend receipt truth, and member-switch teardown.
+- Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
+- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, pre-sync trust checks, process-scoped startup, provider availability, backend receipt truth, and member-switch teardown.
 
 ## Executable verification
 
@@ -23,10 +24,10 @@ Android Gradle Plugin 8.10.1, compile SDK 36, and the real vendor artifacts:
 - Privy Android `0.12.0` APIs (`Privy.init`, `getAuthState`, `getUser`, `user.identityToken`, SMS/email OTP, `logout`).
 - Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the four-resource WHOOP bridge, and manual/background sync).
 
-`./scripts/verify.sh` passes, including unit tests, Android lint, and debug APK
-assembly. The debug APK was installed and cold-launched on a Pixel 8 API 36
-Google APIs emulator; the login screen rendered and remained the resumed
-activity without an Android runtime crash.
+`./scripts/verify.sh` passes, including Debug and Release unit tests, Android
+lint, and APK assembly. The debug APK was installed and cold-launched on a
+Pixel 8 API 36 Google APIs emulator. Phone login, compact landscape scrolling,
+and country-picker dismissal were exercised with the keyboard visible.
 
 The first executable build required two app-owned corrections: an invalid
 Kotlin throw label in the HTTP adapter and one exact transitive Java-resource

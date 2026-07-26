@@ -63,17 +63,8 @@ class JunctionHealthSyncService(
         permission = PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
     )
 
-    override fun availability(): HealthConnectAvailability = when (
-        VitalHealthConnectManager.isAvailable(appContext)
-    ) {
-        ProviderAvailability.Installed -> HealthConnectAvailability.Available
-        ProviderAvailability.NotInstalled -> HealthConnectAvailability.InstallOrUpdateRequired
-        ProviderAvailability.ServiceUnavailable,
-        ProviderAvailability.OnboardingIncomplete,
-        ProviderAvailability.AppNotAllowed,
-        -> HealthConnectAvailability.TemporarilyUnavailable
-        ProviderAvailability.NotSupportedSDK -> HealthConnectAvailability.Unsupported
-    }
+    override fun availability(): HealthConnectAvailability =
+        VitalHealthConnectManager.isAvailable(appContext).toAppAvailability()
 
     override fun openHealthConnectIntent(): Intent? =
         VitalHealthConnectManager.openHealthConnectIntent(appContext)
@@ -99,7 +90,7 @@ class JunctionHealthSyncService(
     override fun configure() {
         manager.configureHealthConnectClient(
             logsEnabled = false,
-            syncOnAppStart = true,
+            syncOnAppStart = false,
             numberOfDaysToBackFill = backfillDays,
             connectionPolicy = ConnectionPolicy.Explicit,
         )
@@ -141,4 +132,13 @@ class JunctionHealthSyncService(
             emptySet()
         }
     }
+}
+
+internal fun ProviderAvailability.toAppAvailability(): HealthConnectAvailability = when (this) {
+    ProviderAvailability.Installed -> HealthConnectAvailability.Available
+    ProviderAvailability.NotInstalled -> HealthConnectAvailability.InstallOrUpdateRequired
+    ProviderAvailability.OnboardingIncomplete -> HealthConnectAvailability.OnboardingRequired
+    ProviderAvailability.AppNotAllowed -> HealthConnectAvailability.AppNotAllowed
+    ProviderAvailability.ServiceUnavailable -> HealthConnectAvailability.TemporarilyUnavailable
+    ProviderAvailability.NotSupportedSDK -> HealthConnectAvailability.Unsupported
 }
