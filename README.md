@@ -75,6 +75,24 @@ values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
 
 Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
 
+## ReviewGPT
+
+The repository includes the same pinned, managed-browser ReviewGPT workflow as
+`murph-ios`, with an Android-specific production review prompt:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm review:verify
+pnpm review:gpt android-review --wait \
+  --response-marker ANDROID_REVIEW_COMPLETE \
+  --response-file output-packages/android-review-response.md \
+  --prompt "Review exact committed head: $(git rev-parse HEAD)"
+```
+
+Review the exact committed head with a clean worktree. Resolve accepted
+findings, rerun Android verification, commit the remediation, and repeat until
+the response reports `REVIEW_OUTCOME: PASS`.
+
 ## Data requested
 
 `JunctionHealthSyncService` uses:

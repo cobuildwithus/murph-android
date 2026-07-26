@@ -7,6 +7,8 @@ build/
 .cxx/
 captures/
 externalNativeBuild/
+node_modules/
+output-packages/
 
 # Signing material and local credentials
 *.jks

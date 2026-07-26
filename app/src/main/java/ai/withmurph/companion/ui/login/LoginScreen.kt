@@ -453,12 +453,26 @@ private fun CountryPicker(
         dragHandle = {
             Box(
                 Modifier
-                    .padding(vertical = 10.dp)
-                    .width(40.dp)
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(MurphColors.SlateMuted.copy(alpha = 0.35f)),
-            )
+                    .fillMaxWidth()
+                    .height(44.dp),
+            ) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 10.dp)
+                        .width(40.dp)
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(MurphColors.SlateMuted.copy(alpha = 0.35f)),
+                )
+                MurphLinkButton(
+                    text = "Close",
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp),
+                )
+            }
         },
     ) {
         Column(
@@ -476,6 +490,7 @@ private fun CountryPicker(
                     keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Done,
                 ),
+                keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
             )
 
