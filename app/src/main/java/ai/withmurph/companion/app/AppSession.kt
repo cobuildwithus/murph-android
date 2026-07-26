@@ -38,7 +38,6 @@ class AppSession(
     private var sessionEpoch = 0
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
-    private var pendingBackgroundSync: PendingBackgroundSync? = null
 
     private val _state = MutableStateFlow(
         AppUiState(totalResourceCount = health.totalResourceCount),
@@ -66,6 +65,10 @@ class AppSession(
                     healthAvailability = health.availability(),
                     healthMessage = null,
                 )
+            }
+            if (!enforceHealthSetupAuthorization()) {
+                hasCompletedStartup = true
+                return@withLock
             }
             when (val authState = auth.currentState()) {
                 AuthSessionState.SignedOut -> enterSignedOut()
@@ -188,7 +191,6 @@ class AppSession(
                         isConnectingHealth = false,
                         healthSync = HealthSyncState.AwaitingFirstData,
                         grantedResourceCount = health.grantedResourceCount(),
-                        backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
                         healthMessage = null,
                     )
                 }
@@ -277,7 +279,6 @@ class AppSession(
                 } else {
                     current.healthSync
                 },
-                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = if (
                     needsPermissionRecovery &&
@@ -301,109 +302,6 @@ class AppSession(
 
     fun didEnterBackground() {
         needsForegroundRefresh = true
-    }
-
-    suspend fun prepareBackgroundSync(): Boolean = healthMutex.withLock {
-        if (
-            _state.value.phase != AppPhase.Ready ||
-            !healthWasRequested() ||
-            health.grantedResourceCount() == 0 ||
-            pendingBackgroundSync != null
-        ) {
-            return false
-        }
-        val memberKey = currentMemberKey ?: return false
-        val pending = PendingBackgroundSync(sessionEpoch, memberKey)
-        pendingBackgroundSync = pending
-        return try {
-            val validated = fetchValidatedHealthStatus(pending.epoch) != null &&
-                pendingBackgroundSync == pending
-            if (!validated) {
-                pendingBackgroundSync = null
-            }
-            validated
-        } catch (error: CancellationException) {
-            pendingBackgroundSync = null
-            throw error
-        }
-    }
-
-    suspend fun continueBackgroundSyncAfterPermission(granted: Boolean): Boolean =
-        healthMutex.withLock {
-            val pending = pendingBackgroundSync
-            if (!granted || !isCurrentBackgroundSync(pending)) {
-                pendingBackgroundSync = null
-                _state.update { current ->
-                    current.copy(
-                        backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
-                        healthMessage = "Background sync stayed off. Foreground sync still works.",
-                    )
-                }
-                return false
-            }
-            val pendingEpoch = pending?.epoch ?: return false
-            val validated = fetchValidatedHealthStatus(pendingEpoch) != null &&
-                pendingBackgroundSync == pending
-            if (!validated) {
-                pendingBackgroundSync = null
-            }
-            validated
-        }
-
-    suspend fun completeBackgroundSync(enabled: Boolean) = healthMutex.withLock {
-        val pending = pendingBackgroundSync
-        if (!enabled) {
-            pendingBackgroundSync = null
-            _state.update { current ->
-                current.copy(
-                    backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
-                    healthMessage = "Background sync stayed off. Foreground sync still works.",
-                )
-            }
-            return@withLock
-        }
-
-        val authorized = pending != null &&
-            isCurrentBackgroundSync(pending) &&
-            fetchValidatedHealthStatus(pending.epoch) != null
-        pendingBackgroundSync = null
-        if (!authorized) {
-            disableBackgroundSyncWhileLocked()
-            _state.update { current ->
-                current.copy(
-                    backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
-                    healthMessage = "Background sync was turned off because your session changed.",
-                )
-            }
-            return@withLock
-        }
-
-        _state.update { current ->
-            current.copy(
-                backgroundSyncEnabled = enabled || health.isBackgroundSyncEnabled(),
-                healthMessage = null,
-            )
-        }
-    }
-
-    fun cancelBackgroundSyncFlow() {
-        pendingBackgroundSync = null
-        _state.update { current ->
-            current.copy(
-                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
-                healthMessage = "Background sync stayed off. Foreground sync still works.",
-            )
-        }
-    }
-
-    suspend fun disableBackgroundSync() {
-        healthMutex.withLock {
-            pendingBackgroundSync = null
-            disableBackgroundSyncWhileLocked()
-        }
-        _state.update { current ->
-            current.copy(backgroundSyncEnabled = health.isBackgroundSyncEnabled())
-        }
     }
 
     suspend fun signOut() = withContext(NonCancellable) {
@@ -465,11 +363,18 @@ class AppSession(
         _state.update { it.copy(healthMessage = message) }
     }
 
+    private suspend fun enforceHealthSetupAuthorization(): Boolean {
+        if (!health.isSignedIn() || healthWasRequested()) return true
+        if (!resetHealthSdkAtTrustBoundary()) return false
+        currentMemberKey = null
+        localState.clearMemberScopedState()
+        return true
+    }
+
     private suspend fun reconcileSignedIn(authState: AuthSessionState.SignedIn) {
         val previousMemberKey = localState.memberKey
         val mustDistrustPersistedHealthSession =
-            (health.isSignedIn() && !healthWasRequested()) ||
-                (previousMemberKey == null && health.isSignedIn()) ||
+            (previousMemberKey == null && health.isSignedIn()) ||
                 (previousMemberKey != null && previousMemberKey != authState.memberKey)
         if (mustDistrustPersistedHealthSession) {
             if (!resetHealthSdkAtTrustBoundary()) return
@@ -538,7 +443,6 @@ class AppSession(
                     deriveCachedHealthState()
                 },
                 grantedResourceCount = grantedResourceCount,
-                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
                 healthMessage = when {
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
                     authState.verifiedOnline -> null
@@ -782,7 +686,6 @@ class AppSession(
                     now = now(),
                 ),
                 grantedResourceCount = health.grantedResourceCount(),
-                backgroundSyncEnabled = health.isBackgroundSyncEnabled(),
             )
         }
         return status
@@ -930,25 +833,6 @@ class AppSession(
         }
     }
 
-    private fun isCurrentBackgroundSync(pending: PendingBackgroundSync?): Boolean =
-        pending != null &&
-            pending == pendingBackgroundSync &&
-            pending.epoch == sessionEpoch &&
-            pending.memberKey == currentMemberKey &&
-            pending.memberKey == localState.memberKey &&
-            _state.value.phase == AppPhase.Ready
-
-    /** Called only while [healthMutex] is held. */
-    private suspend fun disableBackgroundSyncWhileLocked() {
-        try {
-            health.disableBackgroundSync()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            // Best effort: the SDK remains the source of truth for the rendered state.
-        }
-    }
-
     private fun deriveCachedHealthState(): HealthSyncState {
         val cached = localState.lastKnownDataReceivedAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
         return HealthSyncState.derive(
@@ -966,7 +850,6 @@ class AppSession(
     private fun invalidateSessionEpoch() {
         sessionEpoch += 1
         pendingHealthConnection = null
-        pendingBackgroundSync = null
     }
 
     private fun connectionErrorMessage(error: Exception): String = when (error) {
@@ -979,11 +862,6 @@ class AppSession(
     }
 
     private data class PendingHealthConnection(
-        val epoch: Int,
-        val memberKey: String,
-    )
-
-    private data class PendingBackgroundSync(
         val epoch: Int,
         val memberKey: String,
     )

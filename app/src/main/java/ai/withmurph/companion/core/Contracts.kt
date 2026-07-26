@@ -22,7 +22,6 @@ interface HealthSyncing {
     fun openHealthConnectIntent(): Intent?
     fun isSignedIn(): Boolean
     fun configure()
-    fun isBackgroundSyncEnabled(): Boolean
     fun grantedResourceCount(): Int
 
     suspend fun identify(
@@ -33,7 +32,6 @@ interface HealthSyncing {
     suspend fun connectAfterPermissionRequest()
     suspend fun refreshPermissionState()
     suspend fun syncAllGrantedResources()
-    suspend fun disableBackgroundSync()
     suspend fun signOutSdk()
 }
 

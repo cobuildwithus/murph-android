@@ -366,10 +366,6 @@ private fun OtpInput(
 ) {
     var focused by remember { mutableStateOf(false) }
 
-    LaunchedEffect(value) {
-        if (value.length == 6) onComplete()
-    }
-
     Box(
         modifier = Modifier
             .fillMaxWidth()

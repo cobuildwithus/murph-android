@@ -84,7 +84,6 @@ private enum class ScreenshotScenario {
         healthSync = sync,
         grantedResourceCount = if (sync == HealthSyncState.NotConnected) 0 else 4,
         totalResourceCount = 4,
-        backgroundSyncEnabled = false,
         backendEnvironment = "screenshot",
     )
 
@@ -106,8 +105,6 @@ private val NoOpActions = MurphActions(
     onConnectHealth = {},
     onOpenHealthConnect = {},
     onSyncNow = {},
-    onEnableBackgroundSync = {},
-    onDisableBackgroundSync = {},
     onOpenPrivacy = {},
     onOpenTerms = {},
     onOpenHealthNotice = {},

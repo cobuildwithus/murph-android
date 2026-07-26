@@ -1,7 +1,5 @@
 package ai.withmurph.companion.ui.settings
 
-import ai.withmurph.companion.app.AppUiState
-import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.ui.components.MurphIconKind
 import ai.withmurph.companion.ui.components.SettingsDivider
 import ai.withmurph.companion.ui.components.SettingsRow
@@ -28,10 +26,7 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun SettingsScreen(
-    state: AppUiState,
     onOpenHealthConnect: () -> Unit,
-    onEnableBackgroundSync: () -> Unit,
-    onDisableBackgroundSync: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
     onOpenHealthNotice: () -> Unit,
@@ -60,31 +55,6 @@ fun SettingsScreen(
                 title = "Health Connect Access",
                 icon = MurphIconKind.HealthCard,
                 onClick = onOpenHealthConnect,
-            )
-        }
-
-        if (state.healthSync != HealthSyncState.NotConnected) {
-            Section("Background sync") {
-                SettingsRow(
-                    title = "Background sync",
-                    icon = MurphIconKind.Background,
-                    detail = if (state.backgroundSyncEnabled) {
-                        "On"
-                    } else {
-                        "Off"
-                    },
-                    actionLabel = if (state.backgroundSyncEnabled) "Turn off" else "Set up",
-                    onClick = if (state.backgroundSyncEnabled) {
-                        onDisableBackgroundSync
-                    } else {
-                        onEnableBackgroundSync
-                    },
-                )
-            }
-            Text(
-                text = "Android may delay scheduled work. Foreground sync remains available.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MurphColors.SlateMuted,
             )
         }
 

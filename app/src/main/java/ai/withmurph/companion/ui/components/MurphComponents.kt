@@ -271,7 +271,6 @@ enum class MurphIconKind {
     Envelope,
     Trash,
     SignOut,
-    Background,
 }
 
 @Composable
@@ -317,7 +316,7 @@ fun MurphIcon(
                 drawLine(tint, Offset(unit * 0.32f, unit * 0.76f), Offset(unit * 0.58f, unit * 0.76f), stroke, StrokeCap.Round)
             }
 
-            MurphIconKind.Refresh, MurphIconKind.Background -> {
+            MurphIconKind.Refresh -> {
                 drawArc(
                     color = tint,
                     startAngle = -52f,

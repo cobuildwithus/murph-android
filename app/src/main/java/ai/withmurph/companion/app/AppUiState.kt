@@ -23,7 +23,6 @@ data class AppUiState(
     val healthMessage: String? = null,
     val grantedResourceCount: Int = 0,
     val totalResourceCount: Int = 0,
-    val backgroundSyncEnabled: Boolean = false,
     val backendEnvironment: String? = null,
     val authVerifiedOnline: Boolean = true,
 )

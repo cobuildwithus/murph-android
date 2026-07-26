@@ -5,8 +5,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Optional Junction background-sync scheduling. Do not replace this with USE_EXACT_ALARM. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Vital's optional headless sync is intentionally excluded from this release. -->
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
 
     <!-- Minimum read-only Health Connect scope for the WHOOP bridge. -->
     <uses-permission android:name="android.permission.health.READ_EXERCISE" />
@@ -14,9 +16,8 @@
     <uses-permission android:name="android.permission.health.READ_STEPS" />
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
 
-    <!-- History is requested during connect; background read only during optional setup. -->
+    <!-- History is requested during connect where the installed provider supports it. -->
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
-    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
 
     <application
         android:name=".MurphApplication"
@@ -29,6 +30,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Murph"
         tools:targetApi="36">
+
+        <receiver
+            android:name="io.tryvital.vitalhealthconnect.SyncBroadcastReceiver"
+            tools:node="remove" />
+
+        <service
+            android:name="io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService"
+            tools:node="remove" />
 
         <activity
             android:name=".MainActivity"

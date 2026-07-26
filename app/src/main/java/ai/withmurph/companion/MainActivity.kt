@@ -34,32 +34,6 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val backgroundSyncLauncher = registerForActivityResult(
-            graph.health.backgroundSyncContract(),
-        ) { enabled ->
-            graph.applicationScope.launch {
-                graph.session.completeBackgroundSync(enabled)
-            }
-        }
-
-        val backgroundReadPermissionLauncher = registerForActivityResult(
-            graph.health.extendedPermissionContract(),
-        ) { granted ->
-            graph.applicationScope.launch {
-                if (
-                    graph.session.continueBackgroundSyncAfterPermission(
-                        granted = granted.isNotEmpty(),
-                    )
-                ) {
-                    if (canLaunchExternalFlow()) {
-                        backgroundSyncLauncher.launch(Unit)
-                    } else {
-                        graph.session.cancelBackgroundSyncFlow()
-                    }
-                }
-            }
-        }
-
         val historyPermissionLauncher = registerForActivityResult(
             graph.health.extendedPermissionContract(),
         ) {
@@ -133,34 +107,6 @@ class MainActivity : ComponentActivity() {
                         onOpenHealthConnect = ::openHealthConnect,
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
-                        },
-                        onEnableBackgroundSync = {
-                            graph.applicationScope.launch {
-                                if (graph.session.prepareBackgroundSync()) {
-                                    val backgroundPermissions =
-                                        graph.health.supportedBackgroundReadPermissions()
-                                    if (!canLaunchExternalFlow()) {
-                                        graph.session.cancelBackgroundSyncFlow()
-                                    } else if (backgroundPermissions.isNotEmpty()) {
-                                        backgroundReadPermissionLauncher.launch(
-                                            backgroundPermissions,
-                                        )
-                                    } else {
-                                        if (
-                                            graph.session.continueBackgroundSyncAfterPermission(
-                                                granted = true,
-                                            )
-                                        ) {
-                                            backgroundSyncLauncher.launch(Unit)
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        onDisableBackgroundSync = {
-                            graph.applicationScope.launch {
-                                graph.session.disableBackgroundSync()
-                            }
                         },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },

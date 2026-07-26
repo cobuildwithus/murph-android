@@ -11,8 +11,8 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
 - Four minimum-necessary Junction resources: sleep, workouts, steps, and active calories.
-- Optional history permission during setup and background-read permission only when background sync is enabled.
-- Optional Junction background synchronization.
+- Optional history permission during setup.
+- Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - WHOOP → Health Connect setup guidance.
 - Settings, legal links, deletion, support, and sign-out.
@@ -24,8 +24,8 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Chat, vault browsing, challenges, or a general Murph client.
 - Direct WHOOP OAuth.
 - Samsung Health support before the Health Connect path is proven.
-- App-owned Hilt, Room, Retrofit, analytics, and crash-reporting SDKs. Junction's
-  background worker transitively includes AndroidX WorkManager and its Room
+- App-owned Hilt, Room, Retrofit, analytics, and crash-reporting SDKs. Junction
+  transitively includes AndroidX WorkManager and its Room
   runtime; Murph defines no Room database or health-value cache.
 
 ## First setup
@@ -112,7 +112,7 @@ This deliberately covers only the first WHOOP bridge use case: sleep, workouts, 
 
 The manifest declares only the four corresponding Health Connect read permissions. Users still choose each category in the Health Connect system UI. Denied categories remain unavailable and do not block categories the user approved.
 
-The app asks for Health Connect history access during initial setup where supported. Background-read access is separate and is requested only when the member opts into background sync. Junction documents Health Connect backfill as a fixed 30-day window, so the app is configured for 30 days and does not promise broader history.
+The app asks for Health Connect history access during initial setup where supported. Junction documents Health Connect backfill as a fixed 30-day window, so the app is configured for 30 days and does not promise broader history. Background Health Connect reads, boot receivers, and exact-alarm synchronization are intentionally excluded from this release.
 
 ## Connection lifecycle
 
@@ -123,13 +123,11 @@ The app asks for Health Connect history access during initial setup where suppor
   requests a backend token with `connectionIntent: "connect"`.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
-- Foreground sync and background-sync enablement revalidate the current Privy
-  member and backend consent before Junction can read or upload health data.
+- Every app-triggered foreground sync revalidates the current Privy member and
+  backend consent before Junction can read or upload health data.
 - Session, login, sync, retry, and sign-out transitions run in the
   application-lifetime `AppGraph` scope, so Activity recreation only replaces
   the UI renderer.
-- Optional background setup revalidates the initiating member after each
-  Android system UI boundary and disables stale or restored vendor results.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
@@ -140,11 +138,11 @@ The app asks for Health Connect history access during initial setup where suppor
 
 Before a Play release:
 
-1. Apply for Google Play Health Connect access for sleep, exercise, steps, active calories, history, and optional background reads.
+1. Apply for Google Play Health Connect access for sleep, exercise, steps, active calories, and history.
 2. Complete Play Data Safety disclosures and the Health Apps declaration.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
-4. Review the merged manifest; Junction adds foreground-service and boot-receiver declarations.
-5. Verify the foreground-sync notification and optional exact-alarm flow on Android 13–16.
+4. Review the merged manifest and prove Junction's boot receiver and exact-alarm service remain removed.
+5. Verify foreground sync and its notification behavior on Android 13–16.
 6. Verify WHOOP actually exports each product-critical field. Murph cannot manufacture fields WHOOP does not write.
 
 See `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, and `SOURCE_BASES.md` before extending the app.

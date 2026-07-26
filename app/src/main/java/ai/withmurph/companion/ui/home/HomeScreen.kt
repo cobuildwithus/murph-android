@@ -190,7 +190,7 @@ private fun SyncStatusContent(
             icon = MurphIconKind.Refresh
             tint = MurphColors.Sage
             title = "You're connected"
-            detail = "Your first sync is underway. Android may delay background work, so the first data can take a little while."
+            detail = "Your first sync is underway. Keep Murph open while the first data arrives."
         }
         is HealthSyncState.Synced -> {
             icon = MurphIconKind.CheckCircle

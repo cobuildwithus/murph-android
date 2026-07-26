@@ -26,8 +26,8 @@ snippets. Inspect at least:
   fail-closed teardown, source-scoped backend receipt truth, and reconnect
   handling;
 - Health Connect availability, permissions, first setup, settings return,
-  foreground/background synchronization, Android process death, and exact
-  alarm behavior;
+  foreground synchronization, Android process death, and proof that vendor
+  background-read, boot-receiver, and exact-alarm entry points stay excluded;
 - Compose state ownership, recomposition, keyboard/back/sheet escape paths,
   accessibility, scrolling, and user-visible recovery;
 - Debug versus Release manifests and configuration, API 28–36 behavior,

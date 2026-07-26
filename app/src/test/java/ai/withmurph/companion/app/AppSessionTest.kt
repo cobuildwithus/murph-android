@@ -371,8 +371,52 @@ class AppSessionTest {
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertFalse(fixture.session.state.value.authVerifiedOnline)
         assertEquals(0, fixture.health.syncCalls)
-        assertFalse(fixture.session.prepareBackgroundSync())
         assertTrue(fixture.api.statusSources.isEmpty())
+    }
+
+    @Test
+    fun revokedHealthSetupTearsDownBeforeUnavailableAuthCanRestoreReady() = runTest {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+
+        fixture.session.start()
+
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(1, fixture.auth.currentStateCalls)
+        assertEquals(null, fixture.localState.memberKey)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun revokedHealthSetupTeardownFailureStopsBeforeAuthRestore() = runTest {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signOutError = IllegalStateException("teardown failed")
+
+        fixture.session.start()
+
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(0, fixture.auth.currentStateCalls)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
     }
 
     @Test
@@ -407,59 +451,17 @@ class AppSessionTest {
             fixture.localState.memberKey = MEMBER_KEY
             fixture.localState.healthAccessRequestedAt = InstantValue(1)
             fixture.health.signedIn = true
-            fixture.health.backgroundEnabled = true
             fixture.api.signInError = failure
 
             fixture.session.start()
 
             assertEquals(1, fixture.health.signOutCalls)
             assertFalse(fixture.health.signedIn)
-            assertFalse(fixture.health.backgroundEnabled)
             assertEquals(0, fixture.health.configureCalls)
             assertEquals(0, fixture.health.syncCalls)
             val rendered = fixture.session.state.value.phase as AppPhase.Failed
             assertEquals(canRetry, rendered.canRetry)
         }
-    }
-
-    @Test
-    fun backgroundSetupRejectsChangedMembersAndMissingTransactions() = runTest {
-        val memberChanged = completedHealthFixture()
-        assertTrue(memberChanged.session.prepareBackgroundSync())
-        memberChanged.auth.state =
-            AuthSessionState.SignedIn("did:privy:other-member", verifiedOnline = true)
-
-        assertFalse(
-            memberChanged.session.continueBackgroundSyncAfterPermission(granted = true),
-        )
-        assertEquals(1, memberChanged.health.signOutCalls)
-
-        val restoredResult = completedHealthFixture()
-        restoredResult.health.backgroundEnabled = true
-        restoredResult.session.completeBackgroundSync(enabled = true)
-
-        assertEquals(1, restoredResult.health.disableBackgroundCalls)
-        assertFalse(restoredResult.health.backgroundEnabled)
-    }
-
-    @Test
-    fun backgroundSetupRevalidatesAfterVendorSetupAndAdmitsOneAttempt() = runTest {
-        val fixture = completedHealthFixture()
-
-        assertTrue(fixture.session.prepareBackgroundSync())
-        assertFalse(fixture.session.prepareBackgroundSync())
-        assertTrue(
-            fixture.session.continueBackgroundSyncAfterPermission(granted = true),
-        )
-        fixture.health.backgroundEnabled = true
-        fixture.api.statusError = CompanionApiException.ConsentRequired
-
-        fixture.session.completeBackgroundSync(enabled = true)
-
-        assertEquals(1, fixture.health.signOutCalls)
-        assertTrue(fixture.health.disableBackgroundCalls >= 1)
-        assertFalse(fixture.health.backgroundEnabled)
-        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
     }
 
     @Test
@@ -601,8 +603,10 @@ class AppSessionTest {
     private class FakeAuth(var state: AuthSessionState) : AuthProvider {
         var currentStateGate: CompletableDeferred<Unit>? = null
         var signOutError: Throwable? = null
+        var currentStateCalls = 0
 
         override suspend fun currentState(): AuthSessionState {
+            currentStateCalls += 1
             currentStateGate?.await()
             return state
         }
@@ -650,8 +654,6 @@ class AppSessionTest {
         var syncCalls = 0
         var signOutCalls = 0
         var grantedCount = 0
-        var backgroundEnabled = false
-        var disableBackgroundCalls = 0
         var identifyGate: CompletableDeferred<Unit>? = null
         val identifyEntered = CompletableDeferred<Unit>()
         var signOutGate: CompletableDeferred<Unit>? = null
@@ -665,7 +667,6 @@ class AppSessionTest {
             configureCalls += 1
             events += "configure"
         }
-        override fun isBackgroundSyncEnabled(): Boolean = backgroundEnabled
         override fun grantedResourceCount(): Int = grantedCount
 
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
@@ -691,18 +692,12 @@ class AppSessionTest {
             events += "sync"
         }
 
-        override suspend fun disableBackgroundSync() {
-            disableBackgroundCalls += 1
-            backgroundEnabled = false
-        }
-
         override suspend fun signOutSdk() {
             signOutCalls += 1
             signOutEntered.complete(Unit)
             signOutGate?.await()
             signOutError?.let { throw it }
             signedIn = false
-            backgroundEnabled = false
             events += "sign-out"
         }
     }

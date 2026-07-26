@@ -138,10 +138,7 @@ private fun ReadyApp(
                     onSyncNow = actions.onSyncNow,
                 )
                 AppTab.Settings -> SettingsScreen(
-                    state = state,
                     onOpenHealthConnect = actions.onOpenHealthConnect,
-                    onEnableBackgroundSync = actions.onEnableBackgroundSync,
-                    onDisableBackgroundSync = actions.onDisableBackgroundSync,
                     onOpenPrivacy = actions.onOpenPrivacy,
                     onOpenTerms = actions.onOpenTerms,
                     onOpenHealthNotice = actions.onOpenHealthNotice,
@@ -336,8 +333,8 @@ private fun HealthConsentContent(onContinue: () -> Unit) {
                 text = "Revoke access in Health Connect. Manage or delete your account at withmurph.ai.",
             )
             ConsentRow(
-                icon = MurphIconKind.Background,
-                text = "Background sync is optional. Android may delay scheduled work, so foreground sync remains available.",
+                icon = MurphIconKind.Refresh,
+                text = "Murph syncs when you open the app or choose Sync now.",
             )
         }
 
@@ -542,8 +539,6 @@ data class MurphActions(
     val onConnectHealth: () -> Unit,
     val onOpenHealthConnect: () -> Unit,
     val onSyncNow: () -> Unit,
-    val onEnableBackgroundSync: () -> Unit,
-    val onDisableBackgroundSync: () -> Unit,
     val onOpenPrivacy: () -> Unit,
     val onOpenTerms: () -> Unit,
     val onOpenHealthNotice: () -> Unit,

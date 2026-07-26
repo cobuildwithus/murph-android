@@ -6,7 +6,6 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_HISTORY
-import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
@@ -14,9 +13,6 @@ import ai.withmurph.companion.core.JunctionExternalUserId
 import io.tryvital.client.AuthenticateRequest
 import io.tryvital.client.VitalClient
 import io.tryvital.vitalhealthconnect.VitalHealthConnectManager
-import io.tryvital.vitalhealthconnect.disableBackgroundSync
-import io.tryvital.vitalhealthconnect.enableBackgroundSyncContract
-import io.tryvital.vitalhealthconnect.isBackgroundSyncEnabled
 import io.tryvital.vitalhealthconnect.model.PermissionOutcome
 import kotlinx.coroutines.Deferred
 import io.tryvital.vitalhealthcore.model.ConnectionPolicy
@@ -51,16 +47,9 @@ class JunctionHealthSyncService(
         return manager.resourcesWithReadPermission().isNotEmpty()
     }
 
-    fun backgroundSyncContract() = manager.enableBackgroundSyncContract()
-
     fun supportedHistoryPermissions(): Set<String> = supportedPermission(
         feature = HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY,
         permission = PERMISSION_READ_HEALTH_DATA_HISTORY,
-    )
-
-    fun supportedBackgroundReadPermissions(): Set<String> = supportedPermission(
-        feature = HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,
-        permission = PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
     )
 
     override fun availability(): HealthConnectAvailability =
@@ -108,13 +97,7 @@ class JunctionHealthSyncService(
         manager.syncData(resources = null)
     }
 
-    override fun isBackgroundSyncEnabled(): Boolean = manager.isBackgroundSyncEnabled
-
     override fun grantedResourceCount(): Int = manager.resourcesWithReadPermission().size
-
-    override suspend fun disableBackgroundSync() {
-        manager.disableBackgroundSync()
-    }
 
     override suspend fun signOutSdk() {
         VitalClient.getOrCreate(appContext).signOut()
