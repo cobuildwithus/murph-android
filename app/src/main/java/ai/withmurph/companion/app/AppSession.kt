@@ -310,13 +310,12 @@ class AppSession(
             }
             return
         }
+        needsForegroundRefresh = false
         val authAllowsSync = reconcileForegroundAuth()
         if (ownsPendingHealthConnection()) {
-            needsForegroundRefresh = false
             return
         }
         if (_state.value.phase != AppPhase.Ready) {
-            needsForegroundRefresh = false
             return
         }
         try {
@@ -356,7 +355,6 @@ class AppSession(
         ) {
             syncNow()
         }
-        needsForegroundRefresh = false
     }
 
     fun didEnterBackground() {
@@ -559,14 +557,25 @@ class AppSession(
                     ownsPendingHealthConnection(authState.memberKey)
                 if (
                     authState.memberKey != currentMemberKey ||
-                    authState.memberKey != localState.memberKey ||
-                    (
-                        health.isSignedIn() &&
-                            !healthWasRequested() &&
-                            !pendingOwnsHealthIdentity
-                    )
+                    authState.memberKey != localState.memberKey
                 ) {
                     reconcile(force = true)
+                    false
+                } else if (
+                    health.isSignedIn() &&
+                    !healthWasRequested() &&
+                    !pendingOwnsHealthIdentity
+                ) {
+                    val stillOrphaned = healthMutex.withLock {
+                        health.isSignedIn() &&
+                            !healthWasRequested() &&
+                            !ownsPendingHealthConnection(authState.memberKey) &&
+                            authState.memberKey == currentMemberKey &&
+                            authState.memberKey == localState.memberKey &&
+                            _state.value.phase == AppPhase.Ready &&
+                            !localState.signOutPending
+                    }
+                    if (stillOrphaned) reconcile(force = true)
                     false
                 } else if (pendingOwnsHealthIdentity) {
                     false

@@ -176,6 +176,51 @@ class AppSessionTest {
     }
 
     @Test
+    fun olderForegroundRefreshCannotEraseANewerSettingsReturn() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(600),
+            resources = emptyMap(),
+        )
+        fixture.session.start()
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        val refreshCalls = fixture.health.refreshCalls
+        val statusCount = fixture.api.statusSources.size
+        val statusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = statusGate
+
+        fixture.session.didEnterBackground()
+        val firstForeground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+        assertEquals(refreshCalls + 1, fixture.health.refreshCalls)
+        assertEquals(statusCount + 1, fixture.api.statusSources.size)
+
+        fixture.session.didEnterBackground()
+        fixture.health.grantedCount = 0
+        statusGate.complete(Unit)
+        firstForeground.await()
+        val syncCallsAfterFirstForeground = fixture.health.syncCalls
+
+        fixture.session.didBecomeActive()
+
+        assertEquals(refreshCalls + 2, fixture.health.refreshCalls)
+        assertEquals(syncCallsAfterFirstForeground, fixture.health.syncCalls)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(
+            HEALTH_PERMISSION_RECOVERY_MESSAGE,
+            fixture.session.state.value.healthMessage,
+        )
+
+        fixture.session.didBecomeActive()
+        assertEquals(refreshCalls + 2, fixture.health.refreshCalls)
+    }
+
+    @Test
     fun permissionRecoveryRevokesOldSetupBeforeLaunchingSystemFlow() = runTest {
         val now = Instant.parse("2026-07-25T18:00:00Z")
         val fixture = fixture(now = now)
@@ -294,6 +339,40 @@ class AppSessionTest {
     @Test
     fun foregroundReturnPreservesPermissionRecoveryConnectIdentity() = runTest {
         assertForegroundReturnPreservesConnectIdentity(isRecovery = true)
+    }
+
+    @Test
+    fun foregroundReturnWaitsForRecoveryTeardownAndPreservesPermissionLaunch() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.grantedCount = 0
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        val signOutCalls = fixture.health.signOutCalls
+        val tokenCount = fixture.api.intents.size
+        val teardownGate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = teardownGate
+        val preparation = async { fixture.session.prepareHealthConnection() }
+        fixture.health.signOutEntered.await()
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertFalse(foreground.isCompleted)
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        teardownGate.complete(Unit)
+        assertTrue(preparation.await())
+        foreground.await()
+
+        assertTrue(fixture.session.state.value.isConnectingHealth)
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        assertEquals(ConnectionIntent.Connect, fixture.api.intents.last())
+        assertEquals(tokenCount + 1, fixture.api.intents.size)
+        assertEquals(1, fixture.health.connectCalls)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
     }
 
     @Test
@@ -1135,6 +1214,24 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertTrue(fixture.api.intents.isEmpty())
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
+    fun foregroundReturnStillRemovesAGenuinelyOrphanedJunctionIdentity() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.health.signedIn = true
+        val signOutCalls = fixture.health.signOutCalls
+        val tokenCount = fixture.api.intents.size
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
     }
 
     @Test
