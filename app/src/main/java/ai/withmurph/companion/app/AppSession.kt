@@ -729,7 +729,9 @@ class AppSession(
                 } else if (
                     !_state.value.authVerifiedOnline
                 ) {
-                    reconcile(force = true)
+                    if (_state.value.phase != AppPhase.Launching) {
+                        reconcile(force = true)
+                    }
                     false
                 } else {
                     _state.update { it.copy(authVerifiedOnline = true) }

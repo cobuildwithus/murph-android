@@ -2153,6 +2153,56 @@ class AppSessionTest {
     }
 
     @Test
+    fun preparationMemberSwitchOwnsBootstrapBeforeForegroundReturn() = runTest {
+        val newMemberKey = "did:privy:new-member"
+        val fixture = completedHealthFixture()
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.grantedCount = 0
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        val tokenCount = fixture.api.intents.size
+        val statusCount = fixture.api.statusSources.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+        fixture.api.maximumStatusCalls = statusCount + 2
+        val teardownGate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = teardownGate
+        val preparation = async { fixture.session.prepareHealthConnection() }
+        fixture.health.signOutEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(newMemberKey, verifiedOnline = true)
+        val bootstrapGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = bootstrapGate
+
+        teardownGate.complete(Unit)
+        fixture.api.statusGateEntered.await()
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(statusCount + 2, fixture.api.statusSources.size)
+        bootstrapGate.complete(Unit)
+        assertFalse(preparation.await())
+
+        assertEquals(statusCount + 2, fixture.api.statusSources.size)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
     fun unavailableAuthorityCannotRestoreCachedSyncedAfterCompleteRevocation() = runTest {
         listOf(true, false).forEach { authUnavailable ->
             val now = Instant.parse("2026-07-25T18:00:00Z")
