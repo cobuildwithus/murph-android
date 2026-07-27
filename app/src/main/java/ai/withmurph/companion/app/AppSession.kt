@@ -293,6 +293,10 @@ class AppSession(
             reconcile(force = true)
             return
         }
+        if (!health.isSignedIn()) {
+            reconcile(force = true)
+            return
+        }
         if (health.grantedResourceCount() == 0) {
             publishPermissionAwareHealthState(
                 status = cachedHealthStatus(),
@@ -300,10 +304,11 @@ class AppSession(
             )
             return
         }
-        healthMutex.withLock {
+        val needsHealthReconciliation = healthMutex.withLock {
             val epoch = sessionEpoch
             syncAndRefresh(epoch)
         }
+        if (needsHealthReconciliation) reconcile(force = true)
     }
 
     suspend fun didBecomeActive() {
@@ -399,7 +404,10 @@ class AppSession(
         return true
     }
 
-    private suspend fun reconcileSignedIn(authState: AuthSessionState.SignedIn) {
+    private suspend fun reconcileSignedIn(
+        authState: AuthSessionState.SignedIn,
+        canRetryLostHealthSession: Boolean = true,
+    ) {
         val previousMemberKey = localState.memberKey
         val mustDistrustPersistedHealthSession =
             (previousMemberKey == null && health.isSignedIn()) ||
@@ -483,7 +491,23 @@ class AppSession(
             authState.verifiedOnline &&
             grantedResourceCount > 0
         ) {
-            healthMutex.withLock { syncAndRefresh(epoch) }
+            val needsHealthReconciliation =
+                healthMutex.withLock { syncAndRefresh(epoch) }
+            if (needsHealthReconciliation) {
+                if (canRetryLostHealthSession) {
+                    reconcileSignedIn(authState, canRetryLostHealthSession = false)
+                } else {
+                    _state.update { current ->
+                        current.copy(
+                            phase = AppPhase.Failed(
+                                message = "Murph couldn't restore Health Connect. Try again.",
+                                canRetry = true,
+                                canSignOut = true,
+                            ),
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -635,28 +659,32 @@ class AppSession(
         }
     }
 
-    private suspend fun syncAndRefresh(epoch: Int) {
-        if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return
+    private suspend fun syncAndRefresh(epoch: Int): Boolean {
+        if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return false
         _state.update { it.copy(isSyncingHealth = true, healthMessage = null) }
         try {
-            if (fetchValidatedHealthStatus(epoch) == null) return
-            if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return
+            if (fetchValidatedHealthStatus(epoch) == null) return false
+            if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return false
             if (health.grantedResourceCount() == 0) {
                 publishPermissionAwareHealthState(
                     status = cachedHealthStatus(),
                     message = _state.value.healthMessage,
                 )
-                return
+                return false
             }
+            if (!health.isSignedIn()) return true
             try {
                 health.syncAllGrantedResources()
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
+                if (!health.isSignedIn()) return true
                 // Status refresh below still reports the last backend-confirmed receipt.
             }
-            if (epoch != sessionEpoch) return
+            if (epoch != sessionEpoch) return false
+            if (!health.isSignedIn()) return true
             fetchValidatedHealthStatus(epoch)
+            return false
         } finally {
             _state.update { it.copy(isSyncingHealth = false) }
         }

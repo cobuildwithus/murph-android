@@ -573,6 +573,67 @@ class AppSessionTest {
     }
 
     @Test
+    fun foregroundReturnResumesALostLiveJunctionSessionBeforeSync() = runTest {
+        assertLostLiveJunctionSessionResumes(useForegroundReturn = true)
+    }
+
+    @Test
+    fun manualSyncResumesALostLiveJunctionSessionBeforeSync() = runTest {
+        assertLostLiveJunctionSessionResumes(useForegroundReturn = false)
+    }
+
+    @Test
+    fun lostLiveJunctionSessionCanReturnToExplicitReconnect() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.requireCurrentProcessSetupBeforeSync = true
+        fixture.health.loseLiveSession()
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+        val syncCalls = fixture.health.syncCalls
+
+        fixture.session.syncNow()
+
+        assertEquals(listOf("token-resume", "sign-out"), fixture.events)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+    }
+
+    @Test
+    fun sessionLostDuringStatusPreflightResumesBeforeVendorSync() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.requireCurrentProcessSetupBeforeSync = true
+        val statusCount = fixture.api.statusSources.size
+        val statusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = statusGate
+        val sync = async { fixture.session.syncNow() }
+        runCurrent()
+        assertEquals(statusCount + 1, fixture.api.statusSources.size)
+
+        fixture.health.loseLiveSession()
+        statusGate.complete(Unit)
+        sync.await()
+
+        assertEquals(
+            listOf(
+                "status",
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "sync",
+                "status",
+            ),
+            fixture.events,
+        )
+        assertTrue(fixture.health.signedIn)
+        assertEquals(2, fixture.health.identifyCalls)
+        assertEquals(2, fixture.health.configureCalls)
+    }
+
+    @Test
     fun memberSwitchClosesTheOldSdkBoundaryBeforePublishingReady() = runTest {
         val fixture = fixture(memberKey = "did:privy:new-member")
         fixture.localState.memberKey = "did:privy:old-member"
@@ -1399,6 +1460,31 @@ class AppSessionTest {
         assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
     }
 
+    private suspend fun assertLostLiveJunctionSessionResumes(useForegroundReturn: Boolean) {
+        val fixture = completedHealthFixture()
+        fixture.health.requireCurrentProcessSetupBeforeSync = true
+        fixture.health.loseLiveSession()
+        val tokenCount = fixture.api.intents.size
+        val syncCalls = fixture.health.syncCalls
+
+        if (useForegroundReturn) {
+            fixture.session.didEnterBackground()
+            fixture.session.didBecomeActive()
+        } else {
+            fixture.session.syncNow()
+        }
+
+        assertEquals(
+            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            fixture.events,
+        )
+        assertEquals(tokenCount + 1, fixture.api.intents.size)
+        assertEquals(ConnectionIntent.Resume, fixture.api.intents.last())
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
     private suspend fun assertPreparationBackendFailureKeepsPermissionsClosed(
         isRecovery: Boolean,
         failure: CompanionApiException,
@@ -1712,6 +1798,9 @@ class AppSessionTest {
 
         override suspend fun syncAllGrantedResources() {
             if (requireCurrentProcessSetupBeforeSync) {
+                check(signedIn) {
+                    "Junction sync started while the live session was signed out."
+                }
                 check(identifiedInCurrentProcess) {
                     "Junction sync started before process-local identification."
                 }
@@ -1724,12 +1813,20 @@ class AppSessionTest {
             syncError?.let { throw it }
         }
 
+        fun loseLiveSession() {
+            signedIn = false
+            identifiedInCurrentProcess = false
+            configuredInCurrentProcess = false
+        }
+
         override suspend fun signOutSdk() {
             signOutCalls += 1
             signOutEntered.complete(Unit)
             signOutGate?.await()
             signOutError?.let { throw it }
             signedIn = false
+            identifiedInCurrentProcess = false
+            configuredInCurrentProcess = false
             events += "sign-out"
         }
     }
