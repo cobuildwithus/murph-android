@@ -40,6 +40,13 @@ class SharedPreferencesLocalState(context: Context) : LocalState {
         get() = preferences.getBoolean(KEY_SIGN_OUT_PENDING, false)
 
     @SuppressLint("ApplySharedPref")
+    override fun revokeHealthSetupAuthorization(): Boolean =
+        preferences.edit()
+            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .commit()
+
+    @SuppressLint("ApplySharedPref")
     override fun beginSignOut(): Boolean =
         // One durable boundary records the request and revokes health restoration.
         preferences.edit()

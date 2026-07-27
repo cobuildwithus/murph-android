@@ -42,6 +42,7 @@ interface LocalState {
     var lastKnownDataReceivedAt: InstantValue?
     val signOutPending: Boolean
 
+    fun revokeHealthSetupAuthorization(): Boolean
     fun beginSignOut(): Boolean
     fun completeSignOut(): Boolean
     fun clearMemberScopedState()

@@ -105,8 +105,46 @@ class AppSession(
             val memberKey = currentMemberKey ?: return false
             return when (health.availability()) {
                 HealthConnectAvailability.Available -> {
+                    val hadCompletedSetup = healthWasRequested()
+                    if (hadCompletedSetup) {
+                        if (!localState.revokeHealthSetupAuthorization()) {
+                            _state.update {
+                                it.copy(
+                                    healthMessage =
+                                        "Murph couldn't safely start reconnecting Health Connect. Try again.",
+                                )
+                            }
+                            return false
+                        }
+                    }
+                    if (hadCompletedSetup || health.isSignedIn()) {
+                        invalidateSessionEpoch()
+                        _state.update {
+                            it.copy(
+                                healthSync = HealthSyncState.NotConnected,
+                                healthMessage = null,
+                            )
+                        }
+                        try {
+                            health.signOutSdk()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            _state.update {
+                                it.copy(
+                                    healthMessage =
+                                        "Murph couldn't safely reset health sync. Keep the app open and sign out.",
+                                )
+                            }
+                            return false
+                        }
+                    }
                     val epoch = sessionEpoch
-                    pendingHealthConnection = PendingHealthConnection(epoch, memberKey)
+                    pendingHealthConnection = PendingHealthConnection(
+                        epoch = epoch,
+                        memberKey = memberKey,
+                        requestedAt = now(),
+                    )
                     _state.update { it.copy(isConnectingHealth = true, healthMessage = null) }
                     true
                 }
@@ -189,7 +227,8 @@ class AppSession(
                 health.configure()
                 health.connectAfterPermissionRequest()
                 if (epoch != sessionEpoch) return false
-                localState.healthAccessRequestedAt = InstantValue(now().toEpochMilli())
+                localState.healthAccessRequestedAt =
+                    InstantValue(pending.requestedAt.toEpochMilli())
                 pendingHealthConnection = null
                 _state.update { current ->
                     current.copy(
@@ -705,15 +744,19 @@ class AppSession(
             return null
         }
         if (epoch != sessionEpoch) return null
-        localState.lastKnownDataReceivedAt = status.lastDataReceivedAt?.let {
+        val requestedAt = healthRequestedAt()
+        val qualifyingReceipt = status.lastDataReceivedAt?.takeIf { receivedAt ->
+            requestedAt != null && !receivedAt.isBefore(requestedAt)
+        }
+        localState.lastKnownDataReceivedAt = qualifyingReceipt?.let {
             InstantValue(it.toEpochMilli())
         }
         _state.update { current ->
             current.copy(
                 authVerifiedOnline = true,
                 healthSync = HealthSyncState.derive(
-                    requestedAt = healthRequestedAt(),
-                    status = status,
+                    requestedAt = requestedAt,
+                    status = status.copy(lastDataReceivedAt = qualifyingReceipt),
                     now = now(),
                 ),
                 grantedResourceCount = health.grantedResourceCount(),
@@ -895,6 +938,7 @@ class AppSession(
     private data class PendingHealthConnection(
         val epoch: Int,
         val memberKey: String,
+        val requestedAt: Instant,
     )
 
     private companion object {

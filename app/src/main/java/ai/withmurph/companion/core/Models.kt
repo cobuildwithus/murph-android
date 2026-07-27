@@ -76,7 +76,11 @@ sealed interface HealthSyncState {
             attentionAfter: Duration = Duration.ofHours(72),
         ): HealthSyncState {
             if (requestedAt == null) return NotConnected
-            val receivedAt = status?.lastDataReceivedAt
+            // A receipt from an older setup is not evidence for this connection.
+            // Equality qualifies; Murph deliberately applies no clock-skew allowance.
+            val receivedAt = status?.lastDataReceivedAt?.takeUnless {
+                it.isBefore(requestedAt)
+            }
             if (receivedAt == null) {
                 val setupAge = Duration.between(requestedAt, now).coerceAtLeast(Duration.ZERO)
                 return if (setupAge >= attentionAfter) {
