@@ -232,11 +232,18 @@ class AppSession(
                     _state.update { it.copy(isConnectingHealth = false) }
                     return false
                 }
+                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                    return abortPendingHealthConnection(epoch)
+                }
                 identifyJunction(pending.memberKey, ConnectionIntent.Connect, epoch)
-                if (epoch != sessionEpoch) return false
+                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                    return abortPendingHealthConnection(epoch)
+                }
                 health.configure()
                 health.connectAfterPermissionRequest()
-                if (epoch != sessionEpoch) return false
+                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                    return abortPendingHealthConnection(epoch)
+                }
                 localState.healthAccessRequestedAt =
                     InstantValue(pending.requestedAt.toEpochMilli())
                 pendingHealthConnection = null
@@ -624,6 +631,14 @@ class AppSession(
                     }
                     reconcile(force = true)
                     false
+                } else if (!authState.verifiedOnline) {
+                    _state.update { current ->
+                        current.copy(
+                            authVerifiedOnline = false,
+                            healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
+                        )
+                    }
+                    false
                 } else if (
                     health.isSignedIn() &&
                     !healthWasRequested() &&
@@ -641,14 +656,6 @@ class AppSession(
                     if (stillOrphaned) reconcile(force = true)
                     false
                 } else if (pendingOwnsHealthIdentity) {
-                    false
-                } else if (!authState.verifiedOnline) {
-                    _state.update { current ->
-                        current.copy(
-                            authVerifiedOnline = false,
-                            healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
-                        )
-                    }
                     false
                 } else if (
                     !_state.value.authVerifiedOnline
@@ -1009,6 +1016,24 @@ class AppSession(
                 ),
             )
         }
+    }
+
+    private suspend fun abortPendingHealthConnection(epoch: Int): Boolean {
+        pendingHealthConnection = null
+        val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
+        if (epoch == sessionEpoch) {
+            _state.update { current ->
+                current.copy(
+                    isConnectingHealth = false,
+                    healthMessage = if (rollbackSucceeded) {
+                        current.healthMessage
+                    } else {
+                        "Murph couldn't safely reset health sync. Keep the app open and sign out."
+                    },
+                )
+            }
+        }
+        return false
     }
 
     private suspend fun rollbackIncompleteHealthSetup(epoch: Int): Boolean {
