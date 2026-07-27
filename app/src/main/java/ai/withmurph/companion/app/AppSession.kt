@@ -495,6 +495,9 @@ class AppSession(
                 healthMutex.withLock { syncAndRefresh(epoch) }
             if (needsHealthReconciliation) {
                 if (canRetryLostHealthSession) {
+                    _state.update { current ->
+                        current.copy(phase = AppPhase.Launching, healthMessage = null)
+                    }
                     reconcileSignedIn(authState, canRetryLostHealthSession = false)
                 } else {
                     _state.update { current ->

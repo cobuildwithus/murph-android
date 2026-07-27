@@ -634,6 +634,59 @@ class AppSessionTest {
     }
 
     @Test
+    fun boundedLiveSessionRetryCannotQueueAThirdResume() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.requireCurrentProcessSetupBeforeSync = true
+        val statusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = statusGate
+        val start = async { fixture.session.start() }
+        runCurrent()
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
+
+        val retryTokenGate = CompletableDeferred<Unit>()
+        fixture.api.signInGate = retryTokenGate
+        fixture.api.signInGateOnCall = 2
+        fixture.api.maximumSignInCalls = 2
+        fixture.health.loseLiveSession()
+        statusGate.complete(Unit)
+        fixture.api.signInGateEntered.await()
+
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+        fixture.session.syncNow()
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        assertEquals(2, fixture.api.intents.size)
+
+        retryTokenGate.complete(Unit)
+        start.await()
+
+        assertEquals(
+            listOf(
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "sync",
+                "status",
+            ),
+            fixture.events,
+        )
+        assertEquals(2, fixture.api.intents.size)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.health.signedIn)
+    }
+
+    @Test
     fun memberSwitchClosesTheOldSdkBoundaryBeforePublishingReady() = runTest {
         val fixture = fixture(memberKey = "did:privy:new-member")
         fixture.localState.memberKey = "did:privy:old-member"
@@ -1717,12 +1770,25 @@ class AppSessionTest {
         var statusError: Throwable? = null
         var statusGate: CompletableDeferred<Unit>? = null
         val statusEntered = CompletableDeferred<Unit>()
+        var signInGate: CompletableDeferred<Unit>? = null
+        var signInGateOnCall: Int? = null
+        var maximumSignInCalls: Int? = null
+        val signInGateEntered = CompletableDeferred<Unit>()
 
         override suspend fun createJunctionSignInToken(
             request: SignInTokenRequest,
         ): SignInTokenResponse {
             intents += request.connectionIntent
             events += "token-${request.connectionIntent.wireValue}"
+            maximumSignInCalls?.let { maximum ->
+                check(intents.size <= maximum) {
+                    "Unexpected extra Junction sign-in token request."
+                }
+            }
+            if (intents.size == signInGateOnCall) {
+                signInGateEntered.complete(Unit)
+                signInGate?.await()
+            }
             signInError?.let { throw it }
             return SignInTokenResponse("junction-token", "sandbox")
         }
