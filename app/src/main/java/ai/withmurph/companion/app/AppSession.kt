@@ -729,7 +729,12 @@ class AppSession(
                 } else if (
                     !_state.value.authVerifiedOnline
                 ) {
-                    if (_state.value.phase != AppPhase.Launching) {
+                    if (_state.value.phase == AppPhase.Launching) {
+                        startMutex.withLock {
+                            // Wait for the existing reconciliation owner without
+                            // scheduling another backend bootstrap.
+                        }
+                    } else {
                         reconcile(force = true)
                     }
                     false

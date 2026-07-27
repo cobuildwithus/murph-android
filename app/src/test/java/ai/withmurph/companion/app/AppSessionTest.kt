@@ -2181,11 +2181,14 @@ class AppSessionTest {
         assertEquals(newMemberKey, fixture.localState.memberKey)
 
         fixture.session.didEnterBackground()
-        fixture.session.didBecomeActive()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
 
+        assertFalse(foreground.isCompleted)
         assertEquals(statusCount + 2, fixture.api.statusSources.size)
         bootstrapGate.complete(Unit)
         assertFalse(preparation.await())
+        foreground.await()
 
         assertEquals(statusCount + 2, fixture.api.statusSources.size)
         assertEquals(tokenCount, fixture.api.intents.size)
@@ -2200,6 +2203,76 @@ class AppSessionTest {
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
+    fun foregroundPermissionRefreshWaitsForLaunchingReconciliationOwner() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.localState.lastKnownDataReceivedAt =
+            InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.actualGrantedCount = fixture.health.totalResourceCount
+        fixture.api.status = CompanionSyncStatus(now.minusSeconds(600), emptyMap())
+        fixture.session.start()
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        val resumeGate = CompletableDeferred<Unit>()
+        fixture.api.signInGate = resumeGate
+        fixture.api.signInGateOnCall = 1
+        fixture.api.maximumSignInCalls = 1
+        fixture.api.maximumStatusCalls = 2
+        val reconciliation = async { fixture.session.syncNow() }
+        fixture.api.signInGateEntered.await()
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+
+        fixture.health.actualGrantedCount = 0
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertFalse(foreground.isCompleted)
+        assertEquals(0, fixture.health.refreshCalls)
+
+        resumeGate.complete(Unit)
+        reconciliation.await()
+        foreground.await()
+
+        assertEquals(1, fixture.api.intents.size)
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(2, fixture.api.statusSources.size)
+        assertEquals(1, fixture.health.refreshCalls)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
+        assertEquals(
+            HEALTH_PERMISSION_RECOVERY_MESSAGE,
+            fixture.session.state.value.healthMessage,
+        )
+
+        val tokenCount = fixture.api.intents.size
+        val statusCount = fixture.api.statusSources.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+
+        fixture.session.syncNow()
+
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(statusCount, fixture.api.statusSources.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
     }
 
     @Test
@@ -2979,6 +3052,7 @@ class AppSessionTest {
         var refreshCalls = 0
         var signOutCalls = 0
         var grantedCount = 0
+        var actualGrantedCount: Int? = null
         var identifyGate: CompletableDeferred<Unit>? = null
         val identifyEntered = CompletableDeferred<Unit>()
         var signOutGate: CompletableDeferred<Unit>? = null
@@ -3031,6 +3105,7 @@ class AppSessionTest {
 
         override suspend fun refreshPermissionState() {
             refreshCalls += 1
+            actualGrantedCount?.let { grantedCount = it }
         }
 
         override suspend fun syncAllGrantedResources() {
