@@ -94,7 +94,8 @@ class AppSession(
         ) {
             reconcile(force = true)
         }
-        return healthMutex.withLock {
+        var authStateToReconcile: AuthSessionState? = null
+        val prepared = healthMutex.withLock {
             if (
                 _state.value.phase != AppPhase.Ready ||
                 _state.value.isConnectingHealth ||
@@ -106,10 +107,20 @@ class AppSession(
             return when (health.availability()) {
                 HealthConnectAvailability.Available -> {
                     val validatedEpoch = sessionEpoch
-                    if (
-                        fetchValidatedHealthStatus(validatedEpoch) == null ||
-                        !ownsHealthConnectionPreparation(memberKey, validatedEpoch)
-                    ) {
+                    val receiptBeforePreflight = localState.lastKnownDataReceivedAt
+                    if (fetchValidatedHealthStatus(validatedEpoch) == null) {
+                        return false
+                    }
+                    currentAuthOwnershipLoss(memberKey)?.let { authState ->
+                        localState.lastKnownDataReceivedAt = receiptBeforePreflight
+                        publishPermissionAwareHealthState(
+                            status = cachedHealthStatus(),
+                            message = _state.value.healthMessage,
+                        )
+                        authStateToReconcile = authState
+                        return@withLock false
+                    }
+                    if (!ownsHealthConnectionPreparation(memberKey, validatedEpoch)) {
                         return false
                     }
                     val hadCompletedSetup = healthWasRequested()
@@ -201,6 +212,8 @@ class AppSession(
                 }
             }
         }
+        authStateToReconcile?.let { reconcileAfterHealthLockAuthLoss(it) }
+        return prepared
     }
 
     suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean {
@@ -303,7 +316,7 @@ class AppSession(
                 false
             }
         }
-        authStateToReconcile?.let { reconcileAfterPendingAuthLoss(it) }
+        authStateToReconcile?.let { reconcileAfterHealthLockAuthLoss(it) }
         return completed
     }
 
@@ -1106,7 +1119,7 @@ class AppSession(
         }
     }
 
-    private suspend fun reconcileAfterPendingAuthLoss(observed: AuthSessionState) {
+    private suspend fun reconcileAfterHealthLockAuthLoss(observed: AuthSessionState) {
         val authoritativeChange =
             observed == AuthSessionState.SignedOut ||
                 (

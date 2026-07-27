@@ -2018,6 +2018,52 @@ class AppSessionTest {
     }
 
     @Test
+    fun delayedPreparationRejectsFreshSignedOutState() = runTest {
+        listOf(false, true).forEach { isRecovery ->
+            assertDelayedPreparationRejectsAuthLoss(
+                isRecovery = isRecovery,
+                authState = AuthSessionState.SignedOut,
+            )
+        }
+    }
+
+    @Test
+    fun delayedPreparationRejectsFreshMemberSwitch() = runTest {
+        listOf(false, true).forEach { isRecovery ->
+            assertDelayedPreparationRejectsAuthLoss(
+                isRecovery = isRecovery,
+                authState = AuthSessionState.SignedIn(
+                    "did:privy:new-member",
+                    verifiedOnline = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun delayedPreparationRejectsFreshSameMemberUnverifiedState() = runTest {
+        listOf(false, true).forEach { isRecovery ->
+            assertDelayedPreparationRejectsAuthLoss(
+                isRecovery = isRecovery,
+                authState = AuthSessionState.SignedIn(
+                    MEMBER_KEY,
+                    verifiedOnline = false,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun delayedPreparationRejectsFreshUnavailableAuth() = runTest {
+        listOf(false, true).forEach { isRecovery ->
+            assertDelayedPreparationRejectsAuthLoss(
+                isRecovery = isRecovery,
+                authState = AuthSessionState.TemporarilyUnavailable,
+            )
+        }
+    }
+
+    @Test
     fun unavailableAuthorityCannotRestoreCachedSyncedAfterCompleteRevocation() = runTest {
         listOf(true, false).forEach { authUnavailable ->
             val now = Instant.parse("2026-07-25T18:00:00Z")
@@ -2280,6 +2326,82 @@ class AppSessionTest {
         assertEquals(syncCalls, fixture.health.syncCalls)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+    }
+
+    private suspend fun assertDelayedPreparationRejectsAuthLoss(
+        isRecovery: Boolean,
+        authState: AuthSessionState,
+    ) = coroutineScope {
+        val fixture = if (isRecovery) {
+            completedHealthFixture().also {
+                it.localState.lastKnownDataReceivedAt = InstantValue(2)
+                it.health.grantedCount = 0
+                it.session.didEnterBackground()
+                it.session.didBecomeActive()
+            }
+        } else {
+            fixture().also { it.session.start() }
+        }
+        val requestedAt = fixture.localState.healthAccessRequestedAt
+        val receipt = fixture.localState.lastKnownDataReceivedAt
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+        val signOutCalls = fixture.health.signOutCalls
+        val statusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = statusGate
+        val preparation = async { fixture.session.prepareHealthConnection() }
+        fixture.api.statusGateEntered.await()
+        fixture.auth.state = authState
+
+        statusGate.complete(Unit)
+        assertFalse(preparation.await())
+
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        when (authState) {
+            AuthSessionState.SignedOut -> {
+                assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+                assertFalse(fixture.health.signedIn)
+                assertEquals(null, fixture.localState.memberKey)
+                assertEquals(null, fixture.localState.healthAccessRequestedAt)
+                assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+                assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+            }
+            AuthSessionState.TemporarilyUnavailable -> {
+                assertEquals(signOutCalls, fixture.health.signOutCalls)
+                assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+                assertEquals(receipt, fixture.localState.lastKnownDataReceivedAt)
+                assertFalse(fixture.session.state.value.authVerifiedOnline)
+                assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+            }
+            is AuthSessionState.SignedIn -> {
+                if (authState.memberKey == MEMBER_KEY) {
+                    assertEquals(signOutCalls, fixture.health.signOutCalls)
+                    assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+                    assertEquals(receipt, fixture.localState.lastKnownDataReceivedAt)
+                    assertFalse(fixture.session.state.value.authVerifiedOnline)
+                    assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+                } else {
+                    assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+                    assertFalse(fixture.health.signedIn)
+                    assertEquals(authState.memberKey, fixture.localState.memberKey)
+                    assertEquals(null, fixture.localState.healthAccessRequestedAt)
+                    assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+                    assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+                    assertEquals(
+                        HealthSyncState.NotConnected,
+                        fixture.session.state.value.healthSync,
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun assertForegroundReturnPreservesConnectIdentity(
