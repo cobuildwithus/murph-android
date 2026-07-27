@@ -611,6 +611,10 @@ class AppSession(
                     authState.memberKey != currentMemberKey ||
                     authState.memberKey != localState.memberKey
                 ) {
+                    invalidateSessionEpoch()
+                    _state.update {
+                        it.copy(phase = AppPhase.Launching, healthMessage = null)
+                    }
                     reconcile(force = true)
                     false
                 } else if (

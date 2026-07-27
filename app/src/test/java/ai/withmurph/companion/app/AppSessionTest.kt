@@ -882,6 +882,83 @@ class AppSessionTest {
     }
 
     @Test
+    fun foregroundMemberSwitchInvalidatesBlockedPreSyncStatus() = runTest {
+        val oldMemberKey = "did:privy:old-member"
+        val newMemberKey = "did:privy:new-member"
+        val fixture = fixture(memberKey = oldMemberKey)
+        fixture.localState.memberKey = oldMemberKey
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val statusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = statusGate
+        val start = async { fixture.session.start() }
+        fixture.api.statusEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(newMemberKey, verifiedOnline = true)
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+        assertEquals(0, fixture.health.syncCalls)
+
+        statusGate.complete(Unit)
+        start.await()
+        foreground.await()
+
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
+    fun foregroundMemberSwitchInvalidatesBlockedOldMemberIdentification() = runTest {
+        val oldMemberKey = "did:privy:old-member"
+        val newMemberKey = "did:privy:new-member"
+        val fixture = fixture(memberKey = oldMemberKey)
+        fixture.localState.memberKey = oldMemberKey
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val identifyGate = CompletableDeferred<Unit>()
+        fixture.health.identifyGate = identifyGate
+        val start = async { fixture.session.start() }
+        fixture.health.identifyEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(newMemberKey, verifiedOnline = true)
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+
+        identifyGate.complete(Unit)
+        start.await()
+        foreground.await()
+
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
     fun processScopedStartDoesNotRebootTheSessionForActivityRecreation() = runTest {
         val fixture = fixture()
 
