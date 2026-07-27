@@ -1,5 +1,6 @@
 package ai.withmurph.companion.ui.settings
 
+import ai.withmurph.companion.app.AppUiState
 import ai.withmurph.companion.ui.components.MurphIconKind
 import ai.withmurph.companion.ui.components.SettingsDivider
 import ai.withmurph.companion.ui.components.SettingsRow
@@ -26,6 +27,11 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun SettingsScreen(
+    state: AppUiState,
+    onShareAddressBook: () -> Unit,
+    onRefreshAddressBook: () -> Unit,
+    onStopAddressBook: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     onOpenHealthConnect: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
@@ -35,6 +41,7 @@ fun SettingsScreen(
     onDeleteAccount: () -> Unit,
     onSignOut: () -> Unit,
 ) {
+    val addressBook = addressBookSettingsModel(state)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -49,6 +56,57 @@ fun SettingsScreen(
             style = MaterialTheme.typography.headlineLarge,
             color = MurphColors.Slate,
         )
+
+        Section(
+            title = "Address book",
+            footer = "Friendly labels only — not identity proof. Murph sends no invitations or messages, does not store phone numbers in readable form, and may use a name in group replies that other participants can see. Contacts are read only when you choose Share, Update, or Retry — never in the background.",
+        ) {
+            SettingsRow(
+                title = "Familiar group names",
+                detail = addressBook.status,
+                icon = MurphIconKind.Checklist,
+                actionLabel = addressBook.primaryLabel,
+                enabled = addressBook.canUsePrimaryAction,
+                onClick = {
+                    when (addressBook.primaryAction) {
+                        AddressBookSettingsAction.Share,
+                        AddressBookSettingsAction.Update,
+                        AddressBookSettingsAction.Retry -> onShareAddressBook()
+                        AddressBookSettingsAction.Refresh -> onRefreshAddressBook()
+                        null -> Unit
+                    }
+                },
+            )
+            if (addressBook.showsStop) {
+                SettingsDivider()
+                SettingsRow(
+                    title = "Stop and delete",
+                    detail = "Delete the server projection.",
+                    icon = MurphIconKind.Trash,
+                    actionLabel = "Stop",
+                    enabled = addressBook.canStop,
+                    onClick = onStopAddressBook,
+                )
+            }
+            if (addressBook.showsOpenAppSettings) {
+                SettingsDivider()
+                SettingsRow(
+                    title = "Contacts permission",
+                    detail = "Access is off. Other Murph features are unaffected.",
+                    icon = MurphIconKind.Gear,
+                    actionLabel = "Open settings",
+                    onClick = onOpenAppSettings,
+                )
+            }
+        }
+
+        state.addressBookMessage?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MurphColors.SlateMuted,
+            )
+        }
 
         Section("Health Connect") {
             SettingsRow(
@@ -121,6 +179,7 @@ fun SettingsScreen(
 @Composable
 private fun Section(
     title: String,
+    footer: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -139,6 +198,14 @@ private fun Section(
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         ) {
             Column(content = content)
+        }
+        if (footer != null) {
+            Text(
+                text = footer,
+                modifier = Modifier.padding(horizontal = 2.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MurphColors.SlateMuted,
+            )
         }
     }
 }

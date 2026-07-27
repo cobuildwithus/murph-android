@@ -101,13 +101,21 @@ private fun ReadyApp(
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Home) }
     var showsHealthConsent by rememberSaveable { mutableStateOf(false) }
+    var showsAddressBookConsent by rememberSaveable { mutableStateOf(false) }
     var showsWhoopGuide by rememberSaveable { mutableStateOf(false) }
     var connectAfterConsent by remember { mutableStateOf(false) }
+    var shareAddressBookAfterConsent by remember { mutableStateOf(false) }
 
     LaunchedEffect(showsHealthConsent, connectAfterConsent) {
         if (!showsHealthConsent && connectAfterConsent) {
             connectAfterConsent = false
             actions.onConnectHealth()
+        }
+    }
+    LaunchedEffect(showsAddressBookConsent, shareAddressBookAfterConsent) {
+        if (!showsAddressBookConsent && shareAddressBookAfterConsent) {
+            shareAddressBookAfterConsent = false
+            actions.onShareAddressBook()
         }
     }
     LaunchedEffect(state.healthSync) {
@@ -138,6 +146,11 @@ private fun ReadyApp(
                     onSyncNow = actions.onSyncNow,
                 )
                 AppTab.Settings -> SettingsScreen(
+                    state = state,
+                    onShareAddressBook = { showsAddressBookConsent = true },
+                    onRefreshAddressBook = actions.onRefreshAddressBook,
+                    onStopAddressBook = actions.onStopAddressBook,
+                    onOpenAppSettings = actions.onOpenAppSettings,
                     onOpenHealthConnect = actions.onOpenHealthConnect,
                     onOpenPrivacy = actions.onOpenPrivacy,
                     onOpenTerms = actions.onOpenTerms,
@@ -163,6 +176,26 @@ private fun ReadyApp(
                 onContinue = {
                     connectAfterConsent = true
                     showsHealthConsent = false
+                },
+            )
+        }
+    }
+
+    if (showsAddressBookConsent) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showsAddressBookConsent = false
+                shareAddressBookAfterConsent = false
+            },
+            modifier = Modifier.padding(top = 48.dp).fillMaxHeight(),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MurphColors.Cream,
+            dragHandle = { MurphSheetHandle() },
+        ) {
+            AddressBookConsentContent(
+                onContinue = {
+                    shareAddressBookAfterConsent = true
+                    showsAddressBookConsent = false
                 },
             )
         }
@@ -340,6 +373,64 @@ private fun HealthConsentContent(onContinue: () -> Unit) {
 
         MurphPrimaryButton(
             text = "Continue to Health Connect",
+            onClick = onContinue,
+        )
+    }
+}
+
+@Composable
+private fun AddressBookConsentContent(onContinue: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            MurphIcon(
+                kind = MurphIconKind.Checklist,
+                modifier = Modifier.size(40.dp),
+                contentDescription = null,
+            )
+            Text(
+                text = "Share familiar names with Murph",
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = 28.sp,
+                    lineHeight = 33.sp,
+                ),
+                color = MurphColors.Slate,
+            )
+            Text(
+                text = "Optional friendly labels, not identity proof.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MurphColors.SlateMuted,
+            )
+        }
+
+        MurphCard {
+            ConsentRow(
+                icon = MurphIconKind.Checklist,
+                text = "Android asks for Contacts access only after you continue. Murph reads given and family names and checks phone values for this update only — never in the background. Only explicit international numbers can be included.",
+            )
+            ConsentRow(
+                icon = MurphIconKind.Shield,
+                text = "Murph sends no invitations or messages, and phone numbers are not stored in readable form.",
+            )
+            ConsentRow(
+                icon = MurphIconKind.Sparkles,
+                text = "A first name and optional last initial may appear in group replies that other participants can see.",
+            )
+            ConsentRow(
+                icon = MurphIconKind.Trash,
+                text = "Stop and delete removes the server projection.",
+            )
+        }
+
+        MurphPrimaryButton(
+            text = "Continue to Contacts",
             onClick = onContinue,
         )
     }
@@ -539,6 +630,10 @@ data class MurphActions(
     val onConnectHealth: () -> Unit,
     val onOpenHealthConnect: () -> Unit,
     val onSyncNow: () -> Unit,
+    val onShareAddressBook: () -> Unit,
+    val onRefreshAddressBook: () -> Unit,
+    val onStopAddressBook: () -> Unit,
+    val onOpenAppSettings: () -> Unit,
     val onOpenPrivacy: () -> Unit,
     val onOpenTerms: () -> Unit,
     val onOpenHealthNotice: () -> Unit,

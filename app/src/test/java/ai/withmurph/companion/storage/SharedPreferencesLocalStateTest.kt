@@ -1,9 +1,11 @@
 package ai.withmurph.companion.storage
 
 import android.content.SharedPreferences
+import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.InstantValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -68,6 +70,141 @@ class SharedPreferencesLocalStateTest {
         assertTrue(reconstructed.signOutPending)
         assertEquals(requestedAt, reconstructed.healthAccessRequestedAt)
         assertEquals(receivedAt, reconstructed.lastKnownDataReceivedAt)
+    }
+
+    @Test
+    fun persistsOnlyAddressBookRevisionAndReplayMetadata() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(4, MUTATION_ONE)
+
+        assertTrue(state.recordDisabledAddressBookRevision(4))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(4, reconstructed.addressBookRevision)
+        assertEquals(replacement, reconstructed.pendingAddressBookReplacement)
+        assertNull(reconstructed.pendingAddressBookDeletion)
+        assertTrue(
+            reconstructed.completeAddressBookReplacement(
+                mutationId = MUTATION_ONE,
+                revision = 5,
+            ),
+        )
+        assertEquals(5, reconstructed.addressBookRevision)
+        assertNull(reconstructed.pendingAddressBookReplacement)
+        assertNull(reconstructed.pendingAddressBookDeletion)
+
+        val persistedText = preferences.getAll().entries.joinToString()
+        assertFalse(persistedText.contains("+12125550123"))
+        assertFalse(persistedText.contains("Anna"))
+    }
+
+    @Test
+    fun pendingDeletionSurvivesReconstructionAndSupersedesReplacement() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(7, MUTATION_ONE)
+        val deletion = AddressBookMutation(7, MUTATION_TWO)
+        assertTrue(state.recordAddressBookRevision(7))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+
+        assertTrue(state.beginAddressBookDeletion(deletion))
+
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertNull(reconstructed.pendingAddressBookReplacement)
+        assertEquals(deletion, reconstructed.pendingAddressBookDeletion)
+        assertTrue(reconstructed.completeAddressBookDeletion(MUTATION_TWO, 8))
+        assertEquals(8, reconstructed.addressBookRevision)
+        assertNull(reconstructed.pendingAddressBookDeletion)
+    }
+
+    @Test
+    fun disabledStatusCanPreserveAnInterruptedReplayMarkerThenClearItAuthoritatively() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(4, MUTATION_ONE)
+        assertTrue(state.recordDisabledAddressBookRevision(4))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+
+        assertTrue(state.recordAddressBookRevision(5))
+        assertEquals(5, state.addressBookRevision)
+        assertEquals(replacement, state.pendingAddressBookReplacement)
+
+        assertTrue(state.recordDisabledAddressBookRevision(6))
+        assertEquals(6, state.addressBookRevision)
+        assertNull(state.pendingAddressBookReplacement)
+        assertNull(state.pendingAddressBookDeletion)
+    }
+
+    @Test
+    fun malformedOrPartialReplayMetadataFailsClosed() {
+        val preferences = FaultInjectedPreferences()
+        preferences.edit()
+            .putInt("address_book_revision", -1)
+            .putInt("address_book_replacement_base_revision", 2)
+            .putString("address_book_replacement_mutation_id", "not-a-uuid")
+            .putString("address_book_deletion_mutation_id", MUTATION_TWO)
+            .commit()
+
+        val state = SharedPreferencesLocalState(preferences)
+
+        assertNull(state.addressBookRevision)
+        assertNull(state.pendingAddressBookReplacement)
+        assertNull(state.pendingAddressBookDeletion)
+    }
+
+    @Test
+    fun mutationCompletionRequiresTheMatchingIdAndANewerRevision() {
+        val state = SharedPreferencesLocalState(FaultInjectedPreferences())
+        val replacement = AddressBookMutation(8, MUTATION_ONE)
+        assertTrue(state.beginAddressBookReplacement(replacement))
+
+        assertFalse(state.completeAddressBookReplacement(MUTATION_TWO, 9))
+        assertFalse(state.completeAddressBookReplacement(MUTATION_ONE, 8))
+        assertEquals(replacement, state.pendingAddressBookReplacement)
+        assertTrue(state.completeAddressBookReplacement(MUTATION_ONE, 10))
+        assertEquals(10, state.addressBookRevision)
+        assertNull(state.pendingAddressBookReplacement)
+    }
+
+    @Test
+    fun failedAddressBookCommitRestoresLiveAndPersistedMetadata() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(2, MUTATION_ONE)
+        assertTrue(state.recordAddressBookRevision(2))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+        preferences.failCommits = true
+
+        assertFalse(state.completeAddressBookReplacement(MUTATION_ONE, 3))
+
+        assertEquals(2, state.addressBookRevision)
+        assertEquals(replacement, state.pendingAddressBookReplacement)
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(2, reconstructed.addressBookRevision)
+        assertEquals(replacement, reconstructed.pendingAddressBookReplacement)
+    }
+
+    @Test
+    fun signOutBoundaryClearsAddressBookMetadataAndRestoresItOnCommitFailure() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val deletion = AddressBookMutation(11, MUTATION_TWO)
+        assertTrue(state.recordAddressBookRevision(11))
+        assertTrue(state.beginAddressBookDeletion(deletion))
+        preferences.failCommits = true
+
+        assertFalse(state.beginSignOut())
+        assertEquals(11, state.addressBookRevision)
+        assertEquals(deletion, state.pendingAddressBookDeletion)
+
+        preferences.failCommits = false
+        assertTrue(state.beginSignOut())
+        assertTrue(state.signOutPending)
+        assertNull(state.addressBookRevision)
+        assertNull(state.pendingAddressBookReplacement)
+        assertNull(state.pendingAddressBookDeletion)
     }
 
     private class FaultInjectedPreferences(
@@ -171,4 +308,10 @@ class SharedPreferencesLocalStateTest {
             }
         }
     }
+
+    private companion object {
+        const val MUTATION_ONE = "00000000-0000-4000-8000-000000000001"
+        const val MUTATION_TWO = "00000000-0000-4000-8000-000000000002"
+    }
+
 }

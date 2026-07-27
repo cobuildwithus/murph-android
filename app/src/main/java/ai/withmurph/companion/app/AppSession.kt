@@ -1,5 +1,13 @@
 package ai.withmurph.companion.app
 
+import ai.withmurph.companion.contacts.AddressBookProjector
+import ai.withmurph.companion.core.AddressBookContactSource
+import ai.withmurph.companion.core.AddressBookDeletionRequest
+import ai.withmurph.companion.core.AddressBookMutation
+import ai.withmurph.companion.core.AddressBookReplacementRequest
+import ai.withmurph.companion.core.AddressBookServerStatus
+import ai.withmurph.companion.core.AddressBookSharingState
+import ai.withmurph.companion.core.AddressBookWriteCapability
 import ai.withmurph.companion.core.AuthProvider
 import ai.withmurph.companion.core.AuthSessionState
 import ai.withmurph.companion.core.CompanionApi
@@ -12,7 +20,9 @@ import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.SignInTokenRequest
+import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,22 +32,29 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.util.UUID
 
 class AppSession(
     private val auth: AuthProvider,
     private val api: CompanionApi,
     private val health: HealthSyncing,
+    private val contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
     private val localState: LocalState,
     private val config: AppConfig,
     private val now: () -> Instant = Instant::now,
+    private val newMutationId: () -> String = { UUID.randomUUID().toString() },
 ) {
     private val startMutex = Mutex()
     private val healthMutex = Mutex()
+    private val addressBookMutex = Mutex()
     private var hasCompletedStartup = false
     private var needsForegroundRefresh = false
     private var sessionEpoch = 0
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
+    private var pendingAddressBookPermissionFlow: PendingAddressBookPermissionFlow? = null
+    private val pendingAddressBookReconcileLock = Any()
+    private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
 
     private val _state = MutableStateFlow(
         AppUiState(totalResourceCount = health.totalResourceCount),
@@ -54,6 +71,439 @@ class AppSession(
 
     suspend fun retry() {
         reconcile(force = true)
+    }
+
+    suspend fun refreshAddressBookSharing() {
+        reconcileAddressBookForeground(showBusy = true)
+    }
+
+    suspend fun prepareAddressBookSharing(): Boolean {
+        if (!contacts.isSupported) return false
+        addressBookMutex.lock()
+        var prepared = false
+        var ownerMemberKey: String? = null
+        var ownerEpoch: Int? = null
+        try {
+            if (pendingAddressBookPermissionFlow != null) return false
+            val memberKey = currentMemberKey ?: return false
+            val epoch = sessionEpoch
+            ownerMemberKey = memberKey
+            ownerEpoch = epoch
+            if (!ownsAddressBookWork(memberKey, epoch)) return false
+            _state.update {
+                it.copy(
+                    isAddressBookBusy = true,
+                    contactsPermissionDenied =
+                        it.contactsPermissionDenied && !contacts.hasPermission(),
+                    addressBookMessage = null,
+                )
+            }
+
+            val status = fetchAddressBookStatusLocked(memberKey, epoch) ?: return false
+            if (!ownsAddressBookWork(memberKey, epoch)) return false
+            if (status.writeCapability != AddressBookWriteCapability.Enabled) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Address-book sharing isn't available for this account right now.",
+                )
+                return false
+            }
+
+            val interrupted = localState.pendingAddressBookReplacement
+            if (
+                interrupted == null &&
+                status.enabled &&
+                localState.addressBookRevision != status.revision
+            ) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "This address-book projection was changed by another installation. Stop and delete it before sharing a new list.",
+                )
+                return false
+            }
+            if (
+                interrupted == null &&
+                !status.enabled &&
+                localState.addressBookRevision != status.revision
+            ) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Murph couldn't safely remember the current sharing revision. Try again.",
+                )
+                return false
+            }
+
+            val mutation = interrupted ?: createAddressBookMutation(status.revision)
+            pendingAddressBookPermissionFlow = PendingAddressBookPermissionFlow(
+                epoch = epoch,
+                memberKey = memberKey,
+                mutation = mutation,
+                preflightStatus = status,
+                ownedRevisionForPermissionLoss = status.revision.takeIf {
+                    status.enabled && localState.addressBookRevision == status.revision
+                },
+            )
+            prepared = true
+            return true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            val memberKey = ownerMemberKey
+            val epoch = ownerEpoch
+            if (memberKey != null && epoch != null) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Murph couldn't prepare address-book sharing. Try again.",
+                )
+            }
+            return false
+        } finally {
+            addressBookMutex.unlock()
+            if (
+                !prepared &&
+                ownerEpoch == sessionEpoch &&
+                ownerMemberKey == currentMemberKey
+            ) {
+                _state.update { it.copy(isAddressBookBusy = false) }
+            }
+            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+        }
+    }
+
+    suspend fun completeAddressBookPermissionFlow(permissionGranted: Boolean): Boolean {
+        val pending = pendingAddressBookPermissionFlow ?: return false
+        return try {
+            addressBookMutex.withLock {
+                try {
+                    if (pendingAddressBookPermissionFlow != pending) {
+                        return@withLock false
+                    }
+                    if (!ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                        return@withLock false
+                    }
+                    if (!permissionGranted || !contacts.hasPermission()) {
+                        publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
+                        deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                        return@withLock false
+                    }
+
+                    val existingMutation = localState.pendingAddressBookReplacement
+                    val mutation = when {
+                        existingMutation == null -> {
+                            if (!localState.beginAddressBookReplacement(pending.mutation)) {
+                                publishAddressBookMessage(
+                                    pending.memberKey,
+                                    pending.epoch,
+                                    "Murph couldn't safely save the retry marker. Try again.",
+                                )
+                                return@withLock false
+                            }
+                            pending.mutation
+                        }
+                        existingMutation == pending.mutation -> existingMutation
+                        else -> {
+                            publishAddressBookMessage(
+                                pending.memberKey,
+                                pending.epoch,
+                                "Another address-book change is already pending. Try again.",
+                            )
+                            return@withLock false
+                        }
+                    }
+
+                    val contactRows = try {
+                        contacts.readPersonContacts()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        if (!contacts.hasPermission()) {
+                            publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
+                            deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                        } else {
+                            publishAddressBookMessage(
+                                pending.memberKey,
+                                pending.epoch,
+                                "Murph couldn't read contacts for this update. Try again.",
+                            )
+                        }
+                        return@withLock false
+                    }
+                    if (
+                        !ownsAddressBookWork(pending.memberKey, pending.epoch) ||
+                        !contacts.hasPermission()
+                    ) {
+                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                            publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
+                            deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                        }
+                        return@withLock false
+                    }
+
+                    val projections = withContext(Dispatchers.Default) {
+                        AddressBookProjector.project(contactRows)
+                    }
+                    if (
+                        !ownsAddressBookWork(pending.memberKey, pending.epoch) ||
+                        !contacts.hasPermission()
+                    ) {
+                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                            publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
+                            deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                        }
+                        return@withLock false
+                    }
+                    val status = try {
+                        api.replaceAddressBook(
+                            memberKey = pending.memberKey,
+                            request = AddressBookReplacementRequest(mutation, projections),
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: CompanionApiException.Conflict) {
+                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                            localState.abandonAddressBookReplacement(mutation.mutationId)
+                            fetchAddressBookStatusLocked(pending.memberKey, pending.epoch)
+                            publishAddressBookMessage(
+                                pending.memberKey,
+                                pending.epoch,
+                                "Sharing changed elsewhere, so Murph didn't overwrite it. Review the current status and try again.",
+                            )
+                        }
+                        return@withLock false
+                    } catch (_: CompanionApiException.ConsentRequired) {
+                        publishAddressBookMessage(
+                            pending.memberKey,
+                            pending.epoch,
+                            CONTACT_CONSENT_REQUIRED_MESSAGE,
+                        )
+                        return@withLock false
+                    } catch (_: CompanionApiException.Unauthorized) {
+                        publishAddressBookMessage(
+                            pending.memberKey,
+                            pending.epoch,
+                            "Your session needs a refresh before sharing contacts. Try again.",
+                        )
+                        return@withLock false
+                    } catch (_: Exception) {
+                        publishAddressBookMessage(
+                            pending.memberKey,
+                            pending.epoch,
+                            "Murph couldn't finish the address-book update. Tap Retry to use the saved mutation safely.",
+                        )
+                        return@withLock false
+                    }
+
+                    if (!ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                        return@withLock false
+                    }
+                    if (replacementResultPredatesPreflight(pending.preflightStatus, status)) {
+                        val cleared = localState.abandonAddressBookReplacement(
+                            mutation.mutationId,
+                        )
+                        fetchAddressBookStatusLocked(pending.memberKey, pending.epoch)
+                        publishAddressBookMessage(
+                            pending.memberKey,
+                            pending.epoch,
+                            if (cleared) {
+                                "The saved mutation replayed an older server revision, so Murph kept the newer server state."
+                            } else {
+                                "The saved mutation replayed an older server revision. Murph kept the newer server state but couldn't clear the retry marker."
+                            },
+                        )
+                        return@withLock false
+                    }
+                    if (!contacts.hasPermission()) {
+                        publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
+                        deleteOwnedAddressBookAfterPermissionLossLocked(
+                            pending = pending,
+                            exactRevision = status.revision,
+                        )
+                        return@withLock false
+                    }
+                    if (!localState.completeAddressBookReplacement(mutation.mutationId, status.revision)) {
+                        publishAddressBookStatus(
+                            pending.memberKey,
+                            pending.epoch,
+                            status,
+                            "The server saved this update, but Murph couldn't confirm it locally. Tap Retry.",
+                        )
+                        return@withLock false
+                    }
+                    publishAddressBookStatus(pending.memberKey, pending.epoch, status, null)
+                    true
+                } finally {
+                    if (pendingAddressBookPermissionFlow == pending) {
+                        pendingAddressBookPermissionFlow = null
+                    }
+                    if (
+                        pending.epoch == sessionEpoch &&
+                        pending.memberKey == currentMemberKey
+                    ) {
+                        _state.update { it.copy(isAddressBookBusy = false) }
+                    }
+                }
+            }
+        } finally {
+            drainAddressBookReconcile(pending.memberKey, pending.epoch)
+        }
+    }
+
+    fun cancelAddressBookPermissionFlow() {
+        val pending = pendingAddressBookPermissionFlow ?: return
+        pendingAddressBookPermissionFlow = null
+        if (
+            pending.epoch == sessionEpoch &&
+            pending.memberKey == currentMemberKey
+        ) {
+            _state.update { it.copy(isAddressBookBusy = false) }
+        }
+    }
+
+    suspend fun stopAddressBookSharing() {
+        if (!contacts.isSupported) return
+        addressBookMutex.lock()
+        var ownerMemberKey: String? = null
+        var ownerEpoch: Int? = null
+        var markedBusy = false
+        try {
+            if (pendingAddressBookPermissionFlow != null) return
+            val memberKey = currentMemberKey ?: return
+            val epoch = sessionEpoch
+            ownerMemberKey = memberKey
+            ownerEpoch = epoch
+            if (!ownsAddressBookWork(memberKey, epoch)) return
+            markedBusy = true
+            _state.update {
+                it.copy(
+                    isAddressBookBusy = true,
+                    contactsPermissionDenied =
+                        it.contactsPermissionDenied && !contacts.hasPermission(),
+                    addressBookMessage = null,
+                )
+            }
+
+            var status = fetchAddressBookStatusLocked(memberKey, epoch) ?: return
+            if (!ownsAddressBookWork(memberKey, epoch)) return
+            if (!status.enabled) {
+                if (localState.pendingAddressBookReplacement != null) {
+                    val cleared = localState.recordDisabledAddressBookRevision(status.revision)
+                    publishAddressBookStatus(
+                        memberKey,
+                        epoch,
+                        status,
+                        if (cleared) {
+                            null
+                        } else {
+                            "Sharing is already stopped, but Murph couldn't clear the saved retry marker. Try again."
+                        },
+                    )
+                }
+                return
+            }
+
+            val matchingPending = localState.pendingAddressBookDeletion
+                ?.takeIf { it.baseRevision == status.revision }
+            var mutation = if (matchingPending != null) {
+                matchingPending
+            } else {
+                localState.pendingAddressBookDeletion?.let { stale ->
+                    if (!localState.abandonAddressBookDeletion(stale.mutationId)) {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't safely refresh the pending deletion. Try again.",
+                        )
+                        return
+                    }
+                }
+                createAddressBookMutation(status.revision).also { created ->
+                    if (!localState.beginAddressBookDeletion(created)) {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't safely save the deletion retry marker. Try again.",
+                        )
+                        return
+                    }
+                }
+            }
+
+            for (attempt in 0..1) {
+                try {
+                    val deleted = api.deleteAddressBook(
+                        memberKey = memberKey,
+                        request = AddressBookDeletionRequest(mutation),
+                    )
+                    if (!ownsAddressBookWork(memberKey, epoch)) return
+                    if (!localState.completeAddressBookDeletion(mutation.mutationId, deleted.revision)) {
+                        publishAddressBookStatus(
+                            memberKey,
+                            epoch,
+                            deleted,
+                            "The server deleted the projection, but Murph couldn't confirm it locally. Try again.",
+                        )
+                        return
+                    }
+                    publishAddressBookStatus(memberKey, epoch, deleted, null)
+                    return
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: CompanionApiException.Conflict) {
+                    if (!ownsAddressBookWork(memberKey, epoch)) return
+                    localState.abandonAddressBookDeletion(mutation.mutationId)
+                    status = fetchAddressBookStatusLocked(memberKey, epoch) ?: return
+                    if (!status.enabled) return
+                    if (attempt == 1) {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Sharing changed again before deletion. Review the status and tap Stop again.",
+                        )
+                        return
+                    }
+                    mutation = createAddressBookMutation(status.revision)
+                    if (!localState.beginAddressBookDeletion(mutation)) {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't safely save the deletion retry marker. Try again.",
+                        )
+                        return
+                    }
+                } catch (_: CompanionApiException.ConsentRequired) {
+                    publishAddressBookMessage(memberKey, epoch, CONTACT_CONSENT_REQUIRED_MESSAGE)
+                    return
+                } catch (_: CompanionApiException.Unauthorized) {
+                    publishAddressBookMessage(
+                        memberKey,
+                        epoch,
+                        "Your session needs a refresh before deleting shared names. Try again.",
+                    )
+                    return
+                } catch (_: Exception) {
+                    publishAddressBookMessage(
+                        memberKey,
+                        epoch,
+                        "Murph couldn't delete the shared names yet. It will keep the exact deletion retry marker.",
+                    )
+                    return
+                }
+            }
+        } finally {
+            addressBookMutex.unlock()
+            if (
+                markedBusy &&
+                ownerEpoch == sessionEpoch &&
+                ownerMemberKey == currentMemberKey
+            ) {
+                _state.update { it.copy(isAddressBookBusy = false) }
+            }
+            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+        }
     }
 
     private suspend fun reconcile(force: Boolean) = startMutex.withLock {
@@ -376,6 +826,13 @@ class AppSession(
         }
         needsForegroundRefresh = false
         val authAllowsSync = reconcileForegroundAuth()
+        if (
+            (authAllowsSync || ownsPendingHealthConnection()) &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.authVerifiedOnline
+        ) {
+            reconcileAddressBookForeground(showBusy = false)
+        }
         if (ownsPendingHealthConnection()) {
             return
         }
@@ -575,7 +1032,27 @@ class AppSession(
                     authState.verifiedOnline -> null
                     else -> "You're offline. Murph will verify the session and resume sync when the connection returns."
                 },
+                addressBookSharing = if (contacts.isSupported && authState.verifiedOnline) {
+                    AddressBookSharingState.Loading
+                } else {
+                    AddressBookSharingState.Unavailable
+                },
+                isAddressBookBusy = false,
+                addressBookHasInterruptedReplacement =
+                    localState.pendingAddressBookReplacement != null,
+                contactsPermissionDenied = false,
+                addressBookMessage = if (contacts.isSupported && !authState.verifiedOnline) {
+                    "You're offline. Murph can't verify address-book sharing right now."
+                } else {
+                    null
+                },
             )
+        }
+        if (
+            authState.verifiedOnline &&
+            ownsAddressBookWork(authState.memberKey, epoch)
+        ) {
+            reconcileAddressBookForeground(showBusy = false)
         }
         if (
             healthWasRequested() &&
@@ -608,6 +1085,7 @@ class AppSession(
                         )
                     }
                 }
+                return
             }
         }
     }
@@ -657,6 +1135,16 @@ class AppSession(
                 } else {
                     "You're offline. Saved sync status is shown until Murph reconnects."
                 },
+                addressBookSharing = AddressBookSharingState.Unavailable,
+                isAddressBookBusy = false,
+                addressBookHasInterruptedReplacement =
+                    localState.pendingAddressBookReplacement != null,
+                contactsPermissionDenied = false,
+                addressBookMessage = if (contacts.isSupported) {
+                    "You're offline. Murph can't verify address-book sharing right now."
+                } else {
+                    null
+                },
             )
         }
     }
@@ -683,6 +1171,13 @@ class AppSession(
                     current.copy(
                         authVerifiedOnline = false,
                         healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
+                        addressBookSharing = AddressBookSharingState.Unavailable,
+                        isAddressBookBusy = false,
+                        addressBookMessage = if (contacts.isSupported) {
+                            "You're offline. Murph can't verify address-book sharing right now."
+                        } else {
+                            null
+                        },
                     )
                 }
                 false
@@ -705,6 +1200,13 @@ class AppSession(
                         current.copy(
                             authVerifiedOnline = false,
                             healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
+                            addressBookSharing = AddressBookSharingState.Unavailable,
+                            isAddressBookBusy = false,
+                            addressBookMessage = if (contacts.isSupported) {
+                                "You're offline. Murph can't verify address-book sharing right now."
+                            } else {
+                                null
+                            },
                         )
                     }
                     false
@@ -1211,6 +1713,382 @@ class AppSession(
         }
     }
 
+    private suspend fun reconcileAddressBookForeground(showBusy: Boolean) {
+        if (!contacts.isSupported) return
+        if (!addressBookMutex.tryLock()) {
+            enqueueAddressBookReconcile(showBusy)
+            return
+        }
+        var ownerMemberKey: String? = null
+        var ownerEpoch: Int? = null
+        try {
+            if (pendingAddressBookPermissionFlow != null) return
+            val memberKey = currentMemberKey ?: return
+            val epoch = sessionEpoch
+            ownerMemberKey = memberKey
+            ownerEpoch = epoch
+            if (!ownsAddressBookWork(memberKey, epoch)) return
+            if (showBusy) {
+                _state.update { it.copy(isAddressBookBusy = true, addressBookMessage = null) }
+            }
+
+            val status = fetchAddressBookStatusLocked(memberKey, epoch) ?: return
+            if (!ownsAddressBookWork(memberKey, epoch) || !status.enabled) return
+
+            localState.pendingAddressBookDeletion?.let { pendingDeletion ->
+                if (pendingDeletion.baseRevision != status.revision) {
+                    localState.abandonAddressBookDeletion(pendingDeletion.mutationId)
+                    publishAddressBookMessage(
+                        memberKey,
+                        epoch,
+                        "The shared projection changed before Murph could finish deleting it. Use Stop to delete the latest revision.",
+                    )
+                    return
+                }
+                if (!contacts.hasPermission()) {
+                    _state.update { it.copy(contactsPermissionDenied = true) }
+                }
+                performAutomaticAddressBookDeletionLocked(
+                    memberKey = memberKey,
+                    epoch = epoch,
+                    mutation = pendingDeletion,
+                )
+                return
+            }
+
+            if (contacts.hasPermission()) return
+            if (localState.addressBookRevision != status.revision) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "This projection was changed by another installation. Murph won't delete that newer revision automatically; use Stop to delete it.",
+                )
+                return
+            }
+
+            _state.update { it.copy(contactsPermissionDenied = true) }
+
+            val deletion = try {
+                createAddressBookMutation(status.revision)
+            } catch (_: Exception) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Murph couldn't prepare automatic deletion. Use Stop to delete the shared names.",
+                )
+                return
+            }
+            if (!localState.beginAddressBookDeletion(deletion)) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Contacts access is off, but Murph couldn't safely save the deletion retry marker. Use Stop to try again.",
+                )
+                return
+            }
+            performAutomaticAddressBookDeletionLocked(memberKey, epoch, deletion)
+        } finally {
+            addressBookMutex.unlock()
+            if (
+                showBusy &&
+                ownerEpoch == sessionEpoch &&
+                ownerMemberKey == currentMemberKey
+            ) {
+                _state.update { it.copy(isAddressBookBusy = false) }
+            }
+            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+        }
+    }
+
+    private suspend fun performAutomaticAddressBookDeletionLocked(
+        memberKey: String,
+        epoch: Int,
+        mutation: AddressBookMutation,
+    ) {
+        try {
+            val deleted = api.deleteAddressBook(
+                memberKey = memberKey,
+                request = AddressBookDeletionRequest(mutation),
+            )
+            if (!ownsAddressBookWork(memberKey, epoch)) return
+            if (!localState.completeAddressBookDeletion(mutation.mutationId, deleted.revision)) {
+                publishAddressBookStatus(
+                    memberKey,
+                    epoch,
+                    deleted,
+                    "Murph deleted the shared names, but couldn't confirm that locally. Use Stop to verify.",
+                )
+                return
+            }
+            publishAddressBookStatus(
+                memberKey,
+                epoch,
+                deleted,
+                "Contacts access is off, so Murph deleted this installation's shared names.",
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: CompanionApiException.Conflict) {
+            if (!ownsAddressBookWork(memberKey, epoch)) return
+            localState.abandonAddressBookDeletion(mutation.mutationId)
+            fetchAddressBookStatusLocked(memberKey, epoch)
+            publishAddressBookMessage(
+                memberKey,
+                epoch,
+                "The projection changed before automatic deletion. Murph left the newer revision alone; use Stop to delete it.",
+            )
+        } catch (_: CompanionApiException.ConsentRequired) {
+            publishAddressBookMessage(memberKey, epoch, CONTACT_CONSENT_REQUIRED_MESSAGE)
+        } catch (_: CompanionApiException.Unauthorized) {
+            publishAddressBookMessage(
+                memberKey,
+                epoch,
+                "Contacts access is off. Murph will retry exact deletion after your session is refreshed.",
+            )
+        } catch (_: Exception) {
+            publishAddressBookMessage(
+                memberKey,
+                epoch,
+                "Contacts access is off. Murph will retry deleting the exact shared revision on the next foreground check.",
+            )
+        }
+    }
+
+    /** Called only while [addressBookMutex] is held. */
+    private suspend fun deleteOwnedAddressBookAfterPermissionLossLocked(
+        pending: PendingAddressBookPermissionFlow,
+        exactRevision: Int? = pending.ownedRevisionForPermissionLoss,
+    ) {
+        if (
+            exactRevision == null ||
+            !ownsAddressBookWork(pending.memberKey, pending.epoch)
+        ) {
+            return
+        }
+        val deletion = try {
+            createAddressBookMutation(exactRevision)
+        } catch (_: Exception) {
+            publishAddressBookMessage(
+                pending.memberKey,
+                pending.epoch,
+                "Contacts access is off, but Murph couldn't prepare exact deletion. Use Stop to delete the shared names.",
+            )
+            return
+        }
+        if (!localState.beginAddressBookDeletion(deletion)) {
+            publishAddressBookMessage(
+                pending.memberKey,
+                pending.epoch,
+                "Contacts access is off, but Murph couldn't safely save the deletion retry marker. Use Stop to delete the shared names.",
+            )
+            return
+        }
+        performAutomaticAddressBookDeletionLocked(
+            memberKey = pending.memberKey,
+            epoch = pending.epoch,
+            mutation = deletion,
+        )
+    }
+
+    /** Called only while [addressBookMutex] is held. */
+    private suspend fun fetchAddressBookStatusLocked(
+        memberKey: String,
+        epoch: Int,
+    ): AddressBookServerStatus? {
+        if (!ownsAddressBookWork(memberKey, epoch)) return null
+        val status = try {
+            api.fetchAddressBookStatus(memberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: CompanionApiException.ConsentRequired) {
+            publishAddressBookUnavailable(memberKey, epoch, CONTACT_CONSENT_REQUIRED_MESSAGE)
+            return null
+        } catch (_: CompanionApiException.Unauthorized) {
+            publishAddressBookUnavailable(
+                memberKey,
+                epoch,
+                "Your session needs a refresh before Murph can check address-book sharing.",
+            )
+            return null
+        } catch (_: CompanionApiException.NoAccount) {
+            publishAddressBookUnavailable(
+                memberKey,
+                epoch,
+                "Address-book sharing isn't available for this Murph account.",
+            )
+            return null
+        } catch (_: Exception) {
+            publishAddressBookUnavailable(
+                memberKey,
+                epoch,
+                "Murph couldn't refresh address-book sharing. Try again.",
+            )
+            return null
+        }
+        if (!ownsAddressBookWork(memberKey, epoch)) return null
+
+        val minimumKnownRevision = listOfNotNull(
+            localState.addressBookRevision,
+            localState.pendingAddressBookReplacement?.baseRevision,
+            localState.pendingAddressBookDeletion?.baseRevision,
+        ).maxOrNull()
+        if (minimumKnownRevision != null && status.revision < minimumKnownRevision) {
+            publishAddressBookUnavailable(
+                memberKey,
+                epoch,
+                "Murph received an invalid older address-book revision and left local ownership unchanged. Try again.",
+            )
+            return null
+        }
+
+        var message: String? = null
+        if (!status.enabled) {
+            val persisted = if (localState.pendingAddressBookReplacement != null) {
+                localState.recordAddressBookRevision(status.revision)
+            } else {
+                localState.recordDisabledAddressBookRevision(status.revision)
+            }
+            if (!persisted) {
+                message = "Murph couldn't safely remember the current sharing revision. Try again."
+            }
+        }
+        publishAddressBookStatus(memberKey, epoch, status, message)
+        return status
+    }
+
+    private fun publishAddressBookStatus(
+        memberKey: String,
+        epoch: Int,
+        status: AddressBookServerStatus,
+        message: String?,
+    ) {
+        if (!ownsAddressBookWork(memberKey, epoch)) return
+        _state.update { current ->
+            current.copy(
+                addressBookSharing = AddressBookSharingState.Server(
+                    enabled = status.enabled,
+                    storedContactCount = status.storedContactCount,
+                    canWrite = status.writeCapability == AddressBookWriteCapability.Enabled,
+                    ownedByInstallation = localState.addressBookRevision == status.revision,
+                ),
+                addressBookHasInterruptedReplacement =
+                    localState.pendingAddressBookReplacement != null,
+                contactsPermissionDenied =
+                    current.contactsPermissionDenied && !contacts.hasPermission(),
+                addressBookMessage = message,
+            )
+        }
+    }
+
+    private fun publishAddressBookUnavailable(
+        memberKey: String,
+        epoch: Int,
+        message: String,
+    ) {
+        if (!ownsAddressBookWork(memberKey, epoch)) return
+        _state.update { current ->
+            current.copy(
+                addressBookSharing = AddressBookSharingState.Unavailable,
+                addressBookHasInterruptedReplacement =
+                    localState.pendingAddressBookReplacement != null,
+                addressBookMessage = message,
+            )
+        }
+    }
+
+    private fun publishAddressBookPermissionDenied(memberKey: String, epoch: Int) {
+        if (!ownsAddressBookWork(memberKey, epoch)) return
+        _state.update { current ->
+            current.copy(
+                contactsPermissionDenied = true,
+                addressBookHasInterruptedReplacement =
+                    localState.pendingAddressBookReplacement != null,
+                addressBookMessage =
+                    "Contacts access is off. Open app settings to allow it, then try again. Other Murph features still work.",
+            )
+        }
+    }
+
+    private fun publishAddressBookMessage(
+        memberKey: String,
+        epoch: Int,
+        message: String,
+    ) {
+        if (!ownsAddressBookWork(memberKey, epoch)) return
+        _state.update { current ->
+            current.copy(
+                addressBookHasInterruptedReplacement =
+                    localState.pendingAddressBookReplacement != null,
+                addressBookMessage = message,
+            )
+        }
+    }
+
+    private fun enqueueAddressBookReconcile(showBusy: Boolean) {
+        val requested = PendingAddressBookReconcile(
+            memberKey = currentMemberKey,
+            epoch = sessionEpoch,
+            showBusy = showBusy,
+        )
+        synchronized(pendingAddressBookReconcileLock) {
+            val existing = pendingAddressBookReconcile
+            pendingAddressBookReconcile = if (
+                existing != null &&
+                existing.memberKey == requested.memberKey &&
+                existing.epoch == requested.epoch
+            ) {
+                existing.copy(showBusy = existing.showBusy || requested.showBusy)
+            } else {
+                requested
+            }
+        }
+    }
+
+    private suspend fun drainAddressBookReconcile(
+        completedMemberKey: String?,
+        completedEpoch: Int?,
+    ) {
+        val requested = synchronized(pendingAddressBookReconcileLock) {
+            pendingAddressBookReconcile.also { pendingAddressBookReconcile = null }
+        } ?: return
+        if (
+            requested.memberKey == completedMemberKey &&
+            requested.epoch == completedEpoch
+        ) {
+            return
+        }
+        if (
+            requested.memberKey != currentMemberKey ||
+            requested.epoch != sessionEpoch
+        ) {
+            return
+        }
+        reconcileAddressBookForeground(requested.showBusy)
+    }
+
+    private fun ownsAddressBookWork(memberKey: String, epoch: Int): Boolean =
+        contacts.isSupported &&
+            epoch == sessionEpoch &&
+            memberKey == currentMemberKey &&
+            memberKey == localState.memberKey &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.authVerifiedOnline &&
+            !localState.signOutPending
+
+    private fun createAddressBookMutation(baseRevision: Int): AddressBookMutation =
+        AddressBookMutation(baseRevision, newMutationId())
+
+    private fun replacementResultPredatesPreflight(
+        preflight: AddressBookServerStatus,
+        result: AddressBookServerStatus,
+    ): Boolean = when {
+        result.revision < preflight.revision -> true
+        result.revision > preflight.revision -> false
+        !preflight.enabled -> true
+        result.storedContactCount != preflight.storedContactCount -> true
+        else -> false
+    }
+
     private fun deriveCachedHealthState(): HealthSyncState {
         return HealthSyncState.derive(
             requestedAt = healthRequestedAt(),
@@ -1253,7 +2131,16 @@ class AppSession(
     private fun invalidateSessionEpoch() {
         sessionEpoch += 1
         pendingHealthConnection = null
-        _state.update { it.copy(isConnectingHealth = false) }
+        pendingAddressBookPermissionFlow = null
+        synchronized(pendingAddressBookReconcileLock) {
+            pendingAddressBookReconcile = null
+        }
+        _state.update {
+            it.copy(
+                isConnectingHealth = false,
+                isAddressBookBusy = false,
+            )
+        }
     }
 
     private fun connectionErrorMessage(error: Exception): String = when (error) {
@@ -1271,11 +2158,27 @@ class AppSession(
         val requestedAt: Instant,
     )
 
+    private data class PendingAddressBookPermissionFlow(
+        val epoch: Int,
+        val memberKey: String,
+        val mutation: AddressBookMutation,
+        val preflightStatus: AddressBookServerStatus,
+        val ownedRevisionForPermissionLoss: Int?,
+    )
+
+    private data class PendingAddressBookReconcile(
+        val memberKey: String?,
+        val epoch: Int,
+        val showBusy: Boolean,
+    )
+
     private companion object {
         const val HEALTH_CONNECT_SOURCE = "health_connect"
         const val CONSENT_REQUIRED_MESSAGE =
             "Murph needs your latest health consent. Complete it at withmurph.ai, then try again."
         const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
             "Health Connect access is off. Reconnect and choose at least one category."
+        const val CONTACT_CONSENT_REQUIRED_MESSAGE =
+            "Murph needs your latest launch consent before changing shared names. Complete it at withmurph.ai, then tap Retry."
     }
 }

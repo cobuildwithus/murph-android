@@ -5,6 +5,8 @@ import android.os.Looper
 import ai.withmurph.companion.api.HttpCompanionApi
 import ai.withmurph.companion.auth.LoginCoordinator
 import ai.withmurph.companion.auth.PrivyAuthService
+import ai.withmurph.companion.contacts.AndroidAddressBookContacts
+import ai.withmurph.companion.core.AddressBookContactSource
 import ai.withmurph.companion.health.JunctionHealthSyncService
 import ai.withmurph.companion.storage.SharedPreferencesLocalState
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +17,7 @@ class AppGraph private constructor(
     val session: AppSession,
     val login: LoginCoordinator,
     val health: JunctionHealthSyncService,
+    val contacts: AddressBookContactSource,
     val config: AppConfig,
     val applicationScope: CoroutineScope,
 ) {
@@ -32,8 +35,10 @@ class AppGraph private constructor(
             val api = HttpCompanionApi(
                 baseUrl = config.backendBaseUrl,
                 identityToken = auth::identityToken,
+                identityTokenForMember = auth::identityTokenForMember,
             )
             val localState = SharedPreferencesLocalState(context)
+            val contacts = AndroidAddressBookContacts(context)
             val health = JunctionHealthSyncService(
                 context = context,
                 environment = config.environment,
@@ -43,6 +48,7 @@ class AppGraph private constructor(
                 auth = auth,
                 api = api,
                 health = health,
+                contacts = contacts,
                 localState = localState,
                 config = config,
             )
@@ -50,6 +56,7 @@ class AppGraph private constructor(
                 session = session,
                 login = LoginCoordinator(auth),
                 health = health,
+                contacts = contacts,
                 config = config,
                 applicationScope = CoroutineScope(
                     SupervisorJob() + Dispatchers.Main.immediate,

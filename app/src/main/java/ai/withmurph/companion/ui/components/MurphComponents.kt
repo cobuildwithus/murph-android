@@ -546,6 +546,7 @@ fun SettingsRow(
     detail: String? = null,
     actionLabel: String? = null,
     showsExternalLink: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -556,6 +557,7 @@ fun SettingsRow(
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                enabled = enabled,
                 onClick = onClick,
             )
             .padding(horizontal = 16.dp, vertical = 15.dp)
@@ -587,7 +589,7 @@ fun SettingsRow(
             Text(
                 text = actionLabel.uppercase(),
                 style = MaterialTheme.typography.labelMedium,
-                color = MurphColors.SageDark,
+                color = if (enabled) MurphColors.SageDark else MurphColors.SlateMuted,
             )
         }
         if (showsExternalLink) {

@@ -4,10 +4,12 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
@@ -38,6 +40,14 @@ class MainActivity : ComponentActivity() {
             graph.health.extendedPermissionContract(),
         ) {
             graph.applicationScope.launch { graph.session.syncNow() }
+        }
+
+        val contactsPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            graph.applicationScope.launch {
+                graph.session.completeAddressBookPermissionFlow(granted)
+            }
         }
 
         val healthPermissionLauncher = registerForActivityResult(
@@ -108,6 +118,30 @@ class MainActivity : ComponentActivity() {
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
                         },
+                        onShareAddressBook = {
+                            graph.applicationScope.launch {
+                                if (graph.session.prepareAddressBookSharing()) {
+                                    if (canLaunchExternalFlow()) {
+                                        contactsPermissionLauncher.launch(
+                                            graph.contacts.readPermission,
+                                        )
+                                    } else {
+                                        graph.session.cancelAddressBookPermissionFlow()
+                                    }
+                                }
+                            }
+                        },
+                        onRefreshAddressBook = {
+                            graph.applicationScope.launch {
+                                graph.session.refreshAddressBookSharing()
+                            }
+                        },
+                        onStopAddressBook = {
+                            graph.applicationScope.launch {
+                                graph.session.stopAddressBookSharing()
+                            }
+                        },
+                        onOpenAppSettings = ::openAppSettings,
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
@@ -163,6 +197,22 @@ class MainActivity : ComponentActivity() {
             startActivity(intent)
         } catch (_: ActivityNotFoundException) {
             reportHealthConnectLaunchFailure()
+        }
+    }
+
+    private fun openAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", packageName, null),
+        )
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(
+                this,
+                "App settings couldn't be opened on this device.",
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 

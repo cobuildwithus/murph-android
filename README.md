@@ -15,8 +15,9 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - WHOOP → Health Connect setup guidance.
+- Optional, server-backed familiar-name projection for unregistered phone participants in groups.
 - Settings, legal links, deletion, support, and sign-out.
-- No local health database and no token or health-value logging.
+- No local health/contact database and no token, health-value, contact-value, or provider-response logging.
 
 ## Deliberately excluded
 
@@ -24,6 +25,8 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Chat, vault browsing, challenges, or a general Murph client.
 - Direct WHOOP OAuth.
 - Samsung Health support before the Health Connect path is proven.
+- Contact backup, continuous/background contact sync, invitations, messaging,
+  identity proof, signup prefill, or contact-derived routing authority.
 - App-owned Hilt, Room, Retrofit, analytics, and crash-reporting SDKs. Junction
   transitively includes AndroidX WorkManager and its Room
   runtime; Murph defines no Room database or health-value cache.
@@ -114,6 +117,27 @@ The manifest declares only the four corresponding Health Connect read permission
 
 The app asks for Health Connect history access during initial setup where supported. Junction documents Health Connect backfill as a fixed 30-day window, so the app is configured for 30 days and does not promise broader history. Background Health Connect reads, boot receivers, and exact-alarm synchronization are intentionally excluded from this release.
 
+### Optional address-book projection
+
+The manifest also declares `READ_CONTACTS` for an optional, foreground-only
+Settings action. The app explains the feature before launching Android's
+permission prompt and reads contacts only after the member chooses **Share**,
+**Update**, or **Retry**. A one-shot pass reads person-contact given name,
+family name, and at most eight phone values per contact, bounded to 5,000
+contacts and 20,000 phone values.
+
+Only ASCII international numbers beginning with `+` or `00` and containing
+8–15 digits are eligible. The app emits at most 1,000 unique friendly labels,
+each containing one structurally safe first-name token and an optional last
+initial, bounded to 48 characters and 96 UTF-8 bytes. Conflicting names for the
+same normalized number are dropped. Selection is deterministic by SHA-256 rank.
+
+Contact rows, projected values, and hashes exist only for that request. Murph
+does not persist or log them on Android. The server stores no phone numbers in
+readable form. Friendly labels are not identity proof; they may appear in group
+replies other participants can see, and the feature sends no invitation or
+message.
+
 ## Connection lifecycle
 
 - The app does not create a Junction connection merely because a member signs in.
@@ -147,16 +171,32 @@ The app asks for Health Connect history access during initial setup where suppor
   finishes Junction-first, Privy-second teardown before any session restore.
 - A failed preferences commit restores the pre-call live authorization snapshot,
   so an undurable tombstone or marker removal cannot drive SDK work.
+- Address-book Settings state comes from
+  `GET /api/device-sync/companion/address-book`; local permission never claims a
+  successful share.
+- Share and Update preflight the server revision, then request Contacts access,
+  project one bounded list, and use a UUIDv4 full-list compare-and-swap
+  replacement. A `409` is surfaced without overwriting the newer projection.
+- Stop can refetch and delete the latest revision because it only reduces
+  sharing. Foreground permission-loss cleanup never requests permission or
+  reads contacts and deletes only a locally known exact revision.
+- Sign-out and member switches invalidate contact work and clear the local
+  revision/replay metadata so a late completion cannot mutate the next member's
+  state.
 
 ## Release requirements
 
 Before a Play release:
 
 1. Apply for Google Play Health Connect access for sleep, exercise, steps, active calories, and history.
-2. Complete Play Data Safety disclosures and the Health Apps declaration.
+2. Complete Play Data Safety disclosures, the Health Apps declaration, and the
+   Contacts permission disclosure for optional familiar-name projection.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
 4. Review the merged manifest and prove Junction's boot receiver and exact-alarm service remain removed.
 5. Verify foreground sync and its notification behavior on Android 13–16.
 6. Verify WHOOP actually exports each product-critical field. Murph cannot manufacture fields WHOOP does not write.
+7. Verify Contacts grant, denial, permanent denial, app-settings recovery,
+   permission revocation cleanup, compare-and-swap conflict handling, and Stop
+   deletion on at least one Pixel and one Samsung device.
 
 See `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, and `SOURCE_BASES.md` before extending the app.

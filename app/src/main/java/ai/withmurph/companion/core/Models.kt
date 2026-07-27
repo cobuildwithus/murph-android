@@ -51,6 +51,71 @@ data class CompanionSyncStatus(
     data class ResourceStatus(val lastReceivedAt: Instant?)
 }
 
+enum class AddressBookWriteCapability(val wireValue: String) {
+    Enabled("enabled"),
+    Disabled("disabled"),
+}
+
+data class AddressBookServerStatus(
+    val writeCapability: AddressBookWriteCapability,
+    val enabled: Boolean,
+    val revision: Int,
+    val storedContactCount: Int,
+)
+
+data class AddressBookPersonContact(
+    val givenName: String?,
+    val familyName: String?,
+    val phoneNumbers: List<String>,
+)
+
+data class AddressBookProjection(
+    val phoneNumber: String,
+    val advisoryName: String,
+)
+
+data class AddressBookMutation(
+    val baseRevision: Int,
+    val mutationId: String,
+) {
+    init {
+        require(baseRevision >= 0) { "Address-book base revision must be non-negative" }
+        require(isUuidV4(mutationId)) { "Address-book mutation id must be UUIDv4" }
+    }
+
+    companion object {
+        private val UUID_V4 = Regex(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+        )
+
+        fun isUuidV4(value: String): Boolean = UUID_V4.matches(value)
+    }
+}
+
+data class AddressBookReplacementRequest(
+    val mutation: AddressBookMutation,
+    val contacts: List<AddressBookProjection>,
+) {
+    init {
+        require(contacts.size <= 1_000) { "Address-book projection exceeds server limit" }
+    }
+}
+
+data class AddressBookDeletionRequest(
+    val mutation: AddressBookMutation,
+)
+
+sealed interface AddressBookSharingState {
+    data object Loading : AddressBookSharingState
+    data object Unavailable : AddressBookSharingState
+    data class Server(
+        val enabled: Boolean,
+        val storedContactCount: Int,
+        val canWrite: Boolean,
+        val ownedByInstallation: Boolean,
+    ) : AddressBookSharingState
+}
+
 enum class HealthConnectAvailability {
     Available,
     InstallOrUpdateRequired,
@@ -105,6 +170,7 @@ sealed class CompanionApiException(message: String) : Exception(message) {
     data object NoAccount : CompanionApiException("No Murph account")
     data object ConsentRequired : CompanionApiException("Murph consent required")
     data object ReconnectRequired : CompanionApiException("Health connection must be reconnected")
+    data object Conflict : CompanionApiException("Remote revision changed")
     data class Server(val status: Int) : CompanionApiException("Server returned $status")
     data object InvalidResponse : CompanionApiException("Invalid server response")
 }

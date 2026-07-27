@@ -1,5 +1,6 @@
 package ai.withmurph.companion.app
 
+import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 
@@ -25,4 +26,9 @@ data class AppUiState(
     val totalResourceCount: Int = 0,
     val backendEnvironment: String? = null,
     val authVerifiedOnline: Boolean = true,
+    val addressBookSharing: AddressBookSharingState = AddressBookSharingState.Unavailable,
+    val isAddressBookBusy: Boolean = false,
+    val addressBookHasInterruptedReplacement: Boolean = false,
+    val contactsPermissionDenied: Boolean = false,
+    val addressBookMessage: String? = null,
 )

@@ -12,6 +12,11 @@
 - Fault-injected preferences coverage proving failed durable revocation and sign-out commits restore their process-visible authorization snapshot.
 - Current-setup backend-receipt sync-state derivation with 36-hour and 72-hour thresholds, including rejection of receipts predating the setup boundary and an actionable no-receipt state after 72 hours.
 - Offline-safe local permission reconciliation so complete revocation overrides cached backend status and exposes reconnect without starting network or SDK health work.
+- Optional address-book familiar-name projection with an explicit Settings
+  consent surface, one bounded Android Contacts read, strict international
+  phone/name sanitization, deterministic conflict-safe selection, server CAS
+  replacement, Stop deletion, exact-revision permission-loss cleanup, and no
+  persisted contact values.
 - Compose login, setup, status, WHOOP guidance, consent, settings, and failure
   screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
@@ -19,7 +24,7 @@
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session work across Activity recreation, login task-snapshot protection, safe external-action fallbacks, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
-- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, pre-sync trust checks, cancellation recovery, OTP cleanup, provider availability, backend receipt truth, and member-switch teardown.
+- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, pre-sync trust checks, cancellation recovery, OTP cleanup, provider availability, backend receipt truth, member-switch teardown, address-book projection/API strictness, replay metadata, CAS behavior, permission-loss cleanup, operation coalescing, ownership fencing, and rendered Settings state.
 
 ## Executable verification
 
@@ -43,6 +48,11 @@ OTP delivery still requires a Privy Android app client registered for the
 debug and release package names. Health Connect synchronization remains a
 physical-device gate because an emulator has no member-owned wearable history.
 
+The address-book scope adds no dependency, database, worker, observer, or
+background service. Its Android provider edge and permission behavior remain a
+physical-device gate; `./scripts/verify.sh` is still required after every
+address-book change.
+
 ## Required real-device gates
 
 - WHOOP data appears in Health Connect before Murph setup.
@@ -51,6 +61,12 @@ physical-device gate because an emulator has no member-owned wearable history.
 - Practical history depth within Junction's documented 30-day Health Connect window.
 - Foreground and app-resume behavior under ordinary battery restrictions.
 - Sign-out/account-switch does not leave the prior member's local Junction identity active.
+- Contacts permission grant, denial, permanent denial, app-settings recovery,
+  and revocation on both a Pixel and Samsung device.
+- Server replacement replay, remote-revision conflict, Stop deletion, exact
+  automatic cleanup, and visible group labels against the deployed endpoint.
+- Provider behavior at the 5,000-contact, 20,000-phone-value, eight-per-contact,
+  and 1,000-projection bounds.
 - Pixel and Samsung coverage.
 
 ## Deferred
@@ -61,3 +77,5 @@ physical-device gate because an emulator has no member-owned wearable history.
 - Analytics and crash reporting.
 - Instrumentation screenshot regression tests.
 - Any local health-value cache or database.
+- Continuous/background contact sync, contact backup, invites, messaging,
+  signup prefill, identity proof, or contact-based routing authority.
