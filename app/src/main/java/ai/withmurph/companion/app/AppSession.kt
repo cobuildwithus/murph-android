@@ -203,8 +203,9 @@ class AppSession(
         }
     }
 
-    suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean =
-        healthMutex.withLock {
+    suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean {
+        var authStateToReconcile: AuthSessionState? = null
+        val completed = healthMutex.withLock {
             val pending = pendingHealthConnection
             if (
                 pending == null ||
@@ -232,17 +233,36 @@ class AppSession(
                     _state.update { it.copy(isConnectingHealth = false) }
                     return false
                 }
-                if (!ownsPendingVerifiedHealthConnection(pending.memberKey)) {
+                if (!ownsPendingHealthConnection(pending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
-                identifyJunction(pending.memberKey, ConnectionIntent.Connect, epoch)
-                if (!ownsPendingVerifiedHealthConnection(pending.memberKey)) {
+                currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
+                    authStateToReconcile = authState
+                    return@withLock abortPendingHealthConnection(epoch)
+                }
+                identifyJunction(
+                    memberKey = pending.memberKey,
+                    intent = ConnectionIntent.Connect,
+                    epoch = epoch,
+                )?.let { authState ->
+                    authStateToReconcile = authState
+                    return@withLock abortPendingHealthConnection(epoch)
+                }
+                if (!ownsPendingHealthConnection(pending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
+                }
+                currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
+                    authStateToReconcile = authState
+                    return@withLock abortPendingHealthConnection(epoch)
                 }
                 health.configure()
                 health.connectAfterPermissionRequest()
-                if (!ownsPendingVerifiedHealthConnection(pending.memberKey)) {
+                if (!ownsPendingHealthConnection(pending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
+                }
+                currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
+                    authStateToReconcile = authState
+                    return@withLock abortPendingHealthConnection(epoch)
                 }
                 localState.healthAccessRequestedAt =
                     InstantValue(pending.requestedAt.toEpochMilli())
@@ -283,6 +303,9 @@ class AppSession(
                 false
             }
         }
+        authStateToReconcile?.let { reconcileAfterPendingAuthLoss(it) }
+        return completed
+    }
 
     fun cancelHealthPermissionFlow() {
         val pending = pendingHealthConnection ?: return
@@ -427,22 +450,28 @@ class AppSession(
         currentMemberKey = authState.memberKey
         val epoch = sessionEpoch
         val requested = healthWasRequested()
-        if (
-            authState.verifiedOnline &&
-            !currentAuthOwnsVerifiedMember(authState.memberKey)
-        ) {
-            restoreOfflineIfPossible()
-            return
+        if (authState.verifiedOnline) {
+            currentAuthOwnershipLoss(authState.memberKey)?.let { observed ->
+                reconcileObservedAuthState(authState.memberKey, observed)
+                return
+            }
         }
         if (!requested && authState.verifiedOnline && !verifyBackendMember(epoch)) {
             return
         }
         if (requested && authState.verifiedOnline) {
             try {
-                identifyJunction(authState.memberKey, ConnectionIntent.Resume, epoch)
+                identifyJunction(
+                    memberKey = authState.memberKey,
+                    intent = ConnectionIntent.Resume,
+                    epoch = epoch,
+                )?.let { observed ->
+                    reconcileObservedAuthState(authState.memberKey, observed)
+                    return
+                }
                 if (epoch != sessionEpoch) return
-                if (!currentAuthOwnsVerifiedMember(authState.memberKey)) {
-                    restoreOfflineIfPossible()
+                currentAuthOwnershipLoss(authState.memberKey)?.let { observed ->
+                    reconcileObservedAuthState(authState.memberKey, observed)
                     return
                 }
                 health.configure()
@@ -499,12 +528,11 @@ class AppSession(
             }
         }
 
-        if (
-            authState.verifiedOnline &&
-            !currentAuthOwnsVerifiedMember(authState.memberKey)
-        ) {
-            restoreOfflineIfPossible()
-            return
+        if (authState.verifiedOnline) {
+            currentAuthOwnershipLoss(authState.memberKey)?.let { observed ->
+                reconcileObservedAuthState(authState.memberKey, observed)
+                return
+            }
         }
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
@@ -692,7 +720,7 @@ class AppSession(
         memberKey: String,
         intent: ConnectionIntent,
         epoch: Int,
-    ) {
+    ): AuthSessionState? {
         if (epoch != sessionEpoch) throw CancellationException()
         val response = api.createJunctionSignInToken(
             SignInTokenRequest(
@@ -712,9 +740,11 @@ class AppSession(
         _state.update { current ->
             current.copy(backendEnvironment = response.environment)
         }
+        currentAuthOwnershipLoss(memberKey)?.let { return it }
         health.identify(memberKey = memberKey) {
             response.signInToken
         }
+        return null
     }
 
     private suspend fun syncAndRefresh(epoch: Int): Boolean {
@@ -1036,7 +1066,9 @@ class AppSession(
         }
     }
 
-    private suspend fun currentAuthOwnsVerifiedMember(memberKey: String): Boolean {
+    private suspend fun currentAuthOwnershipLoss(
+        memberKey: String,
+    ): AuthSessionState? {
         val authState = try {
             auth.currentState()
         } catch (error: CancellationException) {
@@ -1051,15 +1083,46 @@ class AppSession(
                 memberKey == currentMemberKey &&
                 memberKey == localState.memberKey &&
                 !localState.signOutPending
-        if (!ownsMember) {
-            _state.update { current -> current.copy(authVerifiedOnline = false) }
-        }
-        return ownsMember
+        if (ownsMember) return null
+        _state.update { current -> current.copy(authVerifiedOnline = false) }
+        return authState
     }
 
-    private suspend fun ownsPendingVerifiedHealthConnection(memberKey: String): Boolean =
-        ownsPendingHealthConnection(memberKey) &&
-            currentAuthOwnsVerifiedMember(memberKey)
+    /** Called only while [startMutex] is held. */
+    private suspend fun reconcileObservedAuthState(
+        expectedMemberKey: String,
+        observed: AuthSessionState,
+    ) {
+        when (observed) {
+            AuthSessionState.SignedOut -> enterSignedOut()
+            AuthSessionState.TemporarilyUnavailable -> restoreOfflineIfPossible()
+            is AuthSessionState.SignedIn -> {
+                if (observed.memberKey == expectedMemberKey) {
+                    restoreOfflineIfPossible()
+                } else {
+                    reconcileSignedIn(observed)
+                }
+            }
+        }
+    }
+
+    private suspend fun reconcileAfterPendingAuthLoss(observed: AuthSessionState) {
+        val authoritativeChange =
+            observed == AuthSessionState.SignedOut ||
+                (
+                    observed is AuthSessionState.SignedIn &&
+                        (
+                            observed.memberKey != currentMemberKey ||
+                                observed.memberKey != localState.memberKey
+                        )
+                )
+        if (!authoritativeChange) return
+        invalidateSessionEpoch()
+        _state.update {
+            it.copy(phase = AppPhase.Launching, healthMessage = null)
+        }
+        reconcile(force = true)
+    }
 
     private suspend fun abortPendingHealthConnection(epoch: Int): Boolean {
         pendingHealthConnection = null

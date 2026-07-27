@@ -888,6 +888,95 @@ class AppSessionTest {
     }
 
     @Test
+    fun freshSignedOutStateTearsDownLateResumeIdentification() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val identifyGate = CompletableDeferred<Unit>()
+        fixture.health.identifyGate = identifyGate
+        val start = async { fixture.session.start() }
+        fixture.health.identifyEntered.await()
+        fixture.auth.state = AuthSessionState.SignedOut
+
+        identifyGate.complete(Unit)
+        start.await()
+
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(null, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+    }
+
+    @Test
+    fun freshMemberSwitchTearsDownLateResumeIdentificationBeforePublishingNewMember() = runTest {
+        val newMemberKey = "did:privy:new-member"
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val identifyGate = CompletableDeferred<Unit>()
+        fixture.health.identifyGate = identifyGate
+        val start = async { fixture.session.start() }
+        fixture.health.identifyEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(newMemberKey, verifiedOnline = true)
+
+        identifyGate.complete(Unit)
+        start.await()
+
+        assertEquals(listOf(MEMBER_KEY), fixture.health.identifiedMemberKeys)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
+    fun tokenResponseCannotBindThePreviousMemberAfterPrivySwitches() = runTest {
+        val newMemberKey = "did:privy:new-member"
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val tokenGate = CompletableDeferred<Unit>()
+        fixture.api.signInGate = tokenGate
+        fixture.api.signInGateOnCall = 1
+        val start = async { fixture.session.start() }
+        fixture.api.signInGateEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(newMemberKey, verifiedOnline = true)
+
+        tokenGate.complete(Unit)
+        start.await()
+
+        assertEquals(listOf(MEMBER_KEY), fixture.api.tokenAuthMemberKeys)
+        assertTrue(fixture.health.identifiedMemberKeys.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
     fun foregroundPrivyLogoutWaitsForLateResumeIdentificationBeforeTeardown() = runTest {
         val fixture = fixture()
         fixture.localState.memberKey = MEMBER_KEY
@@ -2376,7 +2465,7 @@ class AppSessionTest {
             state = AuthSessionState.SignedIn(memberKey, verifiedOnline = true),
             events = events,
         )
-        val api = FakeApi(events)
+        val api = FakeApi(events) { auth.state }
         val health = FakeHealth(events)
         val localState = FakeLocalState()
         val session = createSession(auth, api, health, localState, now)
@@ -2484,8 +2573,12 @@ class AppSessionTest {
         }
     }
 
-    private class FakeApi(private val events: MutableList<String>) : CompanionApi {
+    private class FakeApi(
+        private val events: MutableList<String>,
+        private val currentAuthState: () -> AuthSessionState,
+    ) : CompanionApi {
         val intents = mutableListOf<ConnectionIntent>()
+        val tokenAuthMemberKeys = mutableListOf<String?>()
         val statusSources = mutableListOf<String>()
         var status = CompanionSyncStatus(lastDataReceivedAt = null, resources = emptyMap())
         var signInError: Throwable? = null
@@ -2502,6 +2595,8 @@ class AppSessionTest {
             request: SignInTokenRequest,
         ): SignInTokenResponse {
             intents += request.connectionIntent
+            tokenAuthMemberKeys +=
+                (currentAuthState() as? AuthSessionState.SignedIn)?.memberKey
             events += "token-${request.connectionIntent.wireValue}"
             maximumSignInCalls?.let { maximum ->
                 assertTrue(
@@ -2534,6 +2629,7 @@ class AppSessionTest {
         override val totalResourceCount = 4
         var signedIn = false
         var identifyCalls = 0
+        val identifiedMemberKeys = mutableListOf<String>()
         var configureCalls = 0
         var connectCalls = 0
         var syncCalls = 0
@@ -2573,6 +2669,7 @@ class AppSessionTest {
             assertTrue(memberKey.isNotBlank())
             assertEquals("junction-token", authenticate())
             identifyCalls += 1
+            identifiedMemberKeys += memberKey
             identifiedInCurrentProcess = true
             events += "identify"
             identifyEntered.complete(Unit)
