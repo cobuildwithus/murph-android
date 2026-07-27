@@ -202,19 +202,28 @@ class AppSessionTest {
 
         fixture.session.didEnterBackground()
         fixture.health.grantedCount = 0
-        statusGate.complete(Unit)
-        firstForeground.await()
-        val syncCallsAfterFirstForeground = fixture.health.syncCalls
-
-        fixture.session.didBecomeActive()
+        val secondForeground = async { fixture.session.didBecomeActive() }
+        secondForeground.await()
+        val syncCallsAfterPermissionRevocation = fixture.health.syncCalls
 
         assertEquals(refreshCalls + 2, fixture.health.refreshCalls)
-        assertEquals(syncCallsAfterFirstForeground, fixture.health.syncCalls)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
         assertEquals(
             HEALTH_PERMISSION_RECOVERY_MESSAGE,
             fixture.session.state.value.healthMessage,
         )
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
+
+        statusGate.complete(Unit)
+        firstForeground.await()
+
+        assertEquals(syncCallsAfterPermissionRevocation, fixture.health.syncCalls)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(
+            HEALTH_PERMISSION_RECOVERY_MESSAGE,
+            fixture.session.state.value.healthMessage,
+        )
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
 
         fixture.session.didBecomeActive()
         assertEquals(refreshCalls + 2, fixture.health.refreshCalls)
@@ -267,6 +276,7 @@ class AppSessionTest {
         assertEquals(signOutCalls, fixture.health.signOutCalls)
         assertEquals(tokenCount, fixture.api.intents.size)
         assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
 
         fixture.localState.revokeHealthAuthorizationSucceeds = true
         assertTrue(fixture.session.prepareHealthConnection())
@@ -1181,6 +1191,85 @@ class AppSessionTest {
             assertEquals(0, fixture.health.syncCalls)
             assertFalse(fixture.session.state.value.isConnectingHealth)
         }
+    }
+
+    @Test
+    fun unavailableAuthorityCannotRestoreCachedSyncedAfterCompleteRevocation() = runTest {
+        listOf(true, false).forEach { authUnavailable ->
+            val now = Instant.parse("2026-07-25T18:00:00Z")
+            val fixture = fixture(now = now)
+            fixture.localState.memberKey = MEMBER_KEY
+            fixture.localState.healthAccessRequestedAt =
+                InstantValue(now.minusSeconds(3_600).toEpochMilli())
+            fixture.health.grantedCount = fixture.health.totalResourceCount
+            fixture.api.status = CompanionSyncStatus(
+                lastDataReceivedAt = now.minusSeconds(600),
+                resources = emptyMap(),
+            )
+            fixture.session.start()
+            assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+            fixture.health.grantedCount = 0
+            val tokenCount = fixture.api.intents.size
+            val identifyCalls = fixture.health.identifyCalls
+            val configureCalls = fixture.health.configureCalls
+            val connectCalls = fixture.health.connectCalls
+            val syncCalls = fixture.health.syncCalls
+            if (authUnavailable) {
+                fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+            } else {
+                fixture.api.statusError = CompanionApiException.Network
+            }
+
+            assertFalse(fixture.session.prepareHealthConnection())
+
+            assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+            assertEquals(
+                HEALTH_PERMISSION_RECOVERY_MESSAGE,
+                fixture.session.state.value.healthMessage,
+            )
+            assertEquals(0, fixture.session.state.value.grantedResourceCount)
+            assertEquals(tokenCount, fixture.api.intents.size)
+            assertEquals(identifyCalls, fixture.health.identifyCalls)
+            assertEquals(configureCalls, fixture.health.configureCalls)
+            assertEquals(connectCalls, fixture.health.connectCalls)
+            assertEquals(syncCalls, fixture.health.syncCalls)
+        }
+    }
+
+    @Test
+    fun manualSyncRepairsContradictorySyncedStateWithoutCrossingBoundaries() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(600),
+            resources = emptyMap(),
+        )
+        fixture.session.start()
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        fixture.health.grantedCount = 0
+        val tokenCount = fixture.api.intents.size
+        val statusCount = fixture.api.statusSources.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val syncCalls = fixture.health.syncCalls
+
+        fixture.session.syncNow()
+
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(
+            HEALTH_PERMISSION_RECOVERY_MESSAGE,
+            fixture.session.state.value.healthMessage,
+        )
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(statusCount, fixture.api.statusSources.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
     }
 
     @Test

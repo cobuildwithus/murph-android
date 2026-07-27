@@ -293,7 +293,13 @@ class AppSession(
             reconcile(force = true)
             return
         }
-        if (health.grantedResourceCount() == 0) return
+        if (health.grantedResourceCount() == 0) {
+            publishPermissionAwareHealthState(
+                status = cachedHealthStatus(),
+                message = _state.value.healthMessage,
+            )
+            return
+        }
         healthMutex.withLock {
             val epoch = sessionEpoch
             syncAndRefresh(epoch)
@@ -635,6 +641,13 @@ class AppSession(
         try {
             if (fetchValidatedHealthStatus(epoch) == null) return
             if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return
+            if (health.grantedResourceCount() == 0) {
+                publishPermissionAwareHealthState(
+                    status = cachedHealthStatus(),
+                    message = _state.value.healthMessage,
+                )
+                return
+            }
             try {
                 health.syncAllGrantedResources()
             } catch (error: CancellationException) {
@@ -772,13 +785,11 @@ class AppSession(
             )
             return null
         } catch (_: Exception) {
-            _state.update { current ->
-                current.copy(
-                    isSyncingHealth = false,
-                    healthSync = deriveCachedHealthState(),
-                    healthMessage = "Murph couldn't verify your account. Saved status is still shown.",
-                )
-            }
+            publishPermissionAwareHealthState(
+                status = cachedHealthStatus(),
+                message = "Murph couldn't verify your account. Saved status is still shown.",
+                clearSyncing = true,
+            )
             return null
         }
         if (epoch != sessionEpoch) return null
@@ -789,27 +800,51 @@ class AppSession(
         localState.lastKnownDataReceivedAt = qualifyingReceipt?.let {
             InstantValue(it.toEpochMilli())
         }
-        _state.update { current ->
-            current.copy(
-                authVerifiedOnline = true,
-                healthSync = HealthSyncState.derive(
-                    requestedAt = requestedAt,
-                    status = status.copy(lastDataReceivedAt = qualifyingReceipt),
-                    now = now(),
-                ),
-                grantedResourceCount = health.grantedResourceCount(),
-            )
-        }
+        publishPermissionAwareHealthState(
+            status = status.copy(lastDataReceivedAt = qualifyingReceipt),
+            message = null,
+            authVerifiedOnline = true,
+        )
         return status
     }
 
     private fun publishReadOnlyHealthState(message: String) {
+        publishPermissionAwareHealthState(
+            status = cachedHealthStatus(),
+            message = message,
+            authVerifiedOnline = false,
+            clearSyncing = true,
+        )
+    }
+
+    private fun publishPermissionAwareHealthState(
+        status: CompanionSyncStatus?,
+        message: String?,
+        authVerifiedOnline: Boolean? = null,
+        clearSyncing: Boolean = false,
+    ) {
+        val requestedAt = healthRequestedAt()
+        val grantedResourceCount = health.grantedResourceCount()
+        val needsPermissionRecovery = requestedAt != null && grantedResourceCount == 0
         _state.update { current ->
             current.copy(
-                authVerifiedOnline = false,
-                isSyncingHealth = false,
-                healthSync = deriveCachedHealthState(),
-                healthMessage = message,
+                authVerifiedOnline = authVerifiedOnline ?: current.authVerifiedOnline,
+                isSyncingHealth = if (clearSyncing) false else current.isSyncingHealth,
+                healthSync = if (needsPermissionRecovery) {
+                    HealthSyncState.NotConnected
+                } else {
+                    HealthSyncState.derive(
+                        requestedAt = requestedAt,
+                        status = status,
+                        now = now(),
+                    )
+                },
+                grantedResourceCount = grantedResourceCount,
+                healthMessage = if (needsPermissionRecovery) {
+                    HEALTH_PERMISSION_RECOVERY_MESSAGE
+                } else {
+                    message
+                },
             )
         }
     }
@@ -946,13 +981,17 @@ class AppSession(
     }
 
     private fun deriveCachedHealthState(): HealthSyncState {
-        val cached = localState.lastKnownDataReceivedAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
         return HealthSyncState.derive(
             requestedAt = healthRequestedAt(),
-            status = cached?.let { CompanionSyncStatus(it, emptyMap()) },
+            status = cachedHealthStatus(),
             now = now(),
         )
     }
+
+    private fun cachedHealthStatus(): CompanionSyncStatus? =
+        localState.lastKnownDataReceivedAt?.epochMilliseconds
+            ?.let(Instant::ofEpochMilli)
+            ?.let { CompanionSyncStatus(it, emptyMap()) }
 
     private fun healthRequestedAt(): Instant? =
         localState.healthAccessRequestedAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
