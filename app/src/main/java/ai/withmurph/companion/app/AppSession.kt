@@ -158,6 +158,10 @@ class AppSession(
                             }
                             return false
                         }
+                        currentAuthOwnershipLoss(memberKey)?.let { authState ->
+                            authStateToReconcile = authState
+                            return@withLock false
+                        }
                         if (!ownsHealthConnectionPreparation(memberKey, preparationEpoch)) {
                             return false
                         }
