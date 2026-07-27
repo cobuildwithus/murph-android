@@ -573,6 +573,83 @@ class AppSessionTest {
     }
 
     @Test
+    fun terminalReconnectRevocationSurvivesReconstructionDuringSdkTeardown() = runTest {
+        listOf(false, true).forEach { authUnavailable ->
+            val fixture = fixture()
+            fixture.localState.memberKey = MEMBER_KEY
+            fixture.localState.healthAccessRequestedAt = InstantValue(1)
+            fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+            fixture.health.signedIn = true
+            fixture.health.grantedCount = fixture.health.totalResourceCount
+            fixture.api.signInError = CompanionApiException.ReconnectRequired
+            val teardownGate = CompletableDeferred<Unit>()
+            fixture.health.signOutGate = teardownGate
+            val originalStart = async { fixture.session.start() }
+            fixture.health.signOutEntered.await()
+
+            assertEquals(null, fixture.localState.healthAccessRequestedAt)
+            assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+            val tokenCount = fixture.api.intents.size
+            if (authUnavailable) {
+                fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+            }
+            val replacementHealth = FakeHealth(fixture.events).apply {
+                signedIn = true
+                grantedCount = totalResourceCount
+            }
+            val replacement = recreatedSession(fixture, replacementHealth)
+            replacement.start()
+
+            assertEquals(tokenCount, fixture.api.intents.size)
+            assertEquals(1, replacementHealth.signOutCalls)
+            assertFalse(replacementHealth.signedIn)
+            assertEquals(0, replacementHealth.identifyCalls)
+            assertEquals(0, replacementHealth.configureCalls)
+            assertEquals(0, replacementHealth.syncCalls)
+            assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+            assertEquals(null, fixture.localState.healthAccessRequestedAt)
+            assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+            if (authUnavailable) {
+                assertTrue(replacement.state.value.phase is AppPhase.Failed)
+            } else {
+                assertEquals(AppPhase.Ready, replacement.state.value.phase)
+            }
+
+            originalStart.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun terminalReconnectCommitFailurePreservesPriorSetupWithoutSdkTeardown() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.localState.revokeHealthAuthorizationSucceeds = false
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertEquals(InstantValue(2), fixture.localState.lastKnownDataReceivedAt)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(0, fixture.health.signOutCalls)
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertTrue(replacement.state.value.phase is AppPhase.Failed)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertEquals(InstantValue(2), fixture.localState.lastKnownDataReceivedAt)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(0, fixture.health.signOutCalls)
+    }
+
+    @Test
     fun foregroundReturnResumesALostLiveJunctionSessionBeforeSync() = runTest {
         assertLostLiveJunctionSessionResumes(useForegroundReturn = true)
     }

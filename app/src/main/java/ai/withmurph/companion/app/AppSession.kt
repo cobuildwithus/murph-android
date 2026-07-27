@@ -430,9 +430,19 @@ class AppSession(
                 health.configure()
             } catch (error: CompanionApiException.ReconnectRequired) {
                 if (epoch != sessionEpoch) return
+                if (!localState.revokeHealthSetupAuthorization()) {
+                    _state.update { current ->
+                        current.copy(
+                            phase = AppPhase.Failed(
+                                message = "Murph couldn't safely prepare Health Connect to reconnect. Try again.",
+                                canRetry = true,
+                                canSignOut = true,
+                            ),
+                        )
+                    }
+                    return
+                }
                 if (!resetHealthSdkAtTrustBoundary()) return
-                localState.healthAccessRequestedAt = null
-                localState.lastKnownDataReceivedAt = null
             } catch (error: CompanionApiException.Unauthorized) {
                 if (epoch != sessionEpoch) return
                 publishAuthoritativeResumeFailure(
