@@ -1026,6 +1026,95 @@ class AppSessionTest {
     }
 
     @Test
+    fun queuedOnlineVerificationOwnsSameMemberSessionLossRecovery() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.maximumSignInCalls = 2
+        val syncGate = CompletableDeferred<Unit>()
+        fixture.health.syncGate = syncGate
+        fixture.health.syncError = IllegalStateException("vendor session lost")
+        fixture.health.syncErrorOnCall = 1
+        fixture.health.loseSessionOnSyncError = true
+        val start = async { fixture.session.start() }
+        fixture.health.syncEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = false)
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.didEnterBackground()
+        val verifiedForeground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+        assertFalse(verifiedForeground.isCompleted)
+
+        syncGate.complete(Unit)
+        start.await()
+        verifiedForeground.await()
+
+        assertEquals(
+            listOf(ConnectionIntent.Resume, ConnectionIntent.Resume),
+            fixture.api.intents,
+        )
+        assertEquals(2, fixture.health.identifyCalls)
+        assertEquals(2, fixture.health.configureCalls)
+        assertEquals(2, fixture.health.syncCalls)
+        assertTrue(fixture.health.signedIn)
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
+    fun unavailableAuthDefersSameMemberSessionLossRecoveryUntilVerified() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.maximumSignInCalls = 2
+        val syncGate = CompletableDeferred<Unit>()
+        fixture.health.syncGate = syncGate
+        fixture.health.syncError = IllegalStateException("vendor session lost")
+        fixture.health.syncErrorOnCall = 1
+        fixture.health.loseSessionOnSyncError = true
+        val start = async { fixture.session.start() }
+        fixture.health.syncEntered.await()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        syncGate.complete(Unit)
+        start.await()
+
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(1, fixture.health.configureCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertFalse(fixture.health.signedIn)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(
+            listOf(ConnectionIntent.Resume, ConnectionIntent.Resume),
+            fixture.api.intents,
+        )
+        assertEquals(2, fixture.health.identifyCalls)
+        assertEquals(2, fixture.health.configureCalls)
+        assertEquals(2, fixture.health.syncCalls)
+        assertTrue(fixture.health.signedIn)
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
     fun processScopedStartDoesNotRebootTheSessionForActivityRecreation() = runTest {
         val fixture = fixture()
 

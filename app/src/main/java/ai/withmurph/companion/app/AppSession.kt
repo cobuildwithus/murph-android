@@ -513,7 +513,8 @@ class AppSession(
                     epoch != sessionEpoch ||
                     authState.memberKey != currentMemberKey ||
                     authState.memberKey != localState.memberKey ||
-                    _state.value.phase != AppPhase.Ready
+                    _state.value.phase != AppPhase.Ready ||
+                    !_state.value.authVerifiedOnline
                 ) {
                     return
                 }
@@ -714,7 +715,8 @@ class AppSession(
             } catch (_: Exception) {
                 if (
                     epoch != sessionEpoch ||
-                    _state.value.phase != AppPhase.Ready
+                    _state.value.phase != AppPhase.Ready ||
+                    !_state.value.authVerifiedOnline
                 ) {
                     return false
                 }
