@@ -95,7 +95,14 @@ class AppSessionTest {
         assertTrue(fixture.localState.healthAccessRequestedAt != null)
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
         assertEquals(
-            listOf("status", "token-connect", "identify", "configure", "connect"),
+            listOf(
+                "status",
+                "status",
+                "token-connect",
+                "identify",
+                "configure",
+                "connect",
+            ),
             fixture.events,
         )
     }
@@ -348,6 +355,81 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
         assertFalse(fixture.api.intents.contains(ConnectionIntent.Resume))
+    }
+
+    @Test
+    fun signOutInvalidatesBlockedRecoveryPreparationBeforePermissionLaunch() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.grantedCount = 0
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+        val teardownGate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = teardownGate
+        val preparation = async { fixture.session.prepareHealthConnection() }
+        fixture.health.signOutEntered.await()
+
+        val signOut = launch { fixture.session.signOut() }
+        runCurrent()
+
+        assertTrue(fixture.localState.signOutPending)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        teardownGate.complete(Unit)
+        assertFalse(preparation.await())
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+        signOut.join()
+
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+    }
+
+    @Test
+    fun memberSwitchInvalidatesBlockedRecoveryPreparationBeforePermissionLaunch() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.grantedCount = 0
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+        val teardownGate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = teardownGate
+        val preparation = async { fixture.session.prepareHealthConnection() }
+        fixture.health.signOutEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = "did:privy:new-member",
+            verifiedOnline = true,
+        )
+
+        fixture.session.didEnterBackground()
+        val foreground = launch { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        teardownGate.complete(Unit)
+        assertFalse(preparation.await())
+        foreground.join()
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals("did:privy:new-member", fixture.localState.memberKey)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
     }
 
     @Test
@@ -969,6 +1051,60 @@ class AppSessionTest {
     }
 
     @Test
+    fun initialSetupRevalidatesBackendAuthorityBeforeSystemPermissions() = runTest {
+        listOf(
+            CompanionApiException.NoAccount,
+            CompanionApiException.ConsentRequired,
+            CompanionApiException.Unauthorized,
+        ).forEach { failure ->
+            assertPreparationBackendFailureKeepsPermissionsClosed(
+                isRecovery = false,
+                failure = failure,
+            )
+        }
+    }
+
+    @Test
+    fun permissionRecoveryRevalidatesBackendBeforeRevokingPriorSetup() = runTest {
+        listOf(
+            CompanionApiException.NoAccount,
+            CompanionApiException.ConsentRequired,
+            CompanionApiException.Unauthorized,
+        ).forEach { failure ->
+            assertPreparationBackendFailureKeepsPermissionsClosed(
+                isRecovery = true,
+                failure = failure,
+            )
+        }
+    }
+
+    @Test
+    fun changedOrUnavailablePrivySessionCannotLaunchSystemPermissions() = runTest {
+        listOf(
+            AuthSessionState.SignedIn("did:privy:different-member", verifiedOnline = true),
+            AuthSessionState.TemporarilyUnavailable,
+            AuthSessionState.SignedOut,
+        ).forEach { authState ->
+            val fixture = fixture()
+            fixture.session.start()
+            fixture.auth.state = authState
+            val tokenCount = fixture.api.intents.size
+            val statusCount = fixture.api.statusSources.size
+
+            assertFalse(fixture.session.prepareHealthConnection())
+            assertFalse(fixture.session.completeHealthPermissionFlow(true))
+
+            assertEquals(tokenCount, fixture.api.intents.size)
+            assertEquals(statusCount, fixture.api.statusSources.size)
+            assertEquals(0, fixture.health.identifyCalls)
+            assertEquals(0, fixture.health.configureCalls)
+            assertEquals(0, fixture.health.connectCalls)
+            assertEquals(0, fixture.health.syncCalls)
+            assertFalse(fixture.session.state.value.isConnectingHealth)
+        }
+    }
+
+    @Test
     fun deniedOrCancelledPermissionFlowNeverCreatesAProvisionalIdentity() = runTest {
         val denied = fixture()
         denied.session.start()
@@ -1075,6 +1211,40 @@ class AppSessionTest {
         assertEquals(tokenCount, fixture.api.intents.size)
         assertEquals(syncCalls, fixture.health.syncCalls)
         assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+    }
+
+    private suspend fun assertPreparationBackendFailureKeepsPermissionsClosed(
+        isRecovery: Boolean,
+        failure: CompanionApiException,
+    ) {
+        val fixture = if (isRecovery) {
+            completedHealthFixture().also {
+                it.health.grantedCount = 0
+                it.session.didEnterBackground()
+                it.session.didBecomeActive()
+            }
+        } else {
+            fixture().also { it.session.start() }
+        }
+        val requestedAt = fixture.localState.healthAccessRequestedAt
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+        fixture.api.statusError = failure
+
+        assertFalse(fixture.session.prepareHealthConnection())
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+
+        assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
     }
 
     private suspend fun assertForegroundReturnPreservesConnectIdentity(

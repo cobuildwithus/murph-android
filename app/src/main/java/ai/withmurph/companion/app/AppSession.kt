@@ -105,6 +105,13 @@ class AppSession(
             val memberKey = currentMemberKey ?: return false
             return when (health.availability()) {
                 HealthConnectAvailability.Available -> {
+                    val validatedEpoch = sessionEpoch
+                    if (
+                        fetchValidatedHealthStatus(validatedEpoch) == null ||
+                        !ownsHealthConnectionPreparation(memberKey, validatedEpoch)
+                    ) {
+                        return false
+                    }
                     val hadCompletedSetup = healthWasRequested()
                     if (hadCompletedSetup) {
                         if (!localState.revokeHealthSetupAuthorization()) {
@@ -117,8 +124,10 @@ class AppSession(
                             return false
                         }
                     }
+                    var preparationEpoch = validatedEpoch
                     if (hadCompletedSetup || health.isSignedIn()) {
                         invalidateSessionEpoch()
+                        preparationEpoch = sessionEpoch
                         _state.update {
                             it.copy(
                                 healthSync = HealthSyncState.NotConnected,
@@ -138,10 +147,12 @@ class AppSession(
                             }
                             return false
                         }
+                        if (!ownsHealthConnectionPreparation(memberKey, preparationEpoch)) {
+                            return false
+                        }
                     }
-                    val epoch = sessionEpoch
                     pendingHealthConnection = PendingHealthConnection(
-                        epoch = epoch,
+                        epoch = preparationEpoch,
                         memberKey = memberKey,
                         requestedAt = now(),
                     )
@@ -196,9 +207,8 @@ class AppSession(
         healthMutex.withLock {
             val pending = pendingHealthConnection
             if (
-                !_state.value.isConnectingHealth ||
                 pending == null ||
-                pending.epoch != sessionEpoch
+                !ownsPendingHealthConnection(pending.memberKey)
             ) {
                 pendingHealthConnection = null
                 _state.update { it.copy(isConnectingHealth = false) }
@@ -948,8 +958,18 @@ class AppSession(
             pending.memberKey == localState.memberKey &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.isConnectingHealth &&
+            _state.value.authVerifiedOnline &&
             !localState.signOutPending
     }
+
+    private fun ownsHealthConnectionPreparation(memberKey: String, epoch: Int): Boolean =
+        epoch == sessionEpoch &&
+            memberKey == currentMemberKey &&
+            memberKey == localState.memberKey &&
+            _state.value.phase == AppPhase.Ready &&
+            !_state.value.isConnectingHealth &&
+            _state.value.authVerifiedOnline &&
+            !localState.signOutPending
 
     private fun invalidateSessionEpoch() {
         sessionEpoch += 1
