@@ -444,6 +444,38 @@ class AppSessionTest {
     }
 
     @Test
+    fun initialConnectRejectsStaleVerifiedReconciliationAfterUnverifiedReturn() = runTest {
+        assertStaleVerifiedReconciliationCannotReauthorizePendingConnect(
+            isRecovery = false,
+            finalAuthState = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = false),
+        )
+    }
+
+    @Test
+    fun recoveryConnectRejectsStaleVerifiedReconciliationAfterUnverifiedReturn() = runTest {
+        assertStaleVerifiedReconciliationCannotReauthorizePendingConnect(
+            isRecovery = true,
+            finalAuthState = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = false),
+        )
+    }
+
+    @Test
+    fun initialConnectRejectsStaleVerifiedReconciliationAfterAuthBecomesUnavailable() = runTest {
+        assertStaleVerifiedReconciliationCannotReauthorizePendingConnect(
+            isRecovery = false,
+            finalAuthState = AuthSessionState.TemporarilyUnavailable,
+        )
+    }
+
+    @Test
+    fun recoveryConnectRejectsStaleVerifiedReconciliationAfterAuthBecomesUnavailable() = runTest {
+        assertStaleVerifiedReconciliationCannotReauthorizePendingConnect(
+            isRecovery = true,
+            finalAuthState = AuthSessionState.TemporarilyUnavailable,
+        )
+    }
+
+    @Test
     fun foregroundReturnWaitsForRecoveryTeardownAndPreservesPermissionLaunch() = runTest {
         val fixture = completedHealthFixture()
         fixture.health.grantedCount = 0
@@ -2249,6 +2281,64 @@ class AppSessionTest {
         assertFalse(fixture.session.state.value.isConnectingHealth)
     }
 
+    private suspend fun assertStaleVerifiedReconciliationCannotReauthorizePendingConnect(
+        isRecovery: Boolean,
+        finalAuthState: AuthSessionState,
+    ) = coroutineScope {
+        val fixture = if (isRecovery) {
+            completedHealthFixture().also {
+                it.health.grantedCount = 0
+                it.session.didEnterBackground()
+                it.session.didBecomeActive()
+            }
+        } else {
+            fixture().also { it.session.start() }
+        }
+        assertTrue(fixture.session.prepareHealthConnection())
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val connectCalls = fixture.health.connectCalls
+        val syncCalls = fixture.health.syncCalls
+        val permissionStatusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = permissionStatusGate
+        val completion = async {
+            fixture.session.completeHealthPermissionFlow(permissionRequestCompleted = true)
+        }
+        fixture.api.statusGateEntered.await()
+        val reconciliationStatusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = reconciliationStatusGate
+        fixture.api.statusGateEntered = CompletableDeferred()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = false)
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.didEnterBackground()
+        val verifiedForeground = async { fixture.session.didBecomeActive() }
+        fixture.api.statusGateEntered.await()
+        fixture.auth.state = finalAuthState
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+
+        reconciliationStatusGate.complete(Unit)
+        verifiedForeground.await()
+
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        permissionStatusGate.complete(Unit)
+        assertFalse(completion.await())
+
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(connectCalls, fixture.health.connectCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.health.signedIn)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+    }
+
     private suspend fun assertNoSetupOfflineRecoveryFailure(
         failure: CompanionApiException,
         expectedMessage: String,
@@ -2402,7 +2492,7 @@ class AppSessionTest {
         var statusError: Throwable? = null
         var statusGate: CompletableDeferred<Unit>? = null
         val statusEntered = CompletableDeferred<Unit>()
-        val statusGateEntered = CompletableDeferred<Unit>()
+        var statusGateEntered = CompletableDeferred<Unit>()
         var signInGate: CompletableDeferred<Unit>? = null
         var signInGateOnCall: Int? = null
         var maximumSignInCalls: Int? = null

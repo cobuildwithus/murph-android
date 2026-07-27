@@ -232,16 +232,16 @@ class AppSession(
                     _state.update { it.copy(isConnectingHealth = false) }
                     return false
                 }
-                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                if (!ownsPendingVerifiedHealthConnection(pending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
                 identifyJunction(pending.memberKey, ConnectionIntent.Connect, epoch)
-                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                if (!ownsPendingVerifiedHealthConnection(pending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
                 health.configure()
                 health.connectAfterPermissionRequest()
-                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                if (!ownsPendingVerifiedHealthConnection(pending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
                 localState.healthAccessRequestedAt =
@@ -427,6 +427,13 @@ class AppSession(
         currentMemberKey = authState.memberKey
         val epoch = sessionEpoch
         val requested = healthWasRequested()
+        if (
+            authState.verifiedOnline &&
+            !currentAuthOwnsVerifiedMember(authState.memberKey)
+        ) {
+            restoreOfflineIfPossible()
+            return
+        }
         if (!requested && authState.verifiedOnline && !verifyBackendMember(epoch)) {
             return
         }
@@ -434,6 +441,10 @@ class AppSession(
             try {
                 identifyJunction(authState.memberKey, ConnectionIntent.Resume, epoch)
                 if (epoch != sessionEpoch) return
+                if (!currentAuthOwnsVerifiedMember(authState.memberKey)) {
+                    restoreOfflineIfPossible()
+                    return
+                }
                 health.configure()
             } catch (error: CompanionApiException.ReconnectRequired) {
                 if (epoch != sessionEpoch) return
@@ -488,6 +499,13 @@ class AppSession(
             }
         }
 
+        if (
+            authState.verifiedOnline &&
+            !currentAuthOwnsVerifiedMember(authState.memberKey)
+        ) {
+            restoreOfflineIfPossible()
+            return
+        }
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
         _state.update { current ->
@@ -1017,6 +1035,31 @@ class AppSession(
             )
         }
     }
+
+    private suspend fun currentAuthOwnsVerifiedMember(memberKey: String): Boolean {
+        val authState = try {
+            auth.currentState()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            AuthSessionState.TemporarilyUnavailable
+        }
+        val ownsMember =
+            authState is AuthSessionState.SignedIn &&
+                authState.verifiedOnline &&
+                authState.memberKey == memberKey &&
+                memberKey == currentMemberKey &&
+                memberKey == localState.memberKey &&
+                !localState.signOutPending
+        if (!ownsMember) {
+            _state.update { current -> current.copy(authVerifiedOnline = false) }
+        }
+        return ownsMember
+    }
+
+    private suspend fun ownsPendingVerifiedHealthConnection(memberKey: String): Boolean =
+        ownsPendingHealthConnection(memberKey) &&
+            currentAuthOwnsVerifiedMember(memberKey)
 
     private suspend fun abortPendingHealthConnection(epoch: Int): Boolean {
         pendingHealthConnection = null
