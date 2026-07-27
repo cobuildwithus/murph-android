@@ -118,6 +118,8 @@ The app asks for Health Connect history access during initial setup where suppor
 
 - The app does not create a Junction connection merely because a member signs in.
 - Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
+- A session restored while offline repeats that validation when Privy becomes
+  online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
   After at least one category is granted, the app revalidates the member and
   requests a backend token with `connectionIntent: "connect"`.
@@ -143,6 +145,8 @@ The app asks for Health Connect history access during initial setup where suppor
 - Signing out atomically records a durable pending-sign-out tombstone and
   invalidates health restoration before waiting on other app work. Startup
   finishes Junction-first, Privy-second teardown before any session restore.
+- A failed preferences commit restores the pre-call live authorization snapshot,
+  so an undurable tombstone or marker removal cannot drive SDK work.
 
 ## Release requirements
 

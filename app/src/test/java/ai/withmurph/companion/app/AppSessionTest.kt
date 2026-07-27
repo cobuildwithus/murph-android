@@ -215,6 +215,13 @@ class AppSessionTest {
         assertEquals(signOutCalls, fixture.health.signOutCalls)
         assertEquals(tokenCount, fixture.api.intents.size)
         assertFalse(fixture.session.state.value.isConnectingHealth)
+
+        fixture.localState.revokeHealthAuthorizationSucceeds = true
+        assertTrue(fixture.session.prepareHealthConnection())
+
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertTrue(fixture.session.state.value.isConnectingHealth)
     }
 
     @Test
@@ -607,6 +614,13 @@ class AppSessionTest {
         assertTrue(fixture.auth.state is AuthSessionState.SignedIn)
         assertTrue(fixture.localState.healthAccessRequestedAt != null)
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(priorSignOutCalls, fixture.health.signOutCalls)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertFalse(fixture.localState.signOutPending)
     }
 
     @Test
@@ -737,6 +751,46 @@ class AppSessionTest {
         assertEquals(0, fixture.health.identifyCalls)
         assertEquals(0, fixture.health.configureCalls)
         assertEquals(0, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun noSetupOfflineRecoveryRevalidatesMissingAccountBeforePermissions() = runTest {
+        assertNoSetupOfflineRecoveryFailure(
+            failure = CompanionApiException.NoAccount,
+            expectedMessage = "This sign-in isn't linked to an active Murph account.",
+        )
+    }
+
+    @Test
+    fun noSetupOfflineRecoveryRevalidatesConsentBeforePermissions() = runTest {
+        assertNoSetupOfflineRecoveryFailure(
+            failure = CompanionApiException.ConsentRequired,
+            expectedMessage =
+                "Murph needs your latest health consent. Complete it at withmurph.ai, then try again.",
+        )
+    }
+
+    @Test
+    fun noSetupOfflineRecoveryEnablesPermissionsOnlyAfterBackendValidation() = runTest {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.session.start()
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.api.statusSources.isEmpty())
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.api.intents.isEmpty())
+        fixture.session.cancelHealthPermissionFlow()
     }
 
     @Test
@@ -1066,6 +1120,34 @@ class AppSessionTest {
         assertEquals(InstantValue(now.toEpochMilli()), fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+    }
+
+    private suspend fun assertNoSetupOfflineRecoveryFailure(
+        failure: CompanionApiException,
+        expectedMessage: String,
+    ) {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.session.start()
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.api.statusSources.isEmpty())
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.api.statusError = failure
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        val rendered = fixture.session.state.value.phase as AppPhase.Failed
+        assertEquals(expectedMessage, rendered.message)
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
+        assertFalse(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.connectCalls)
+        assertEquals(0, fixture.health.syncCalls)
     }
 
     private fun fixture(

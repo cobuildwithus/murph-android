@@ -569,8 +569,7 @@ class AppSession(
                     }
                     false
                 } else if (
-                    !_state.value.authVerifiedOnline &&
-                    healthWasRequested()
+                    !_state.value.authVerifiedOnline
                 ) {
                     reconcile(force = true)
                     false

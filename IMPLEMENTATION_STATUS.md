@@ -8,6 +8,8 @@
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
 - Transactional Junction Health Connect setup and permission recovery, including foreground preservation of an owned Connect attempt and authoritative sign-out/member-switch cancellation, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, and setup-time history permission.
 - Current-member and backend-consent preflight before health uploads, plus account-switch, reinstall, incomplete-setup, stale-session, and fail-closed sign-out safeguards. Sign-out atomically records a durable tombstone and invalidates setup authorization before waiting on startup or touching either SDK; process reconstruction finishes Junction-first, Privy-second teardown before restoration.
+- Offline-to-online restoration revalidates backend membership and consent before setup, including sessions with no prior Health Connect marker.
+- Fault-injected preferences coverage proving failed durable revocation and sign-out commits restore their process-visible authorization snapshot.
 - Current-setup backend-receipt sync-state derivation with 36-hour and 72-hour thresholds, including rejection of receipts predating the setup boundary and an actionable no-receipt state after 72 hours.
 - Offline-safe local permission reconciliation so complete revocation overrides cached backend status and exposes reconnect without starting network or SDK health work.
 - Compose login, setup, status, WHOOP guidance, consent, settings, and failure

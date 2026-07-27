@@ -2,14 +2,19 @@ package ai.withmurph.companion.storage
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.LocalState
 import java.util.UUID
 
-class SharedPreferencesLocalState(context: Context) : LocalState {
-    private val preferences = context.getSharedPreferences(
-        "murph_companion_state",
-        Context.MODE_PRIVATE,
+class SharedPreferencesLocalState internal constructor(
+    private val preferences: SharedPreferences,
+) : LocalState {
+    constructor(context: Context) : this(
+        context.getSharedPreferences(
+            "murph_companion_state",
+            Context.MODE_PRIVATE,
+        ),
     )
 
     override val installationId: String
@@ -40,20 +45,35 @@ class SharedPreferencesLocalState(context: Context) : LocalState {
         get() = preferences.getBoolean(KEY_SIGN_OUT_PENDING, false)
 
     @SuppressLint("ApplySharedPref")
-    override fun revokeHealthSetupAuthorization(): Boolean =
-        preferences.edit()
+    override fun revokeHealthSetupAuthorization(): Boolean {
+        val requestedAt = healthAccessRequestedAt
+        val receivedAt = lastKnownDataReceivedAt
+        val committed = preferences.edit()
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .commit()
+        if (!committed) {
+            restoreAuthorizationSnapshot(requestedAt, receivedAt)
+        }
+        return committed
+    }
 
     @SuppressLint("ApplySharedPref")
-    override fun beginSignOut(): Boolean =
+    override fun beginSignOut(): Boolean {
+        val requestedAt = healthAccessRequestedAt
+        val receivedAt = lastKnownDataReceivedAt
+        val wasSignOutPending = signOutPending
         // One durable boundary records the request and revokes health restoration.
-        preferences.edit()
+        val committed = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .commit()
+        if (!committed) {
+            restoreAuthorizationSnapshot(requestedAt, receivedAt, wasSignOutPending)
+        }
+        return committed
+    }
 
     @SuppressLint("ApplySharedPref")
     override fun completeSignOut(): Boolean {
@@ -84,8 +104,31 @@ class SharedPreferencesLocalState(context: Context) : LocalState {
 
     private fun android.content.SharedPreferences.writeInstant(key: String, value: InstantValue?) {
         edit().apply {
-            if (value == null) remove(key) else putLong(key, value.epochMilliseconds)
+            writeInstant(key, value)
         }.apply()
+    }
+
+    @SuppressLint("ApplySharedPref")
+    private fun restoreAuthorizationSnapshot(
+        requestedAt: InstantValue?,
+        receivedAt: InstantValue?,
+        pendingSignOut: Boolean? = null,
+    ) {
+        preferences.edit().apply {
+            writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
+            writeInstant(KEY_LAST_DATA_RECEIVED_AT, receivedAt)
+            if (pendingSignOut != null) {
+                if (pendingSignOut) {
+                    putBoolean(KEY_SIGN_OUT_PENDING, true)
+                } else {
+                    remove(KEY_SIGN_OUT_PENDING)
+                }
+            }
+        }.commit()
+    }
+
+    private fun SharedPreferences.Editor.writeInstant(key: String, value: InstantValue?) {
+        if (value == null) remove(key) else putLong(key, value.epochMilliseconds)
     }
 
     private companion object {
