@@ -959,6 +959,73 @@ class AppSessionTest {
     }
 
     @Test
+    fun foregroundMemberSwitchCannotRetryOldMemberAfterInFlightSessionLoss() = runTest {
+        val oldMemberKey = "did:privy:old-member"
+        val newMemberKey = "did:privy:new-member"
+        val fixture = fixture(memberKey = oldMemberKey)
+        fixture.localState.memberKey = oldMemberKey
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.maximumSignInCalls = 1
+        val syncGate = CompletableDeferred<Unit>()
+        fixture.health.syncGate = syncGate
+        fixture.health.syncError = IllegalStateException("vendor session lost")
+        fixture.health.syncErrorOnCall = 1
+        fixture.health.loseSessionOnSyncError = true
+        val start = async { fixture.session.start() }
+        fixture.health.syncEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(newMemberKey, verifiedOnline = true)
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+
+        syncGate.complete(Unit)
+        start.await()
+        foreground.await()
+
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(1, fixture.health.configureCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(newMemberKey, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
+    fun sameMemberInFlightSessionLossStillGetsOneBoundedRetry() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.maximumSignInCalls = 2
+        fixture.health.syncError = IllegalStateException("vendor session lost")
+        fixture.health.syncErrorOnCall = 1
+        fixture.health.loseSessionOnSyncError = true
+
+        fixture.session.start()
+
+        assertEquals(
+            listOf(ConnectionIntent.Resume, ConnectionIntent.Resume),
+            fixture.api.intents,
+        )
+        assertEquals(2, fixture.health.identifyCalls)
+        assertEquals(2, fixture.health.configureCalls)
+        assertEquals(2, fixture.health.syncCalls)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
     fun processScopedStartDoesNotRebootTheSessionForActivityRecreation() = runTest {
         val fixture = fixture()
 
@@ -2037,9 +2104,10 @@ class AppSessionTest {
             intents += request.connectionIntent
             events += "token-${request.connectionIntent.wireValue}"
             maximumSignInCalls?.let { maximum ->
-                check(intents.size <= maximum) {
-                    "Unexpected extra Junction sign-in token request."
-                }
+                assertTrue(
+                    "Unexpected extra Junction sign-in token request.",
+                    intents.size <= maximum,
+                )
             }
             if (intents.size == signInGateOnCall) {
                 signInGateEntered.complete(Unit)
@@ -2077,8 +2145,12 @@ class AppSessionTest {
         var configureError: Throwable? = null
         var connectError: Throwable? = null
         var syncError: Throwable? = null
+        var syncErrorOnCall: Int? = null
+        var loseSessionOnSyncError = false
         var connectGate: CompletableDeferred<Unit>? = null
         val connectEntered = CompletableDeferred<Unit>()
+        var syncGate: CompletableDeferred<Unit>? = null
+        val syncEntered = CompletableDeferred<Unit>()
         var requireCurrentProcessSetupBeforeSync = false
         private var identifiedInCurrentProcess = false
         private var configuredInCurrentProcess = false
@@ -2132,7 +2204,14 @@ class AppSessionTest {
             }
             syncCalls += 1
             events += "sync"
-            syncError?.let { throw it }
+            syncEntered.complete(Unit)
+            syncGate?.await()
+            syncError?.takeIf {
+                syncErrorOnCall == null || syncErrorOnCall == syncCalls
+            }?.let { error ->
+                if (loseSessionOnSyncError) loseLiveSession()
+                throw error
+            }
         }
 
         fun loseLiveSession() {

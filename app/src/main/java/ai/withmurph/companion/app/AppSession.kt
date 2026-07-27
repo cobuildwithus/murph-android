@@ -509,6 +509,14 @@ class AppSession(
             val needsHealthReconciliation =
                 healthMutex.withLock { syncAndRefresh(epoch) }
             if (needsHealthReconciliation) {
+                if (
+                    epoch != sessionEpoch ||
+                    authState.memberKey != currentMemberKey ||
+                    authState.memberKey != localState.memberKey ||
+                    _state.value.phase != AppPhase.Ready
+                ) {
+                    return
+                }
                 if (canRetryLostHealthSession) {
                     _state.update { current ->
                         current.copy(phase = AppPhase.Launching, healthMessage = null)
@@ -704,6 +712,12 @@ class AppSession(
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
+                if (
+                    epoch != sessionEpoch ||
+                    _state.value.phase != AppPhase.Ready
+                ) {
+                    return false
+                }
                 if (!health.isSignedIn()) return true
                 // Status refresh below still reports the last backend-confirmed receipt.
             }
