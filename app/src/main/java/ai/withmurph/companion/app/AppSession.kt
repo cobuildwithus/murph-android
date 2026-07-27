@@ -233,9 +233,13 @@ class AppSession(
     suspend fun syncNow() {
         if (
             _state.value.phase != AppPhase.Ready ||
-            !healthWasRequested() ||
-            health.grantedResourceCount() == 0
+            !healthWasRequested()
         ) return
+        if (!_state.value.authVerifiedOnline) {
+            reconcile(force = true)
+            return
+        }
+        if (health.grantedResourceCount() == 0) return
         healthMutex.withLock {
             val epoch = sessionEpoch
             syncAndRefresh(epoch)
@@ -534,6 +538,12 @@ class AppSession(
                             healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
                         )
                     }
+                    false
+                } else if (
+                    !_state.value.authVerifiedOnline &&
+                    healthWasRequested()
+                ) {
+                    reconcile(force = true)
                     false
                 } else {
                     _state.update { it.copy(authVerifiedOnline = true) }

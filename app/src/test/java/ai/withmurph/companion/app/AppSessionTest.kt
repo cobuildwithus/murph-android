@@ -375,6 +375,73 @@ class AppSessionTest {
     }
 
     @Test
+    fun foregroundRecoveryResumesConfiguresAndIdentifiesBeforeSync() = runTest {
+        val fixture = offlineRestoredFixture()
+
+        fixture.session.start()
+        assertOfflineRestoreDidNotReachHealth(fixture)
+        fixture.events.clear()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(
+            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            fixture.events,
+        )
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(1, fixture.health.configureCalls)
+        assertEquals(1, fixture.health.syncCalls)
+
+        fixture.session.start()
+
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(1, fixture.health.identifyCalls)
+    }
+
+    @Test
+    fun explicitSyncRecoveryResumesConfiguresAndIdentifiesBeforeSync() = runTest {
+        val fixture = offlineRestoredFixture()
+
+        fixture.session.start()
+        assertOfflineRestoreDidNotReachHealth(fixture)
+        fixture.events.clear()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+
+        fixture.session.syncNow()
+
+        assertEquals(
+            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            fixture.events,
+        )
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(1, fixture.health.configureCalls)
+        assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun offlineRecoveryReconnectRequirementTearsDownBeforeSync() = runTest {
+        val fixture = offlineRestoredFixture()
+
+        fixture.session.start()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+        fixture.events.clear()
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(listOf("token-resume", "sign-out"), fixture.events)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
     fun revokedHealthSetupTearsDownBeforeUnavailableAuthCanRestoreReady() = runTest {
         val fixture = fixture()
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
@@ -591,6 +658,27 @@ class AppSessionTest {
         return fixture
     }
 
+    private fun offlineRestoredFixture(): Fixture {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.requireCurrentProcessSetupBeforeSync = true
+        return fixture
+    }
+
+    private fun assertOfflineRestoreDidNotReachHealth(fixture: Fixture) {
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.api.intents.isEmpty())
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+    }
+
     private data class Fixture(
         val session: AppSession,
         val auth: FakeAuth,
@@ -659,12 +747,16 @@ class AppSessionTest {
         var signOutGate: CompletableDeferred<Unit>? = null
         val signOutEntered = CompletableDeferred<Unit>()
         var signOutError: Throwable? = null
+        var requireCurrentProcessSetupBeforeSync = false
+        private var identifiedInCurrentProcess = false
+        private var configuredInCurrentProcess = false
 
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
         override fun isSignedIn(): Boolean = signedIn
         override fun configure() {
             configureCalls += 1
+            configuredInCurrentProcess = true
             events += "configure"
         }
         override fun grantedResourceCount(): Int = grantedCount
@@ -673,6 +765,7 @@ class AppSessionTest {
             assertTrue(memberKey.isNotBlank())
             assertEquals("junction-token", authenticate())
             identifyCalls += 1
+            identifiedInCurrentProcess = true
             events += "identify"
             identifyEntered.complete(Unit)
             identifyGate?.await()
@@ -688,6 +781,14 @@ class AppSessionTest {
         override suspend fun refreshPermissionState() = Unit
 
         override suspend fun syncAllGrantedResources() {
+            if (requireCurrentProcessSetupBeforeSync) {
+                check(identifiedInCurrentProcess) {
+                    "Junction sync started before process-local identification."
+                }
+                check(configuredInCurrentProcess) {
+                    "Junction sync started before process-local configuration."
+                }
+            }
             syncCalls += 1
             events += "sync"
         }
