@@ -36,13 +36,33 @@ class SharedPreferencesLocalState(context: Context) : LocalState {
             preferences.writeInstant(KEY_LAST_DATA_RECEIVED_AT, value)
         }
 
+    override val signOutPending: Boolean
+        get() = preferences.getBoolean(KEY_SIGN_OUT_PENDING, false)
+
     @SuppressLint("ApplySharedPref")
-    override fun clearHealthSetupAuthorization(): Boolean =
-        // Sign-out must persist this revocation before either SDK is touched.
+    override fun beginSignOut(): Boolean =
+        // One durable boundary records the request and revokes health restoration.
         preferences.edit()
+            .putBoolean(KEY_SIGN_OUT_PENDING, true)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .commit()
+
+    @SuppressLint("ApplySharedPref")
+    override fun completeSignOut(): Boolean {
+        val committed = preferences.edit()
+            .remove(KEY_MEMBER_KEY)
+            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_SIGN_OUT_PENDING)
+            .commit()
+        if (!committed) {
+            // SharedPreferences updates memory before reporting a disk failure.
+            // Reassert the fail-closed tombstone for the next startup attempt.
+            preferences.edit().putBoolean(KEY_SIGN_OUT_PENDING, true).commit()
+        }
+        return committed
+    }
 
     override fun clearMemberScopedState() {
         preferences.edit()
@@ -66,5 +86,6 @@ class SharedPreferencesLocalState(context: Context) : LocalState {
         const val KEY_MEMBER_KEY = "member_key"
         const val KEY_HEALTH_ACCESS_REQUESTED_AT = "health_access_requested_at"
         const val KEY_LAST_DATA_RECEIVED_AT = "last_data_received_at"
+        const val KEY_SIGN_OUT_PENDING = "sign_out_pending"
     }
 }

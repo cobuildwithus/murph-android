@@ -131,8 +131,9 @@ The app asks for Health Connect history access during initial setup where suppor
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
-- Signing out synchronously invalidates the durable health-setup marker, then
-  tears down the local Junction SDK before ending the Privy session.
+- Signing out atomically records a durable pending-sign-out tombstone and
+  invalidates health restoration before waiting on other app work. Startup
+  finishes Junction-first, Privy-second teardown before any session restore.
 
 ## Release requirements
 

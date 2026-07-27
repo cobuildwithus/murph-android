@@ -40,8 +40,10 @@ interface LocalState {
     var memberKey: String?
     var healthAccessRequestedAt: InstantValue?
     var lastKnownDataReceivedAt: InstantValue?
+    val signOutPending: Boolean
 
-    fun clearHealthSetupAuthorization(): Boolean
+    fun beginSignOut(): Boolean
+    fun completeSignOut(): Boolean
     fun clearMemberScopedState()
 }
 

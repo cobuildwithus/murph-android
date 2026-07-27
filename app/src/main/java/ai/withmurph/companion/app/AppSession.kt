@@ -66,6 +66,11 @@ class AppSession(
                     healthMessage = null,
                 )
             }
+            if (localState.signOutPending) {
+                finishPendingSignOut()
+                hasCompletedStartup = _state.value.phase != AppPhase.Launching
+                return@withLock
+            }
             if (!enforceHealthSetupAuthorization()) {
                 hasCompletedStartup = true
                 return@withLock
@@ -309,57 +314,22 @@ class AppSession(
     }
 
     suspend fun signOut() = withContext(NonCancellable) {
+        if (!localState.beginSignOut()) {
+            _state.update {
+                it.copy(
+                    phase = AppPhase.Failed(
+                        message = "We couldn't safely start signing out. Keep Murph open and try again.",
+                        canRetry = false,
+                        canSignOut = true,
+                    ),
+                )
+            }
+            return@withContext
+        }
+        invalidateSessionEpoch()
+        _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         startMutex.withLock {
-            if (_state.value.phase == AppPhase.Launching) return@withLock
-            _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
-            invalidateSessionEpoch()
-            if (!localState.clearHealthSetupAuthorization()) {
-                _state.update {
-                    it.copy(
-                        phase = AppPhase.Failed(
-                            message = "We couldn't safely start signing out. Keep Murph open and try again.",
-                            canRetry = false,
-                            canSignOut = true,
-                        ),
-                    )
-                }
-                return@withLock
-            }
-            try {
-                healthMutex.withLock { health.signOutSdk() }
-            } catch (_: Exception) {
-                _state.update {
-                    it.copy(
-                        phase = AppPhase.Failed(
-                            message = "We couldn't safely reset health sync. Keep Murph open and try again.",
-                            canRetry = false,
-                            canSignOut = true,
-                        ),
-                    )
-                }
-                return@withLock
-            }
-            try {
-                auth.signOut()
-            } catch (_: Exception) {
-                _state.update {
-                    it.copy(
-                        phase = AppPhase.Failed(
-                            message = "We couldn't finish signing out. Try once more.",
-                            canRetry = false,
-                            canSignOut = true,
-                        ),
-                    )
-                }
-                return@withLock
-            }
-            currentMemberKey = null
-            localState.clearMemberScopedState()
-            _state.value = AppUiState(
-                phase = AppPhase.NeedsLogin,
-                healthAvailability = health.availability(),
-                totalResourceCount = health.totalResourceCount,
-            )
+            if (localState.signOutPending) finishPendingSignOut()
         }
     }
 
@@ -587,6 +557,7 @@ class AppSession(
         _state.update { it.copy(isSyncingHealth = true, healthMessage = null) }
         try {
             if (fetchValidatedHealthStatus(epoch) == null) return
+            if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return
             try {
                 health.syncAllGrantedResources()
             } catch (error: CancellationException) {
@@ -598,6 +569,55 @@ class AppSession(
             fetchValidatedHealthStatus(epoch)
         } finally {
             _state.update { it.copy(isSyncingHealth = false) }
+        }
+    }
+
+    /** Called only while [startMutex] is held. */
+    private suspend fun finishPendingSignOut() {
+        if (!localState.signOutPending) return
+        invalidateSessionEpoch()
+        _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
+        try {
+            healthMutex.withLock { health.signOutSdk() }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            publishPendingSignOutFailure(
+                "We couldn't safely reset health sync. Keep Murph open and try again.",
+            )
+            return
+        }
+        try {
+            auth.signOut()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            publishPendingSignOutFailure("We couldn't finish signing out. Try once more.")
+            return
+        }
+        if (!localState.completeSignOut()) {
+            publishPendingSignOutFailure(
+                "We couldn't safely finish signing out. Keep Murph open and try again.",
+            )
+            return
+        }
+        currentMemberKey = null
+        _state.value = AppUiState(
+            phase = AppPhase.NeedsLogin,
+            healthAvailability = health.availability(),
+            totalResourceCount = health.totalResourceCount,
+        )
+    }
+
+    private fun publishPendingSignOutFailure(message: String) {
+        _state.update {
+            it.copy(
+                phase = AppPhase.Failed(
+                    message = message,
+                    canRetry = false,
+                    canSignOut = true,
+                ),
+            )
         }
     }
 
@@ -651,6 +671,7 @@ class AppSession(
             }
         }
 
+        if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return null
         val status = try {
             api.fetchSyncStatus(HEALTH_CONNECT_SOURCE)
         } catch (error: CancellationException) {
