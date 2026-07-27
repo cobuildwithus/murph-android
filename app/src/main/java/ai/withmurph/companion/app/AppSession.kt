@@ -510,11 +510,9 @@ class AppSession(
                 healthMutex.withLock { syncAndRefresh(epoch) }
             if (needsHealthReconciliation) {
                 if (
-                    epoch != sessionEpoch ||
+                    !ownsVerifiedHealthWork(epoch) ||
                     authState.memberKey != currentMemberKey ||
-                    authState.memberKey != localState.memberKey ||
-                    _state.value.phase != AppPhase.Ready ||
-                    !_state.value.authVerifiedOnline
+                    authState.memberKey != localState.memberKey
                 ) {
                     return
                 }
@@ -695,11 +693,11 @@ class AppSession(
     }
 
     private suspend fun syncAndRefresh(epoch: Int): Boolean {
-        if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return false
+        if (!ownsVerifiedHealthWork(epoch)) return false
         _state.update { it.copy(isSyncingHealth = true, healthMessage = null) }
         try {
             if (fetchValidatedHealthStatus(epoch) == null) return false
-            if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return false
+            if (!ownsVerifiedHealthWork(epoch)) return false
             if (health.grantedResourceCount() == 0) {
                 publishPermissionAwareHealthState(
                     status = cachedHealthStatus(),
@@ -713,17 +711,11 @@ class AppSession(
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                if (
-                    epoch != sessionEpoch ||
-                    _state.value.phase != AppPhase.Ready ||
-                    !_state.value.authVerifiedOnline
-                ) {
-                    return false
-                }
+                if (!ownsVerifiedHealthWork(epoch)) return false
                 if (!health.isSignedIn()) return true
                 // Status refresh below still reports the last backend-confirmed receipt.
             }
-            if (epoch != sessionEpoch) return false
+            if (!ownsVerifiedHealthWork(epoch)) return false
             if (!health.isSignedIn()) return true
             fetchValidatedHealthStatus(epoch)
             return false
@@ -731,6 +723,11 @@ class AppSession(
             _state.update { it.copy(isSyncingHealth = false) }
         }
     }
+
+    private fun ownsVerifiedHealthWork(epoch: Int): Boolean =
+        epoch == sessionEpoch &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.authVerifiedOnline
 
     /** Called only while [startMutex] is held. */
     private suspend fun finishPendingSignOut() {
@@ -873,7 +870,6 @@ class AppSession(
         publishPermissionAwareHealthState(
             status = status.copy(lastDataReceivedAt = qualifyingReceipt),
             message = null,
-            authVerifiedOnline = true,
         )
         return status
     }
