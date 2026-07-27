@@ -687,6 +687,108 @@ class AppSessionTest {
     }
 
     @Test
+    fun foregroundPrivyLogoutWaitsForLateResumeIdentificationBeforeTeardown() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val identifyGate = CompletableDeferred<Unit>()
+        fixture.health.identifyGate = identifyGate
+        val start = async { fixture.session.start() }
+        fixture.health.identifyEntered.await()
+        fixture.auth.state = AuthSessionState.SignedOut
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+
+        identifyGate.complete(Unit)
+        start.await()
+        foreground.await()
+
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(null, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+    }
+
+    @Test
+    fun staleReconnectRequiredCannotReplaceForegroundPrivyLogout() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(2)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val tokenGate = CompletableDeferred<Unit>()
+        fixture.api.signInGate = tokenGate
+        fixture.api.signInGateOnCall = 1
+        val start = async { fixture.session.start() }
+        fixture.api.signInGateEntered.await()
+        fixture.auth.state = AuthSessionState.SignedOut
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+        tokenGate.complete(Unit)
+        start.await()
+        foreground.await()
+
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(null, fixture.localState.memberKey)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+    }
+
+    @Test
+    fun staleBootstrapFailuresCannotReplaceForegroundPrivyLogout() = runTest {
+        listOf(
+            CompanionApiException.NoAccount,
+            CompanionApiException.ConsentRequired,
+            CompanionApiException.Network,
+        ).forEach { failure ->
+            val fixture = fixture()
+            val statusGate = CompletableDeferred<Unit>()
+            fixture.api.statusGate = statusGate
+            val start = async { fixture.session.start() }
+            fixture.api.statusEntered.await()
+            fixture.auth.state = AuthSessionState.SignedOut
+
+            fixture.session.didEnterBackground()
+            val foreground = async { fixture.session.didBecomeActive() }
+            runCurrent()
+            fixture.api.statusError = failure
+            statusGate.complete(Unit)
+            start.await()
+            foreground.await()
+
+            assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+            assertFalse(fixture.health.signedIn)
+            assertEquals(null, fixture.localState.memberKey)
+            assertEquals(null, fixture.localState.healthAccessRequestedAt)
+            assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+            assertTrue(fixture.api.intents.isEmpty())
+            assertEquals(0, fixture.health.identifyCalls)
+            assertEquals(0, fixture.health.configureCalls)
+            assertEquals(0, fixture.health.syncCalls)
+            assertEquals(1, fixture.health.signOutCalls)
+        }
+    }
+
+    @Test
     fun memberSwitchClosesTheOldSdkBoundaryBeforePublishingReady() = runTest {
         val fixture = fixture(memberKey = "did:privy:new-member")
         fixture.localState.memberKey = "did:privy:old-member"

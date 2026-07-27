@@ -429,22 +429,26 @@ class AppSession(
                 if (epoch != sessionEpoch) return
                 health.configure()
             } catch (error: CompanionApiException.ReconnectRequired) {
+                if (epoch != sessionEpoch) return
                 if (!resetHealthSdkAtTrustBoundary()) return
                 localState.healthAccessRequestedAt = null
                 localState.lastKnownDataReceivedAt = null
             } catch (error: CompanionApiException.Unauthorized) {
+                if (epoch != sessionEpoch) return
                 publishAuthoritativeResumeFailure(
                     message = connectionErrorMessage(error),
                     canRetry = false,
                 )
                 return
             } catch (error: CompanionApiException.NoAccount) {
+                if (epoch != sessionEpoch) return
                 publishAuthoritativeResumeFailure(
                     message = connectionErrorMessage(error),
                     canRetry = false,
                 )
                 return
             } catch (error: CompanionApiException.ConsentRequired) {
+                if (epoch != sessionEpoch) return
                 publishAuthoritativeResumeFailure(
                     message = connectionErrorMessage(error),
                     canRetry = true,
@@ -453,6 +457,7 @@ class AppSession(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (epoch != sessionEpoch) return
                 _state.update {
                     it.copy(
                         phase = AppPhase.Failed(
@@ -573,7 +578,11 @@ class AppSession(
         }
         return when (authState) {
             AuthSessionState.SignedOut -> {
-                enterSignedOut()
+                invalidateSessionEpoch()
+                _state.update {
+                    it.copy(phase = AppPhase.Launching, healthMessage = null)
+                }
+                startMutex.withLock { enterSignedOut() }
                 false
             }
             AuthSessionState.TemporarilyUnavailable -> {
@@ -918,24 +927,28 @@ class AppSession(
         } catch (error: CancellationException) {
             throw error
         } catch (error: CompanionApiException.NoAccount) {
+            if (epoch != sessionEpoch) return false
             publishBackendBootstrapFailure(
                 message = "This sign-in isn't linked to an active Murph account.",
                 canRetry = false,
             )
             false
         } catch (error: CompanionApiException.ConsentRequired) {
+            if (epoch != sessionEpoch) return false
             publishBackendBootstrapFailure(
                 message = CONSENT_REQUIRED_MESSAGE,
                 canRetry = true,
             )
             false
         } catch (error: CompanionApiException.Unauthorized) {
+            if (epoch != sessionEpoch) return false
             publishBackendBootstrapFailure(
                 message = "Your session needs a refresh. Sign in again.",
                 canRetry = false,
             )
             false
         } catch (_: Exception) {
+            if (epoch != sessionEpoch) return false
             publishBackendBootstrapFailure(
                 message = "Murph couldn't verify your account. Check your connection and try again.",
                 canRetry = true,
