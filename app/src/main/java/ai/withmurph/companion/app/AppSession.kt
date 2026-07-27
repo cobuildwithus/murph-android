@@ -300,13 +300,13 @@ class AppSession(
             }
             return
         }
-        if (!reconcileForegroundAuth()) {
-            if (
-                _state.value.phase != AppPhase.Ready ||
-                _state.value.authVerifiedOnline
-            ) {
-                needsForegroundRefresh = false
-            }
+        val authAllowsSync = reconcileForegroundAuth()
+        if (ownsPendingHealthConnection()) {
+            needsForegroundRefresh = false
+            return
+        }
+        if (_state.value.phase != AppPhase.Ready) {
+            needsForegroundRefresh = false
             return
         }
         try {
@@ -339,6 +339,7 @@ class AppSession(
             )
         }
         if (
+            authAllowsSync &&
             _state.value.phase == AppPhase.Ready &&
             healthWasRequested() &&
             grantedResourceCount > 0
@@ -500,12 +501,23 @@ class AppSession(
             return
         }
         currentMemberKey = memberKey
+        val grantedResourceCount = health.grantedResourceCount()
+        val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
                 authVerifiedOnline = false,
-                healthSync = deriveCachedHealthState(),
-                healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
+                healthSync = if (needsPermissionRecovery) {
+                    HealthSyncState.NotConnected
+                } else {
+                    deriveCachedHealthState()
+                },
+                grantedResourceCount = grantedResourceCount,
+                healthMessage = if (needsPermissionRecovery) {
+                    HEALTH_PERMISSION_RECOVERY_MESSAGE
+                } else {
+                    "You're offline. Saved sync status is shown until Murph reconnects."
+                },
             )
         }
     }
@@ -533,12 +545,20 @@ class AppSession(
                 false
             }
             is AuthSessionState.SignedIn -> {
+                val pendingOwnsHealthIdentity =
+                    ownsPendingHealthConnection(authState.memberKey)
                 if (
                     authState.memberKey != currentMemberKey ||
                     authState.memberKey != localState.memberKey ||
-                    (health.isSignedIn() && !healthWasRequested())
+                    (
+                        health.isSignedIn() &&
+                            !healthWasRequested() &&
+                            !pendingOwnsHealthIdentity
+                    )
                 ) {
                     reconcile(force = true)
+                    false
+                } else if (pendingOwnsHealthIdentity) {
                     false
                 } else if (!authState.verifiedOnline) {
                     _state.update { current ->
@@ -921,9 +941,21 @@ class AppSession(
 
     private fun healthWasRequested(): Boolean = healthRequestedAt() != null
 
+    private fun ownsPendingHealthConnection(memberKey: String? = currentMemberKey): Boolean {
+        val pending = pendingHealthConnection ?: return false
+        return pending.epoch == sessionEpoch &&
+            pending.memberKey == memberKey &&
+            pending.memberKey == currentMemberKey &&
+            pending.memberKey == localState.memberKey &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.isConnectingHealth &&
+            !localState.signOutPending
+    }
+
     private fun invalidateSessionEpoch() {
         sessionEpoch += 1
         pendingHealthConnection = null
+        _state.update { it.copy(isConnectingHealth = false) }
     }
 
     private fun connectionErrorMessage(error: Exception): String = when (error) {

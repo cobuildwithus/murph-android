@@ -18,7 +18,9 @@ import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -268,6 +270,77 @@ class AppSessionTest {
         assertEquals(statusCount, fixture.api.statusSources.size)
         assertTrue(fixture.session.state.value.isConnectingHealth)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+    }
+
+    @Test
+    fun foregroundReturnPreservesInitialConnectIdentity() = runTest {
+        assertForegroundReturnPreservesConnectIdentity(isRecovery = false)
+    }
+
+    @Test
+    fun foregroundReturnPreservesPermissionRecoveryConnectIdentity() = runTest {
+        assertForegroundReturnPreservesConnectIdentity(isRecovery = true)
+    }
+
+    @Test
+    fun signOutInvalidatesBlockedConnectAndClearsConnectingUi() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        val connectGate = CompletableDeferred<Unit>()
+        fixture.health.connectGate = connectGate
+        val completion = async {
+            fixture.session.completeHealthPermissionFlow(permissionRequestCompleted = true)
+        }
+        fixture.health.connectEntered.await()
+
+        val signOut = launch { fixture.session.signOut() }
+        runCurrent()
+
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+
+        connectGate.complete(Unit)
+        assertFalse(completion.await())
+        signOut.join()
+
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.health.signedIn)
+    }
+
+    @Test
+    fun memberSwitchInvalidatesBlockedConnectAndClearsConnectingUi() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        val connectGate = CompletableDeferred<Unit>()
+        fixture.health.connectGate = connectGate
+        val completion = async {
+            fixture.session.completeHealthPermissionFlow(permissionRequestCompleted = true)
+        }
+        fixture.health.connectEntered.await()
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = "did:privy:new-member",
+            verifiedOnline = true,
+        )
+        fixture.session.didEnterBackground()
+        val foreground = launch { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+
+        connectGate.complete(Unit)
+        assertFalse(completion.await())
+        foreground.join()
+
+        assertEquals("did:privy:new-member", fixture.localState.memberKey)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.health.signedIn)
+        assertFalse(fixture.api.intents.contains(ConnectionIntent.Resume))
     }
 
     @Test
@@ -590,6 +663,8 @@ class AppSessionTest {
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.localState.lastKnownDataReceivedAt =
+            InstantValue(now.minusSeconds(600).toEpochMilli())
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.health.signedIn = true
 
@@ -599,8 +674,69 @@ class AppSessionTest {
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertEquals(fixture.health.totalResourceCount, fixture.session.state.value.grantedResourceCount)
         assertEquals(0, fixture.health.syncCalls)
         assertTrue(fixture.api.statusSources.isEmpty())
+    }
+
+    @Test
+    fun unavailableAuthStillReconcilesCompletePermissionRevocation() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.api.status = CompanionSyncStatus(now.minusSeconds(600), emptyMap())
+        fixture.session.start()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.health.grantedCount = 0
+        val tokenCount = fixture.api.intents.size
+        val statusCount = fixture.api.statusSources.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        val syncCalls = fixture.health.syncCalls
+        val refreshCalls = fixture.health.refreshCalls
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(HEALTH_PERMISSION_RECOVERY_MESSAGE, fixture.session.state.value.healthMessage)
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(statusCount, fixture.api.statusSources.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(refreshCalls + 1, fixture.health.refreshCalls)
+    }
+
+    @Test
+    fun unavailableAuthColdRestoreCannotResurrectSyncedAfterRevocation() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.localState.lastKnownDataReceivedAt =
+            InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = 0
+
+        fixture.session.start()
+
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(HEALTH_PERMISSION_RECOVERY_MESSAGE, fixture.session.state.value.healthMessage)
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
+        assertTrue(fixture.api.intents.isEmpty())
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
     }
 
     @Test
@@ -887,6 +1023,51 @@ class AppSessionTest {
         assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
     }
 
+    private suspend fun assertForegroundReturnPreservesConnectIdentity(
+        isRecovery: Boolean,
+    ) = coroutineScope {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        if (isRecovery) {
+            fixture.localState.memberKey = MEMBER_KEY
+            fixture.localState.healthAccessRequestedAt =
+                InstantValue(now.minusSeconds(3_600).toEpochMilli())
+            fixture.health.signedIn = true
+            fixture.health.grantedCount = 0
+        }
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        val connectGate = CompletableDeferred<Unit>()
+        fixture.health.connectGate = connectGate
+        val completion = async {
+            fixture.session.completeHealthPermissionFlow(permissionRequestCompleted = true)
+        }
+        fixture.health.connectEntered.await()
+        val signOutCalls = fixture.health.signOutCalls
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val refreshCalls = fixture.health.refreshCalls
+        val syncCalls = fixture.health.syncCalls
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(signOutCalls, fixture.health.signOutCalls)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(refreshCalls, fixture.health.refreshCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertTrue(fixture.session.state.value.isConnectingHealth)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+
+        connectGate.complete(Unit)
+        assertTrue(completion.await())
+
+        assertEquals(InstantValue(now.toEpochMilli()), fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+    }
+
     private fun fixture(
         now: Instant = Instant.parse("2026-07-25T18:00:00Z"),
         memberKey: String = MEMBER_KEY,
@@ -1039,6 +1220,7 @@ class AppSessionTest {
         var configureCalls = 0
         var connectCalls = 0
         var syncCalls = 0
+        var refreshCalls = 0
         var signOutCalls = 0
         var grantedCount = 0
         var identifyGate: CompletableDeferred<Unit>? = null
@@ -1086,7 +1268,9 @@ class AppSessionTest {
             grantedCount = totalResourceCount
         }
 
-        override suspend fun refreshPermissionState() = Unit
+        override suspend fun refreshPermissionState() {
+            refreshCalls += 1
+        }
 
         override suspend fun syncAllGrantedResources() {
             if (requireCurrentProcessSetupBeforeSync) {
@@ -1154,5 +1338,7 @@ class AppSessionTest {
 
     private companion object {
         const val MEMBER_KEY = "did:privy:user_123"
+        const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
+            "Health Connect access is off. Reconnect and choose at least one category."
     }
 }

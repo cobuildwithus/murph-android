@@ -125,6 +125,8 @@ The app asks for Health Connect history access during initial setup where suppor
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a
   fresh `connect` transaction can begin.
+- Foreground return preserves a matching in-flight `connect` transaction;
+  sign-out or an authoritative member change still invalidates and tears it down.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
 - Every app-triggered foreground sync revalidates the current Privy member and
   backend consent before Junction can read or upload health data.
@@ -134,6 +136,8 @@ The app asks for Health Connect history access during initial setup where suppor
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
+- Complete local permission revocation renders Not connected even while online
+  account verification is temporarily unavailable.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
 - Signing out atomically records a durable pending-sign-out tombstone and
