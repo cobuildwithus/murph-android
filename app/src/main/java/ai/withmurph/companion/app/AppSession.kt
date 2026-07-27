@@ -111,13 +111,16 @@ class AppSession(
                     if (fetchValidatedHealthStatus(validatedEpoch) == null) {
                         return false
                     }
+                    if (validatedEpoch != sessionEpoch) return false
                     currentAuthOwnershipLoss(memberKey)?.let { authState ->
                         localState.lastKnownDataReceivedAt = receiptBeforePreflight
                         publishPermissionAwareHealthState(
                             status = cachedHealthStatus(),
                             message = _state.value.healthMessage,
                         )
-                        authStateToReconcile = authState
+                        if (validatedEpoch == sessionEpoch) {
+                            authStateToReconcile = authState
+                        }
                         return@withLock false
                     }
                     if (!ownsHealthConnectionPreparation(memberKey, validatedEpoch)) {
@@ -158,8 +161,11 @@ class AppSession(
                             }
                             return false
                         }
+                        if (preparationEpoch != sessionEpoch) return false
                         currentAuthOwnershipLoss(memberKey)?.let { authState ->
-                            authStateToReconcile = authState
+                            if (preparationEpoch == sessionEpoch) {
+                                authStateToReconcile = authState
+                            }
                             return@withLock false
                         }
                         if (!ownsHealthConnectionPreparation(memberKey, preparationEpoch)) {
