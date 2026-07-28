@@ -15,6 +15,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
 import ai.withmurph.companion.app.AppPhase
@@ -82,15 +83,33 @@ class MainActivity : ComponentActivity() {
                 setLoginSnapshotProtection(appState.phase == AppPhase.NeedsLogin)
             }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
-                val requestId = appState.pendingHealthPermissionRequestId
-                if (
-                    requestId != null &&
-                    graph.session.consumeHealthPermissionLaunchRequest(requestId)
-                ) {
-                    if (canLaunchExternalFlow()) {
-                        healthPermissionLauncher.launch(Unit)
-                    } else {
-                        graph.session.cancelHealthPermissionFlow()
+                val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
+                lifecycle.withResumed {
+                    if (graph.session.consumeHealthPermissionLaunchRequest(requestId)) {
+                        try {
+                            healthPermissionLauncher.launch(Unit)
+                        } catch (_: Exception) {
+                            graph.session.cancelHealthPermissionFlow()
+                            graph.session.reportHealthConnectLaunchFailure(
+                                "Health Connect permissions couldn't be opened. Try again.",
+                            )
+                        }
+                    }
+                }
+            }
+            LaunchedEffect(appState.pendingAddressBookPermissionRequestId) {
+                val requestId = appState.pendingAddressBookPermissionRequestId
+                    ?: return@LaunchedEffect
+                lifecycle.withResumed {
+                    if (graph.session.consumeAddressBookPermissionLaunchRequest(requestId)) {
+                        try {
+                            contactsPermissionLauncher.launch(graph.contacts.readPermission)
+                        } catch (_: Exception) {
+                            graph.session.cancelAddressBookPermissionFlow()
+                            graph.session.reportAddressBookPermissionLaunchFailure(
+                                "Contacts permission couldn't be opened. Try again.",
+                            )
+                        }
                     }
                 }
             }
@@ -119,13 +138,7 @@ class MainActivity : ComponentActivity() {
                         onChangeLoginDestination = graph.login::changeDestination,
                         onConnectHealth = {
                             graph.applicationScope.launch {
-                                if (graph.session.prepareHealthConnection()) {
-                                    if (canLaunchExternalFlow()) {
-                                        healthPermissionLauncher.launch(Unit)
-                                    } else {
-                                        graph.session.cancelHealthPermissionFlow()
-                                    }
-                                }
+                                graph.session.prepareHealthConnection()
                             }
                         },
                         onOpenHealthConnect = ::openHealthConnect,
@@ -134,15 +147,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onShareAddressBook = {
                             graph.applicationScope.launch {
-                                if (graph.session.prepareAddressBookSharing()) {
-                                    if (canLaunchExternalFlow()) {
-                                        contactsPermissionLauncher.launch(
-                                            graph.contacts.readPermission,
-                                        )
-                                    } else {
-                                        graph.session.cancelAddressBookPermissionFlow()
-                                    }
-                                }
+                                graph.session.prepareAddressBookSharing()
                             }
                         },
                         onRefreshAddressBook = {

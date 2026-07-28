@@ -629,6 +629,27 @@ class AddressBookSessionTest {
     }
 
     @Test
+    fun memberSwitchBeforePermissionCompletionDoesNotReadContacts() = runTest {
+        val fixture = fixture()
+        fixture.api.statuses[MEMBER_TWO] = disabledStatus(revision = 9)
+        fixture.session.start()
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_TWO, verifiedOnline = true)
+
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(0, fixture.contacts.readCalls)
+        assertTrue(fixture.api.replacements.isEmpty())
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(MEMBER_TWO, fixture.localState.memberKey)
+        assertEquals(9, fixture.localState.addressBookRevision)
+        assertFalse(fixture.session.state.value.isAddressBookBusy)
+    }
+
+    @Test
     fun contactConsentRequiredRemainsRetryableWithoutSigningOut() = runTest {
         val fixture = fixture()
         fixture.session.start()
@@ -651,6 +672,199 @@ class AddressBookSessionTest {
             fixture.session.state.value.launchConsentRecovery?.phase,
         )
         assertEquals(listOf(MEMBER_ONE), fixture.api.launchConsentFetches)
+    }
+
+    @Test
+    fun preflightConsentRecoveryResumesOnlyTheAddressBookPermissionRequest() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        var blocked = true
+        fixture.api.beforeStatusReturn = { _, _ ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+        }
+
+        assertFalse(fixture.session.prepareAddressBookSharing())
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
+        assertEquals(0, fixture.contacts.readCalls)
+        assertTrue(fixture.api.replacements.isEmpty())
+
+        fixture.session.acceptLaunchConsent()
+
+        val requestId = fixture.session.state.value.pendingAddressBookPermissionRequestId
+        assertTrue(requestId != null)
+        assertTrue(fixture.session.state.value.isAddressBookBusy)
+        assertEquals(0, fixture.contacts.readCalls)
+        assertTrue(fixture.api.replacements.isEmpty())
+        assertTrue(fixture.session.consumeAddressBookPermissionLaunchRequest(requestId!!))
+        assertFalse(fixture.session.consumeAddressBookPermissionLaunchRequest(requestId))
+
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+        assertEquals(1, fixture.contacts.readCalls)
+        assertEquals(1, fixture.api.replacements.size)
+    }
+
+    @Test
+    fun stopRequestedDuringConsentAcceptanceReplacesTheOlderFollowUp() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+            },
+        )
+        fixture.session.start()
+        var blocked = true
+        fixture.api.beforeStatusReturn = { _, _ ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+        }
+        assertFalse(fixture.session.prepareAddressBookSharing())
+
+        val enteredAcceptance = CompletableDeferred<Unit>()
+        val releaseAcceptance = CompletableDeferred<Unit>()
+        fixture.api.launchConsentAcceptHandler = { _, request, current ->
+            if (!enteredAcceptance.isCompleted) {
+                enteredAcceptance.complete(Unit)
+                releaseAcceptance.await()
+            }
+            grantLaunchConsentScope(current, request.scope)
+        }
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        enteredAcceptance.await()
+
+        fixture.session.stopAddressBookSharing()
+        releaseAcceptance.complete(Unit)
+        acceptance.await()
+
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(5, fixture.api.deletions.single().second.mutation.baseRevision)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun stopConsentRecoveryReplaysTheExactDurableDeletionMutation() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+            },
+        )
+        fixture.session.start()
+        var blocked = true
+        fixture.api.deleteHandler = { memberKey, request ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+            disabledStatus(request.mutation.baseRevision + 1).also {
+                fixture.api.statuses[memberKey] = it
+            }
+        }
+
+        fixture.session.stopAddressBookSharing()
+
+        val savedMutation = fixture.localState.pendingAddressBookDeletion
+        assertTrue(savedMutation != null)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(2, fixture.api.deletions.size)
+        assertEquals(savedMutation, fixture.api.deletions[0].second.mutation)
+        assertEquals(savedMutation, fixture.api.deletions[1].second.mutation)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun permissionLossConsentRecoveryReplaysOnlyTheExactOwnedDeletion() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = false
+        var blocked = true
+        fixture.api.deleteHandler = { memberKey, request ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+            disabledStatus(request.mutation.baseRevision + 1).also {
+                fixture.api.statuses[memberKey] = it
+            }
+        }
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        val savedMutation = fixture.localState.pendingAddressBookDeletion
+        assertTrue(savedMutation != null)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(2, fixture.api.deletions.size)
+        assertEquals(savedMutation, fixture.api.deletions[0].second.mutation)
+        assertEquals(savedMutation, fixture.api.deletions[1].second.mutation)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(6, fixture.localState.addressBookRevision)
+    }
+
+    @Test
+    fun lateConsentRequiredAfterSignOutCannotReviveThePreviousMember() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        fixture.api.replaceHandler = { _, _ ->
+            entered.complete(Unit)
+            release.await()
+            throw CompanionApiException.ConsentRequired
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        entered.await()
+
+        fixture.session.signOut()
+        release.complete(Unit)
+
+        assertFalse(completion.await())
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
     }
 
     @Test
@@ -758,6 +972,11 @@ class AddressBookSessionTest {
         val launchConsentAcceptances =
             mutableListOf<Pair<String, LaunchConsentAcceptanceRequest>>()
         var launchConsentStatus = launchConsentStatus(granted = false)
+        var launchConsentAcceptHandler: (suspend (
+            String,
+            LaunchConsentAcceptanceRequest,
+            LaunchConsentStatus,
+        ) -> LaunchConsentStatus)? = null
         var beforeStatusReturn: suspend (Int, String) -> Unit = { _, _ -> }
         var replaceHandler: suspend (
             String,
@@ -793,17 +1012,12 @@ class AddressBookSessionTest {
             request: LaunchConsentAcceptanceRequest,
         ): LaunchConsentStatus {
             launchConsentAcceptances += memberKey to request
-            val launchScopes = launchConsentStatus.launchScopes.map {
-                if (it.scope == request.scope) {
-                    it.copy(granted = true, missingDocuments = emptyList())
-                } else {
-                    it
+            launchConsentAcceptHandler?.let { handler ->
+                return handler(memberKey, request, launchConsentStatus).also {
+                    launchConsentStatus = it
                 }
             }
-            launchConsentStatus = launchConsentStatus.copy(
-                launchGranted = launchScopes.all { it.granted },
-                launchScopes = launchScopes,
-            )
+            launchConsentStatus = grantLaunchConsentScope(launchConsentStatus, request.scope)
             return launchConsentStatus
         }
 
@@ -998,6 +1212,23 @@ class AddressBookSessionTest {
             revision = revision,
             storedContactCount = 0,
         )
+
+        fun grantLaunchConsentScope(
+            status: LaunchConsentStatus,
+            scope: LaunchConsentScope,
+        ): LaunchConsentStatus {
+            val launchScopes = status.launchScopes.map {
+                if (it.scope == scope) {
+                    it.copy(granted = true, missingDocuments = emptyList())
+                } else {
+                    it
+                }
+            }
+            return status.copy(
+                launchGranted = launchScopes.all { it.granted },
+                launchScopes = launchScopes,
+            )
+        }
 
         fun launchConsentStatus(granted: Boolean): LaunchConsentStatus {
             val legal = LaunchConsentDocument(

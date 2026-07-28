@@ -54,7 +54,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -107,8 +106,8 @@ private fun ReadyApp(
     var showsHealthConsent by rememberSaveable { mutableStateOf(false) }
     var showsAddressBookConsent by rememberSaveable { mutableStateOf(false) }
     var showsWhoopGuide by rememberSaveable { mutableStateOf(false) }
-    var connectAfterConsent by remember { mutableStateOf(false) }
-    var shareAddressBookAfterConsent by remember { mutableStateOf(false) }
+    var connectAfterConsent by rememberSaveable { mutableStateOf(false) }
+    var shareAddressBookAfterConsent by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(showsHealthConsent, connectAfterConsent) {
         if (!showsHealthConsent && connectAfterConsent) {
@@ -128,6 +127,15 @@ private fun ReadyApp(
             connectAfterConsent = false
         }
     }
+    LaunchedEffect(state.launchConsentRecovery != null) {
+        if (state.launchConsentRecovery != null) {
+            showsHealthConsent = false
+            showsAddressBookConsent = false
+            showsWhoopGuide = false
+            connectAfterConsent = false
+            shareAddressBookAfterConsent = false
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -144,15 +152,45 @@ private fun ReadyApp(
             when (selectedTab) {
                 AppTab.Home -> HomeScreen(
                     state = state,
-                    onConnectHealth = { showsHealthConsent = true },
+                    onConnectHealth = {
+                        if (state.launchConsentRecovery == null) {
+                            showsHealthConsent = true
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
                     onOpenHealthConnect = actions.onOpenHealthConnect,
-                    onShowWhoopGuide = { showsWhoopGuide = true },
-                    onSyncNow = actions.onSyncNow,
+                    onShowWhoopGuide = {
+                        if (state.launchConsentRecovery == null) {
+                            showsWhoopGuide = true
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
+                    onSyncNow = {
+                        if (state.launchConsentRecovery == null) {
+                            actions.onSyncNow()
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
                 )
                 AppTab.Settings -> SettingsScreen(
                     state = state,
-                    onShareAddressBook = { showsAddressBookConsent = true },
-                    onRefreshAddressBook = actions.onRefreshAddressBook,
+                    onShareAddressBook = {
+                        if (state.launchConsentRecovery == null) {
+                            showsAddressBookConsent = true
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
+                    onRefreshAddressBook = {
+                        if (state.launchConsentRecovery == null) {
+                            actions.onRefreshAddressBook()
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
                     onStopAddressBook = actions.onStopAddressBook,
                     onOpenAppSettings = actions.onOpenAppSettings,
                     onOpenHealthConnect = actions.onOpenHealthConnect,
@@ -199,7 +237,7 @@ private fun ReadyApp(
         }
     }
 
-    if (showsHealthConsent) {
+    if (showsHealthConsent && state.launchConsentRecovery == null) {
         ModalBottomSheet(
             onDismissRequest = { showsHealthConsent = false },
             modifier = Modifier.padding(top = 48.dp).fillMaxHeight(),
@@ -216,7 +254,7 @@ private fun ReadyApp(
         }
     }
 
-    if (showsAddressBookConsent) {
+    if (showsAddressBookConsent && state.launchConsentRecovery == null) {
         ModalBottomSheet(
             onDismissRequest = {
                 showsAddressBookConsent = false
@@ -236,7 +274,7 @@ private fun ReadyApp(
         }
     }
 
-    if (showsWhoopGuide) {
+    if (showsWhoopGuide && state.launchConsentRecovery == null) {
         ModalBottomSheet(
             onDismissRequest = { showsWhoopGuide = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -390,7 +428,7 @@ private fun LaunchConsentRecoveryContent(
             }
             LaunchConsentRecoveryPhase.Required -> {
                 MurphPrimaryButton(
-                    text = "I Consent",
+                    text = if (status?.launchGranted == true) "Continue" else "I Consent",
                     onClick = onAccept,
                     enabled = recovery.canAccept || status?.launchGranted == true,
                 )

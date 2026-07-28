@@ -34,6 +34,7 @@ data class AppUiState(
     val addressBookMessage: String? = null,
     val launchConsentRecovery: LaunchConsentRecoveryUiState? = null,
     val pendingHealthPermissionRequestId: Int? = null,
+    val pendingAddressBookPermissionRequestId: Int? = null,
 )
 
 enum class LaunchConsentRecoveryPhase {

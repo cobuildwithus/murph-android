@@ -75,8 +75,45 @@ class LaunchConsentApiContractTest {
                     ),
                 )
             },
+            {
+                parse(documents = listOf(document(), document(title = "Duplicate")))
+            },
+            {
+                parse(
+                    launchScopes = listOf(
+                        scope(
+                            "launch.legal",
+                            missing = listOf(document(id = "unknown")),
+                        ),
+                        scope("launch.health-data"),
+                    ),
+                )
+            },
+            {
+                parse(
+                    launchScopes = listOf(
+                        scope(
+                            "launch.legal",
+                            missing = listOf(document(version = "2026-07-02")),
+                        ),
+                        scope("launch.health-data"),
+                    ),
+                )
+            },
+            {
+                parse(
+                    launchScopes = listOf(
+                        scope(
+                            "launch.legal",
+                            missing = listOf(document(), document()),
+                        ),
+                        scope("launch.health-data"),
+                    ),
+                )
+            },
             { parse(documents = listOf(document(href = "http://www.withmurph.ai/legal"))) },
             { parse(documents = listOf(document(href = "https://example.com/legal"))) },
+            { parse(documents = listOf(document(href = "https://www.withmurph.ai:444/legal"))) },
             { parse(documents = listOf(document(href = "https://user@www.withmurph.ai/legal"))) },
             { parse(documents = listOf(document(href = "mailto:support@withmurph.ai"))) },
         ).forEach(::assertInvalidResponse)
@@ -106,18 +143,41 @@ class LaunchConsentApiContractTest {
     }
 
     @Test
-    fun mapsOnlyStructuredStaleConsentDocumentConflictsToReloadException() {
+    fun mapsOnlyCanonicalStaleConsentDocumentCodeToReloadException() {
+        // Local JVM tests use Android's stubbed JSONObject. Exercise the pure raw-code
+        // contract that production calls after reading the nested error.code value.
         assertSame(
             CompanionApiException.StaleConsentDocuments,
             mapCompanionApiErrorCode(
-                409,
-                "HOSTED_CONSENT_DOCUMENT_VERSION_STALE",
+                status = 409,
+                errorCode = normalizeCompanionApiErrorCode(
+                    "CONSENT_DOCUMENT_VERSIONS_STALE",
+                ),
             ),
         )
-        assertEquals(
-            CompanionApiException.Server(409),
-            mapCompanionApiErrorCode(409, "HOSTED_CONSENT_REQUIRED"),
-        )
+        listOf(
+            "HOSTED_CONSENT_DOCUMENT_VERSION_STALE",
+            "HOSTED_CONSENT_DOCUMENT_STALE",
+            "HOSTED_CONSENT_STALE_DOCUMENT",
+            "HOSTED_CONSENT_REQUIRED",
+        ).forEach { inventedCode ->
+            assertEquals(
+                CompanionApiException.Server(409),
+                mapCompanionApiErrorCode(
+                    409,
+                    normalizeCompanionApiErrorCode(inventedCode),
+                ),
+            )
+        }
+        listOf<Any?>(123, true, "", "   ", null).forEach { malformedCode ->
+            assertEquals(
+                CompanionApiException.Server(409),
+                mapCompanionApiErrorCode(
+                    409,
+                    normalizeCompanionApiErrorCode(malformedCode),
+                ),
+            )
+        }
     }
 
     private fun parse(

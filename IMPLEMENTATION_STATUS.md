@@ -5,9 +5,9 @@
 - Complete Gradle project metadata, dependency catalog, manifest, theme, resources, and native package layout.
 - Privy initialization, restored auth-state handling, phone/email OTP, identity-token bearer auth, and logout boundary.
 - Existing companion sign-in-token and status API client, including an active-member and legal-consent bootstrap check.
-- Native signed-in launch-consent recovery through the companion legal-consent endpoint, with strict `murph.hosted-consent-status.v1` parsing, same-origin HTTPS document links, exact missing-scope acceptance bodies, stale-document reload handling, and no persisted consent truth.
+- Native signed-in launch-consent recovery through the companion legal-consent endpoint, with strict unambiguous `murph.hosted-consent-status.v1` parsing, same-origin HTTPS document links, at-most-two sequential exact missing-scope acceptance bodies, monotonic-progress enforcement, canonical `CONSENT_DOCUMENT_VERSIONS_STALE` reload handling, partial-success retention, and no persisted consent truth.
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
-- Transactional Junction Health Connect setup and permission recovery, including foreground preservation of an owned Connect attempt and authoritative sign-out/member-switch cancellation, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, and setup-time history permission.
+- Transactional Junction Health Connect setup and permission recovery, including foreground preservation of an owned Connect attempt, post-consent grant refresh before connection, authoritative sign-out/member-switch cancellation, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, and setup-time history permission.
 - Current-member and backend-consent preflight before health uploads, plus account-switch, reinstall, incomplete-setup, stale-session, native launch-consent recovery, and fail-closed sign-out safeguards. Sign-out atomically records a durable tombstone and invalidates setup authorization before waiting on startup or touching either SDK; process reconstruction finishes Junction-first, Privy-second teardown before restoration.
 - Offline-to-online restoration revalidates backend membership and consent before setup, including sessions with no prior Health Connect marker.
 - Fault-injected preferences coverage proving failed durable revocation and sign-out commits restore their process-visible authorization snapshot.
@@ -16,17 +16,18 @@
 - Optional address-book familiar-name projection with an explicit Settings
   consent surface, one bounded Android Contacts read, strict international
   phone/name sanitization, deterministic conflict-safe selection, server CAS
-  replacement, Stop deletion, exact-revision permission-loss cleanup, and no
-  persisted contact values.
+  replacement, live-member revalidation before each contact read,
+  consent-aware preflight/replacement/Stop continuations, durable exact-revision
+  permission-loss deletion replay, and no persisted contact values.
 - Compose login, setup, status, WHOOP guidance, consent, settings, and failure
   screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
   setup, waiting, synced, delayed, attention, consent required, consent load
   failure, and failure states.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
-- Application-lifetime session work across Activity recreation, login task-snapshot protection, safe external-action fallbacks, and scrollable trust-failure recovery.
+- Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
-- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, native launch-consent parsing/recovery/follow-up, pre-sync trust checks, cancellation recovery, OTP cleanup, provider availability, backend receipt truth, member-switch teardown, address-book projection/API strictness, replay metadata, CAS behavior, permission-loss cleanup, operation coalescing, ownership fencing, and rendered Settings state.
+- Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, strict native launch-consent parsing, canonical stale reload, bounded progress, partial-success retention, exact blocked-action recovery, pre-sync trust checks, cancellation recovery, OTP cleanup, provider availability, backend receipt truth, member-switch teardown, address-book projection/API strictness, durable mutation replay, CAS behavior, permission-loss cleanup, operation coalescing, ownership fencing, and rendered Settings state.
 
 ## Executable verification
 

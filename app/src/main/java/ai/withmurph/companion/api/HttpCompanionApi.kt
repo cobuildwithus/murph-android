@@ -311,6 +311,10 @@ internal object LaunchConsentApiContract {
         val parsedLaunchGranted = launchGranted as? Boolean
             ?: throw CompanionApiException.InvalidResponse
         val parsedDocuments = documents.map { parseDocument(it, backendOrigin) }
+        val documentsById = parsedDocuments.associateBy { it.id }
+        if (documentsById.size != parsedDocuments.size) {
+            throw CompanionApiException.InvalidResponse
+        }
         val parsedScopes = launchScopes.map { scope ->
             val parsedScope = parseScope(strictString(scope["scope"]))
             val granted = scope["granted"] as? Boolean
@@ -318,6 +322,12 @@ internal object LaunchConsentApiContract {
             val missingDocuments = (scope["missingDocuments"] as? List<Map<String, Any?>>)
                 ?.map { parseDocument(it, backendOrigin) }
                 ?: throw CompanionApiException.InvalidResponse
+            if (
+                missingDocuments.map { it.id }.toSet().size != missingDocuments.size ||
+                missingDocuments.any { documentsById[it.id] != it }
+            ) {
+                throw CompanionApiException.InvalidResponse
+            }
             if (granted && missingDocuments.isNotEmpty()) {
                 throw CompanionApiException.InvalidResponse
             }
@@ -558,19 +568,20 @@ internal fun mapCompanionApiErrorCode(
         revisionConflict -> CompanionApiException.Conflict
         errorCode == "SDK_SIGN_IN_RECONNECT_REQUIRED" ->
             CompanionApiException.ReconnectRequired
-        errorCode in STALE_CONSENT_DOCUMENT_CODES ->
+        errorCode == STALE_CONSENT_DOCUMENT_CODE ->
             CompanionApiException.StaleConsentDocuments
         else -> CompanionApiException.Server(status)
     }
     else -> CompanionApiException.Server(status)
 }
 
-private val STALE_CONSENT_DOCUMENT_CODES = setOf(
-    "HOSTED_CONSENT_DOCUMENT_VERSION_STALE",
-    "HOSTED_CONSENT_DOCUMENT_STALE",
-    "HOSTED_CONSENT_STALE_DOCUMENT",
-)
+private const val STALE_CONSENT_DOCUMENT_CODE = "CONSENT_DOCUMENT_VERSIONS_STALE"
+
+internal fun normalizeCompanionApiErrorCode(value: Any?): String? =
+    (value as? String)?.trim()?.takeIf(String::isNotBlank)
 
 private fun readCompanionApiErrorCode(body: String): String? = runCatching {
-    JSONObject(body).optJSONObject("error")?.optString("code")?.takeIf(String::isNotBlank)
+    val error = JSONObject(body).optJSONObject("error") ?: return@runCatching null
+    if (!error.has("code") || error.isNull("code")) return@runCatching null
+    normalizeCompanionApiErrorCode(error.get("code"))
 }.getOrNull()

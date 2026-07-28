@@ -147,7 +147,9 @@ message.
   online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
   After at least one category is granted, the app revalidates the member and
-  requests a backend token with `connectionIntent: "connect"`.
+  requests a backend token with `connectionIntent: "connect"`. If launch
+  consent interrupts that continuation, Murph refreshes Health Connect grants
+  again before connecting and aborts when none remain.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a
@@ -158,13 +160,21 @@ message.
 - Every app-triggered foreground sync revalidates the current Privy member and
   backend consent before Junction can read or upload health data.
 - When the backend returns structured launch consent required, Murph keeps the
-  Privy member session, signs out only the local Junction SDK, loads the
-  current server-owned legal and health-data documents in native UI, posts each
-  missing launch scope with exact returned document versions, and then resumes
-  the blocked startup, connect, sync, or saved address-book replacement action.
-- Session, login, sync, retry, and sign-out transitions run in the
-  application-lifetime `AppGraph` scope, so Activity recreation only replaces
-  the UI renderer.
+  Privy member session, signs out only the local Junction SDK, strictly loads
+  same-origin HTTPS legal and health-data documents in native UI, and posts at
+  most the two canonical missing scopes with exact returned document versions.
+  `CONSENT_DOCUMENT_VERSIONS_STALE` reloads server truth, partial success is
+  retained, and a valid response must make monotonic progress.
+- Consent recovery resumes the exact blocked startup, connect, sync, Health
+  Connect permission, address-book permission, saved replacement, Stop, or
+  exact permission-loss deletion action. A Stop requested while acceptance is
+  in flight replaces an older continuation rather than being lost.
+- Session, login, permission-launch, sync, retry, consent, and sign-out
+  transitions run in the application-lifetime `AppGraph` scope. Activity
+  recreation only replaces the renderer; it cannot consume a pending system
+  permission launch before the Activity is resumed.
+- Returning from a consent document or account-control page reloads consent and
+  rechecks the Privy member/account boundary before any paused action resumes.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
@@ -181,11 +191,14 @@ message.
   `GET /api/device-sync/companion/address-book`; local permission never claims a
   successful share.
 - Share and Update preflight the server revision, then request Contacts access,
-  project one bounded list, and use a UUIDv4 full-list compare-and-swap
-  replacement. A `409` is surfaced without overwriting the newer projection.
+  reverify the live Privy member before reading, project one bounded list, and
+  use a UUIDv4 full-list compare-and-swap replacement. A `409` is surfaced
+  without overwriting the newer projection.
 - Stop can refetch and delete the latest revision because it only reduces
-  sharing. Foreground permission-loss cleanup never requests permission or
-  reads contacts and deletes only a locally known exact revision.
+  sharing. Consent-gated Stop reuses its durable deletion mutation when the
+  revision is unchanged. Foreground permission-loss cleanup never requests
+  permission or reads contacts, persists only revision plus UUIDv4 mutation id,
+  and replays only the exact locally owned deletion after consent is current.
 - Sign-out and member switches invalidate contact work and clear the local
   revision/replay metadata so a late completion cannot mutate the next member's
   state.
