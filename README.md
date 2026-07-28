@@ -14,6 +14,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Optional history permission during setup.
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
+- Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
 - WHOOP → Health Connect setup guidance.
 - Optional, server-backed familiar-name projection for unregistered phone participants in groups.
 - Settings, legal links, deletion, support, and sign-out.
@@ -76,7 +77,7 @@ identifier is blank or the production backend URL is not absolute HTTPS.
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
 values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
-`attention`, and `failure`.
+`attention`, `consentRequired`, `consentLoadFailure`, and `failure`.
 
 Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
 
@@ -156,6 +157,11 @@ message.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
 - Every app-triggered foreground sync revalidates the current Privy member and
   backend consent before Junction can read or upload health data.
+- When the backend returns structured launch consent required, Murph keeps the
+  Privy member session, signs out only the local Junction SDK, loads the
+  current server-owned legal and health-data documents in native UI, posts each
+  missing launch scope with exact returned document versions, and then resumes
+  the blocked startup, connect, sync, or saved address-book replacement action.
 - Session, login, sync, retry, and sign-out transitions run in the
   application-lifetime `AppGraph` scope, so Activity recreation only replaces
   the UI renderer.

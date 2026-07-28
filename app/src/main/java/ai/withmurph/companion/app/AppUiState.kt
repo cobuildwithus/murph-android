@@ -3,6 +3,7 @@ package ai.withmurph.companion.app
 import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.LaunchConsentStatus
 
 sealed interface AppPhase {
     data object Launching : AppPhase
@@ -31,4 +32,26 @@ data class AppUiState(
     val addressBookHasInterruptedReplacement: Boolean = false,
     val contactsPermissionDenied: Boolean = false,
     val addressBookMessage: String? = null,
+    val launchConsentRecovery: LaunchConsentRecoveryUiState? = null,
+    val pendingHealthPermissionRequestId: Int? = null,
+)
+
+enum class LaunchConsentRecoveryPhase {
+    Pausing,
+    Loading,
+    LoadFailed,
+    Required,
+    Saving,
+    Finishing,
+}
+
+data class LaunchConsentRecoveryUiState(
+    val phase: LaunchConsentRecoveryPhase,
+    val status: LaunchConsentStatus? = null,
+    val message: String? = null,
+    val showSheet: Boolean = true,
+    val canDismiss: Boolean = phase == LaunchConsentRecoveryPhase.Required ||
+        phase == LaunchConsentRecoveryPhase.LoadFailed,
+    val canAccept: Boolean = phase == LaunchConsentRecoveryPhase.Required &&
+        status?.missingLaunchScopes?.isNotEmpty() == true,
 )

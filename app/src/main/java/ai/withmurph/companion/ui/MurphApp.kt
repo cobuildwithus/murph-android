@@ -2,9 +2,13 @@ package ai.withmurph.companion.ui
 
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
+import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
 import ai.withmurph.companion.auth.CountryDialCode
 import ai.withmurph.companion.auth.LoginUiState
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.LaunchConsentDocument
+import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.ui.components.MurphCard
 import ai.withmurph.companion.ui.components.MurphIcon
@@ -161,6 +165,37 @@ private fun ReadyApp(
                     onSignOut = actions.onSignOut,
                 )
             }
+            val recovery = state.launchConsentRecovery
+            if (recovery != null && !recovery.showSheet) {
+                LaunchConsentBanner(
+                    recovery = recovery,
+                    onOpen = actions.onShowLaunchConsent,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+        }
+    }
+
+    state.launchConsentRecovery?.takeIf { it.showSheet }?.let { recovery ->
+        ModalBottomSheet(
+            onDismissRequest = {
+                if (recovery.canDismiss) actions.onDismissLaunchConsent()
+            },
+            modifier = Modifier.padding(top = 48.dp).fillMaxHeight(),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MurphColors.Cream,
+            dragHandle = { MurphSheetHandle() },
+        ) {
+            LaunchConsentRecoveryContent(
+                recovery = recovery,
+                onAccept = actions.onAcceptLaunchConsent,
+                onRetry = actions.onRetryLaunchConsent,
+                onDismiss = actions.onDismissLaunchConsent,
+                onOpenDocument = actions.onOpenConsentDocument,
+            )
         }
     }
 
@@ -217,6 +252,191 @@ private fun ReadyApp(
             )
         }
     }
+}
+
+@Composable
+private fun LaunchConsentBanner(
+    recovery: LaunchConsentRecoveryUiState,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    MurphCard(modifier = modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MurphIcon(
+                kind = MurphIconKind.Shield,
+                modifier = Modifier.size(24.dp),
+                contentDescription = null,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "Consent needed",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MurphColors.Slate,
+                )
+                Text(
+                    text = recovery.message ?: "Review the latest Murph launch consent to resume sync.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MurphColors.SlateMuted,
+                )
+            }
+            MurphLinkButton("Review", onOpen)
+        }
+    }
+}
+
+@Composable
+private fun LaunchConsentRecoveryContent(
+    recovery: LaunchConsentRecoveryUiState,
+    onAccept: () -> Unit,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    onOpenDocument: (String) -> Unit,
+) {
+    val status = recovery.status
+    val missingScopes = status?.missingLaunchScopes.orEmpty()
+    val hasHealthDataConsent = missingScopes.any {
+        it.scope == LaunchConsentScope.HealthData
+    }
+    val isLegalOnly = missingScopes.isNotEmpty() && !hasHealthDataConsent
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            MurphIcon(
+                kind = MurphIconKind.Shield,
+                modifier = Modifier.size(40.dp),
+                contentDescription = null,
+            )
+            Text(
+                text = when (recovery.phase) {
+                    LaunchConsentRecoveryPhase.Pausing -> "Pausing health sync"
+                    LaunchConsentRecoveryPhase.Loading -> "Loading consent"
+                    LaunchConsentRecoveryPhase.LoadFailed -> "Consent couldn't load"
+                    LaunchConsentRecoveryPhase.Required -> "Review Murph consent"
+                    LaunchConsentRecoveryPhase.Saving -> "Saving consent"
+                    LaunchConsentRecoveryPhase.Finishing -> "Finishing"
+                },
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = 28.sp,
+                    lineHeight = 33.sp,
+                ),
+                color = MurphColors.Slate,
+            )
+            Text(
+                text = recovery.message ?: when {
+                    hasHealthDataConsent -> "Murph needs your consent to use health data in the companion experience."
+                    isLegalOnly -> "Murph needs your consent to the latest launch documents."
+                    else -> "Murph is preparing the latest launch consent."
+                },
+                style = MaterialTheme.typography.bodyLarge,
+                color = MurphColors.SlateMuted,
+            )
+        }
+
+        if (
+            recovery.phase == LaunchConsentRecoveryPhase.Pausing ||
+            recovery.phase == LaunchConsentRecoveryPhase.Loading ||
+            recovery.phase == LaunchConsentRecoveryPhase.Saving ||
+            recovery.phase == LaunchConsentRecoveryPhase.Finishing
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                color = MurphColors.SageDark,
+            )
+        }
+
+        if (status != null) {
+            MurphCard {
+                if (hasHealthDataConsent) {
+                    ConsentRow(
+                        icon = MurphIconKind.HealthCard,
+                        text = "Murph and contracted AI providers use health data to personalize your experience. Murph does not sell health data or use Murph-managed health data to train general-purpose AI models.",
+                    )
+                } else if (isLegalOnly) {
+                    ConsentRow(
+                        icon = MurphIconKind.Checklist,
+                        text = "Murph needs your agreement to the latest launch legal documents before companion actions continue.",
+                    )
+                }
+                launchConsentDocuments(recovery).forEach { document ->
+                    ConsentDocumentLink(
+                        document = document,
+                        onOpenDocument = onOpenDocument,
+                    )
+                }
+            }
+        }
+
+        when (recovery.phase) {
+            LaunchConsentRecoveryPhase.LoadFailed -> {
+                MurphPrimaryButton("Try again", onRetry)
+                MurphLinkButton(
+                    text = "Not now",
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+            }
+            LaunchConsentRecoveryPhase.Required -> {
+                MurphPrimaryButton(
+                    text = "I Consent",
+                    onClick = onAccept,
+                    enabled = recovery.canAccept || status?.launchGranted == true,
+                )
+                MurphLinkButton(
+                    text = "Not now",
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+            }
+            LaunchConsentRecoveryPhase.Pausing,
+            LaunchConsentRecoveryPhase.Loading,
+            LaunchConsentRecoveryPhase.Saving,
+            LaunchConsentRecoveryPhase.Finishing -> Unit
+        }
+    }
+}
+
+@Composable
+private fun ConsentDocumentLink(
+    document: LaunchConsentDocument,
+    onOpenDocument: (String) -> Unit,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        MurphIcon(
+            kind = MurphIconKind.Checklist,
+            modifier = Modifier.size(22.dp),
+            contentDescription = null,
+        )
+        MurphLinkButton(
+            text = document.title,
+            onClick = { onOpenDocument(document.href) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+private fun launchConsentDocuments(
+    recovery: LaunchConsentRecoveryUiState,
+): List<LaunchConsentDocument> {
+    val missing = recovery.status?.missingLaunchScopes.orEmpty()
+        .flatMap { it.missingDocuments }
+    val source = if (missing.isEmpty()) recovery.status?.documents.orEmpty() else missing
+    return source.distinctBy { "${it.id}:${it.version}:${it.href}" }
 }
 
 @Composable
@@ -633,6 +853,11 @@ data class MurphActions(
     val onShareAddressBook: () -> Unit,
     val onRefreshAddressBook: () -> Unit,
     val onStopAddressBook: () -> Unit,
+    val onShowLaunchConsent: () -> Unit,
+    val onDismissLaunchConsent: () -> Unit,
+    val onRetryLaunchConsent: () -> Unit,
+    val onAcceptLaunchConsent: () -> Unit,
+    val onOpenConsentDocument: (String) -> Unit,
     val onOpenAppSettings: () -> Unit,
     val onOpenPrivacy: () -> Unit,
     val onOpenTerms: () -> Unit,

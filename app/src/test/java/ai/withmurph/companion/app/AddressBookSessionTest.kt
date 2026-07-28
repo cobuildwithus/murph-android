@@ -18,6 +18,11 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
+import ai.withmurph.companion.core.LaunchConsentDocument
+import ai.withmurph.companion.core.LaunchConsentScope
+import ai.withmurph.companion.core.LaunchConsentScopeStatus
+import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
@@ -641,10 +646,44 @@ class AddressBookSessionTest {
         )
         assertTrue(fixture.localState.pendingAddressBookReplacement != null)
         assertTrue(fixture.session.state.value.addressBookHasInterruptedReplacement)
-        assertTrue(
-            fixture.session.state.value.addressBookMessage.orEmpty()
-                .contains("latest launch consent"),
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
         )
+        assertEquals(listOf(MEMBER_ONE), fixture.api.launchConsentFetches)
+    }
+
+    @Test
+    fun acceptingLaunchConsentResumesSavedAddressBookReplacementMutation() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        var blockedOnce = false
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (!blockedOnce) {
+                blockedOnce = true
+                throw CompanionApiException.ConsentRequired
+            }
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val savedMutation = fixture.localState.pendingAddressBookReplacement
+        assertTrue(savedMutation != null)
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
+        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertEquals(null, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(1, fixture.localState.addressBookRevision)
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
     }
 
     private fun fixture(
@@ -715,6 +754,10 @@ class AddressBookSessionTest {
         val addressStatusMembers = mutableListOf<String>()
         val replacements = mutableListOf<Pair<String, AddressBookReplacementRequest>>()
         val deletions = mutableListOf<Pair<String, AddressBookDeletionRequest>>()
+        val launchConsentFetches = mutableListOf<String>()
+        val launchConsentAcceptances =
+            mutableListOf<Pair<String, LaunchConsentAcceptanceRequest>>()
+        var launchConsentStatus = launchConsentStatus(granted = false)
         var beforeStatusReturn: suspend (Int, String) -> Unit = { _, _ -> }
         var replaceHandler: suspend (
             String,
@@ -739,6 +782,30 @@ class AddressBookSessionTest {
         override suspend fun fetchSyncStatus(
             sourceProviderSlug: String,
         ): CompanionSyncStatus = CompanionSyncStatus(null, emptyMap())
+
+        override suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus {
+            launchConsentFetches += memberKey
+            return launchConsentStatus
+        }
+
+        override suspend fun acceptLaunchConsent(
+            memberKey: String,
+            request: LaunchConsentAcceptanceRequest,
+        ): LaunchConsentStatus {
+            launchConsentAcceptances += memberKey to request
+            val launchScopes = launchConsentStatus.launchScopes.map {
+                if (it.scope == request.scope) {
+                    it.copy(granted = true, missingDocuments = emptyList())
+                } else {
+                    it
+                }
+            }
+            launchConsentStatus = launchConsentStatus.copy(
+                launchGranted = launchScopes.all { it.granted },
+                launchScopes = launchScopes,
+            )
+            return launchConsentStatus
+        }
 
         override suspend fun fetchAddressBookStatus(memberKey: String): AddressBookServerStatus {
             addressStatusMembers += memberKey
@@ -931,5 +998,38 @@ class AddressBookSessionTest {
             revision = revision,
             storedContactCount = 0,
         )
+
+        fun launchConsentStatus(granted: Boolean): LaunchConsentStatus {
+            val legal = LaunchConsentDocument(
+                id = "legal",
+                title = "Terms",
+                version = "2026-07-01",
+                href = "https://example.test/legal",
+                pdfHref = null,
+            )
+            val health = LaunchConsentDocument(
+                id = "health",
+                title = "Health Notice",
+                version = "2026-07-01",
+                href = "https://example.test/health",
+                pdfHref = null,
+            )
+            return LaunchConsentStatus(
+                launchGranted = granted,
+                documents = listOf(legal, health),
+                launchScopes = listOf(
+                    LaunchConsentScopeStatus(
+                        scope = LaunchConsentScope.Legal,
+                        granted = granted,
+                        missingDocuments = if (granted) emptyList() else listOf(legal),
+                    ),
+                    LaunchConsentScopeStatus(
+                        scope = LaunchConsentScope.HealthData,
+                        granted = granted,
+                        missingDocuments = if (granted) emptyList() else listOf(health),
+                    ),
+                ),
+            )
+        }
     }
 }

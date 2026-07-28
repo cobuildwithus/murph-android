@@ -35,6 +35,13 @@ interface AuthProvider {
 interface CompanionApi {
     suspend fun createJunctionSignInToken(request: SignInTokenRequest): SignInTokenResponse
     suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus
+    suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus =
+        throw CompanionApiException.InvalidResponse
+
+    suspend fun acceptLaunchConsent(
+        memberKey: String,
+        request: LaunchConsentAcceptanceRequest,
+    ): LaunchConsentStatus = throw CompanionApiException.InvalidResponse
 
     suspend fun fetchAddressBookStatus(memberKey: String): AddressBookServerStatus =
         throw CompanionApiException.InvalidResponse

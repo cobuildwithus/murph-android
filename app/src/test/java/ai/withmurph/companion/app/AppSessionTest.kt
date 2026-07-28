@@ -12,6 +12,11 @@ import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
+import ai.withmurph.companion.core.LaunchConsentDocument
+import ai.withmurph.companion.core.LaunchConsentScope
+import ai.withmurph.companion.core.LaunchConsentScopeStatus
+import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
@@ -61,19 +66,141 @@ class AppSessionTest {
     }
 
     @Test
-    fun signedInLaunchExplainsHowToRepairMissingMurphConsent() = runTest {
+    fun signedInLaunchStartsNativeConsentRecoveryWhenMurphConsentIsMissing() = runTest {
         val fixture = fixture()
         fixture.api.statusError = CompanionApiException.ConsentRequired
 
         fixture.session.start()
 
-        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertEquals(
-            "Murph needs your latest health consent. Complete it at withmurph.ai, then try again.",
-            failure.message,
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
         )
-        assertTrue(failure.canRetry)
+        assertEquals(listOf(MEMBER_KEY), fixture.api.launchConsentFetches)
+        assertEquals(1, fixture.health.signOutCalls)
         assertTrue(fixture.api.intents.isEmpty())
+    }
+
+    @Test
+    fun acceptingLaunchConsentPostsEachMissingScopeAndResumesStartupValidation() = runTest {
+        val fixture = fixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.session.start()
+        fixture.api.statusError = null
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(
+            listOf(LaunchConsentScope.Legal, LaunchConsentScope.HealthData),
+            fixture.api.launchConsentAcceptances.map { it.second.scope },
+        )
+        assertEquals(
+            listOf(
+                mapOf("legal" to "2026-07-01"),
+                mapOf("health" to "2026-07-01"),
+            ),
+            fixture.api.launchConsentAcceptances.map {
+                it.second.acceptedDocumentVersions
+            },
+        )
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+        assertEquals(listOf("health_connect", "health_connect"), fixture.api.statusSources)
+    }
+
+    @Test
+    fun prePermissionConsentRecoveryResumesExplicitPermissionLaunchOnlyAfterAcceptance() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+
+        assertFalse(fixture.session.prepareHealthConnection())
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals(null, fixture.session.state.value.pendingHealthPermissionRequestId)
+
+        fixture.api.statusError = null
+        fixture.session.acceptLaunchConsent()
+
+        val requestId = fixture.session.state.value.pendingHealthPermissionRequestId
+        assertTrue(requestId != null)
+        assertTrue(fixture.session.state.value.isConnectingHealth)
+        assertTrue(fixture.session.consumeHealthPermissionLaunchRequest(requestId!!))
+        assertEquals(null, fixture.session.state.value.pendingHealthPermissionRequestId)
+        assertTrue(fixture.api.intents.isEmpty())
+    }
+
+    @Test
+    fun postPermissionConsentRecoveryResumesExactConnectContinuation() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        fixture.api.signInError = CompanionApiException.ConsentRequired
+
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+
+        fixture.api.signInError = null
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(
+            listOf(ConnectionIntent.Connect, ConnectionIntent.Connect),
+            fixture.api.intents,
+        )
+        assertEquals(1, fixture.health.connectCalls)
+        assertTrue(fixture.localState.healthAccessRequestedAt != null)
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun staleConsentDocumentAcceptanceReloadsStatusWithoutResuming() = runTest {
+        val fixture = fixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.session.start()
+        fixture.api.statusError = null
+        fixture.api.launchConsentAcceptError = CompanionApiException.StaleConsentDocuments
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(1, fixture.api.launchConsentAcceptances.size)
+        assertEquals(2, fixture.api.launchConsentFetches.size)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertTrue(
+            fixture.session.state.value.launchConsentRecovery?.message.orEmpty()
+                .contains("changed"),
+        )
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
+    }
+
+    @Test
+    fun healthWorkDoesNotRunWhileLaunchConsentRecoveryIsPending() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+
+        fixture.session.syncNow()
+        val statusCount = fixture.api.statusSources.size
+        val syncCalls = fixture.health.syncCalls
+
+        fixture.session.syncNow()
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(statusCount, fixture.api.statusSources.size)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
     }
 
     @Test
@@ -1757,12 +1884,25 @@ class AppSessionTest {
     }
 
     @Test
-    fun noSetupOfflineRecoveryRevalidatesConsentBeforePermissions() = runTest {
-        assertNoSetupOfflineRecoveryFailure(
-            failure = CompanionApiException.ConsentRequired,
-            expectedMessage =
-                "Murph needs your latest health consent. Complete it at withmurph.ai, then try again.",
+    fun noSetupOfflineRecoveryStartsConsentRecoveryBeforePermissions() = runTest {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.session.start()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
         )
+        assertEquals(listOf(MEMBER_KEY), fixture.api.launchConsentFetches)
+        assertFalse(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.api.intents.isEmpty())
     }
 
     @Test
@@ -1905,7 +2045,6 @@ class AppSessionTest {
         listOf(
             CompanionApiException.Unauthorized,
             CompanionApiException.NoAccount,
-            CompanionApiException.ConsentRequired,
         ).forEach { failure ->
             val fixture = fixture()
             fixture.localState.memberKey = MEMBER_KEY
@@ -1919,6 +2058,22 @@ class AppSessionTest {
             assertEquals(1, fixture.health.signOutCalls)
             assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
         }
+
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+
+        fixture.session.start()
+
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
     }
 
     @Test
@@ -1926,7 +2081,6 @@ class AppSessionTest {
         listOf(
             CompanionApiException.Unauthorized to false,
             CompanionApiException.NoAccount to false,
-            CompanionApiException.ConsentRequired to true,
         ).forEach { (failure, canRetry) ->
             val fixture = fixture()
             fixture.localState.memberKey = MEMBER_KEY
@@ -1943,6 +2097,24 @@ class AppSessionTest {
             val rendered = fixture.session.state.value.phase as AppPhase.Failed
             assertEquals(canRetry, rendered.canRetry)
         }
+
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.api.signInError = CompanionApiException.ConsentRequired
+
+        fixture.session.start()
+
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
     }
 
     @Test
@@ -2537,7 +2709,16 @@ class AppSessionTest {
         assertEquals(connectCalls, fixture.health.connectCalls)
         assertEquals(syncCalls, fixture.health.syncCalls)
         assertFalse(fixture.session.state.value.isConnectingHealth)
-        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        if (failure == CompanionApiException.ConsentRequired) {
+            assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+            assertEquals(
+                LaunchConsentRecoveryPhase.Required,
+                fixture.session.state.value.launchConsentRecovery?.phase,
+            )
+            assertEquals(listOf(MEMBER_KEY), fixture.api.launchConsentFetches)
+        } else {
+            assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        }
     }
 
     private suspend fun assertDelayedPreparationRejectsAuthLoss(
@@ -3000,6 +3181,12 @@ class AppSessionTest {
         var signInGateOnCall: Int? = null
         var maximumSignInCalls: Int? = null
         val signInGateEntered = CompletableDeferred<Unit>()
+        var launchConsentStatus = launchConsentStatus(granted = false)
+        var launchConsentFetchError: Throwable? = null
+        var launchConsentAcceptError: Throwable? = null
+        val launchConsentFetches = mutableListOf<String>()
+        val launchConsentAcceptances =
+            mutableListOf<Pair<String, LaunchConsentAcceptanceRequest>>()
 
         override suspend fun createJunctionSignInToken(
             request: SignInTokenRequest,
@@ -3038,6 +3225,34 @@ class AppSessionTest {
             }
             statusError?.let { throw it }
             return status
+        }
+
+        override suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus {
+            launchConsentFetches += memberKey
+            events += "consent-get"
+            launchConsentFetchError?.let { throw it }
+            return launchConsentStatus
+        }
+
+        override suspend fun acceptLaunchConsent(
+            memberKey: String,
+            request: LaunchConsentAcceptanceRequest,
+        ): LaunchConsentStatus {
+            launchConsentAcceptances += memberKey to request
+            events += "consent-post:${request.scope.wireValue}"
+            launchConsentAcceptError?.let { throw it }
+            val launchScopes = launchConsentStatus.launchScopes.map {
+                if (it.scope == request.scope) {
+                    it.copy(granted = true, missingDocuments = emptyList())
+                } else {
+                    it
+                }
+            }
+            launchConsentStatus = launchConsentStatus.copy(
+                launchGranted = launchScopes.all { it.granted },
+                launchScopes = launchScopes,
+            )
+            return launchConsentStatus
         }
     }
 
@@ -3194,5 +3409,38 @@ class AppSessionTest {
         const val MEMBER_KEY = "did:privy:user_123"
         const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
             "Health Connect access is off. Reconnect and choose at least one category."
+
+        fun launchConsentStatus(granted: Boolean): LaunchConsentStatus {
+            val legal = LaunchConsentDocument(
+                id = "legal",
+                title = "Terms",
+                version = "2026-07-01",
+                href = "https://example.test/legal",
+                pdfHref = null,
+            )
+            val health = LaunchConsentDocument(
+                id = "health",
+                title = "Health Notice",
+                version = "2026-07-01",
+                href = "https://example.test/health",
+                pdfHref = null,
+            )
+            return LaunchConsentStatus(
+                launchGranted = granted,
+                documents = listOf(legal, health),
+                launchScopes = listOf(
+                    LaunchConsentScopeStatus(
+                        scope = LaunchConsentScope.Legal,
+                        granted = granted,
+                        missingDocuments = if (granted) emptyList() else listOf(legal),
+                    ),
+                    LaunchConsentScopeStatus(
+                        scope = LaunchConsentScope.HealthData,
+                        granted = granted,
+                        missingDocuments = if (granted) emptyList() else listOf(health),
+                    ),
+                ),
+            )
+        }
     }
 }

@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
@@ -80,6 +81,19 @@ class MainActivity : ComponentActivity() {
             SideEffect {
                 setLoginSnapshotProtection(appState.phase == AppPhase.NeedsLogin)
             }
+            LaunchedEffect(appState.pendingHealthPermissionRequestId) {
+                val requestId = appState.pendingHealthPermissionRequestId
+                if (
+                    requestId != null &&
+                    graph.session.consumeHealthPermissionLaunchRequest(requestId)
+                ) {
+                    if (canLaunchExternalFlow()) {
+                        healthPermissionLauncher.launch(Unit)
+                    } else {
+                        graph.session.cancelHealthPermissionFlow()
+                    }
+                }
+            }
             MurphTheme {
                 MurphApp(
                     appState = appState,
@@ -141,6 +155,19 @@ class MainActivity : ComponentActivity() {
                                 graph.session.stopAddressBookSharing()
                             }
                         },
+                        onShowLaunchConsent = graph.session::showLaunchConsentRecovery,
+                        onDismissLaunchConsent = graph.session::dismissLaunchConsentRecovery,
+                        onRetryLaunchConsent = {
+                            graph.applicationScope.launch {
+                                graph.session.retryLaunchConsentRecovery()
+                            }
+                        },
+                        onAcceptLaunchConsent = {
+                            graph.applicationScope.launch {
+                                graph.session.acceptLaunchConsent()
+                            }
+                        },
+                        onOpenConsentDocument = ::openUri,
                         onOpenAppSettings = ::openAppSettings,
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },

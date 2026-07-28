@@ -17,6 +17,11 @@ enum class ConnectionIntent(val wireValue: String) {
     Resume("resume"),
 }
 
+enum class LaunchConsentScope(val wireValue: String) {
+    Legal("launch.legal"),
+    HealthData("launch.health-data"),
+}
+
 enum class LoginMethod {
     Phone,
     Email,
@@ -49,6 +54,50 @@ data class CompanionSyncStatus(
     val resources: Map<String, ResourceStatus>,
 ) {
     data class ResourceStatus(val lastReceivedAt: Instant?)
+}
+
+data class LaunchConsentDocument(
+    val id: String,
+    val title: String,
+    val version: String,
+    val href: String,
+    val pdfHref: String?,
+)
+
+data class LaunchConsentScopeStatus(
+    val scope: LaunchConsentScope,
+    val granted: Boolean,
+    val missingDocuments: List<LaunchConsentDocument>,
+)
+
+data class LaunchConsentStatus(
+    val launchGranted: Boolean,
+    val documents: List<LaunchConsentDocument>,
+    val launchScopes: List<LaunchConsentScopeStatus>,
+) {
+    val missingLaunchScopes: List<LaunchConsentScopeStatus>
+        get() = launchScopes.filterNot { it.granted }
+}
+
+data class LaunchConsentAcceptanceRequest(
+    val scope: LaunchConsentScope,
+    val acceptedDocumentVersions: Map<String, String>,
+    val source: String = "android-companion",
+) {
+    init {
+        require(acceptedDocumentVersions.isNotEmpty()) {
+            "Launch consent acceptance requires at least one document"
+        }
+        require(acceptedDocumentVersions.keys.all(String::isNotBlank)) {
+            "Launch consent document ids must be non-blank"
+        }
+        require(acceptedDocumentVersions.values.all(String::isNotBlank)) {
+            "Launch consent document versions must be non-blank"
+        }
+        require(source == "android-companion") {
+            "Unsupported launch consent source"
+        }
+    }
 }
 
 enum class AddressBookWriteCapability(val wireValue: String) {
@@ -169,6 +218,7 @@ sealed class CompanionApiException(message: String) : Exception(message) {
     data object Unauthorized : CompanionApiException("Authentication required")
     data object NoAccount : CompanionApiException("No Murph account")
     data object ConsentRequired : CompanionApiException("Murph consent required")
+    data object StaleConsentDocuments : CompanionApiException("Consent documents changed")
     data object ReconnectRequired : CompanionApiException("Health connection must be reconnected")
     data object Conflict : CompanionApiException("Remote revision changed")
     data class Server(val status: Int) : CompanionApiException("Server returned $status")
