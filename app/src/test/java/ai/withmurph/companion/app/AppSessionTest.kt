@@ -1,6 +1,10 @@
 package ai.withmurph.companion.app
 
 import android.content.Intent
+import ai.withmurph.companion.core.AddressBookContactSource
+import ai.withmurph.companion.core.AddressBookPersonContact
+import ai.withmurph.companion.core.AddressBookServerStatus
+import ai.withmurph.companion.core.AddressBookWriteCapability
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.AuthProvider
 import ai.withmurph.companion.core.AuthSessionState
@@ -37,6 +41,7 @@ import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
+import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -945,6 +950,35 @@ class AppSessionTest {
 
         assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
         authGate.complete(Unit)
+        foreground.await()
+
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
+    fun historyCompletionDuringAddressBookRefreshRunsTheFirstSyncOnce() = runTest {
+        val fixture = fixture(contacts = SupportedContacts)
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        val statusCallsBeforeCompletion = fixture.api.statusSources.size
+        val addressStatusGate = CompletableDeferred<Unit>()
+        fixture.api.addressStatusGate = addressStatusGate
+        fixture.api.addressStatusEntered = CompletableDeferred()
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        fixture.api.addressStatusEntered.await()
+        fixture.api.addressStatusGate = null
+
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        addressStatusGate.complete(Unit)
         foreground.await()
 
         assertEquals(1, fixture.health.connectCalls)
@@ -4147,6 +4181,7 @@ class AppSessionTest {
     private fun fixture(
         now: Instant = Instant.parse("2026-07-25T18:00:00Z"),
         memberKey: String = MEMBER_KEY,
+        contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
     ): Fixture {
         val events = mutableListOf<String>()
         val auth = FakeAuth(
@@ -4156,7 +4191,7 @@ class AppSessionTest {
         val api = FakeApi(events, now) { auth.state }
         val health = FakeHealth(events)
         val localState = FakeLocalState()
-        val session = createSession(auth, api, health, localState)
+        val session = createSession(auth, api, health, localState, contacts)
         return Fixture(session, auth, api, health, localState, events)
     }
 
@@ -4175,10 +4210,12 @@ class AppSessionTest {
         api: FakeApi,
         health: FakeHealth,
         localState: FakeLocalState,
+        contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
     ) = AppSession(
         auth = auth,
         api = api,
         health = health,
+        contacts = contacts,
         localState = localState,
         config = AppConfig(
             backendBaseUrl = "https://example.test",
@@ -4289,6 +4326,8 @@ class AppSessionTest {
         var statusGate: CompletableDeferred<Unit>? = null
         val statusEntered = CompletableDeferred<Unit>()
         var statusGateEntered = CompletableDeferred<Unit>()
+        var addressStatusGate: CompletableDeferred<Unit>? = null
+        var addressStatusEntered = CompletableDeferred<Unit>()
         var maximumStatusCalls: Int? = null
         var signInGate: CompletableDeferred<Unit>? = null
         var signInGateOnCall: Int? = null
@@ -4357,6 +4396,19 @@ class AppSessionTest {
             statusError?.let { throw it }
             statusHandler?.let { handler -> return handler(statusSources.size) }
             return status
+        }
+
+        override suspend fun fetchAddressBookStatus(
+            memberKey: String,
+        ): AddressBookServerStatus {
+            addressStatusEntered.complete(Unit)
+            addressStatusGate?.await()
+            return AddressBookServerStatus(
+                writeCapability = AddressBookWriteCapability.Enabled,
+                enabled = false,
+                revision = 0,
+                storedContactCount = 0,
+            )
         }
 
         override suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus {
@@ -4525,6 +4577,12 @@ class AppSessionTest {
             configuredInCurrentProcess = false
             events += "sign-out"
         }
+    }
+
+    private object SupportedContacts : AddressBookContactSource {
+        override val readPermission = "android.permission.READ_CONTACTS"
+        override fun hasPermission(): Boolean = true
+        override suspend fun readPersonContacts(): List<AddressBookPersonContact> = emptyList()
     }
 
     private class FakeLocalState : LocalState {

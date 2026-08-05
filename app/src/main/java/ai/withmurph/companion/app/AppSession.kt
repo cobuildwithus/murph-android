@@ -1388,6 +1388,7 @@ class AppSession(
         }
         val authAllowsSync = reconcileForegroundAuth()
         if (!ownsForegroundRefresh(generation)) return
+        needsForegroundRefresh = false
         if (
             authAllowsSync &&
             _state.value.phase == AppPhase.Ready &&
@@ -1405,10 +1406,8 @@ class AppSession(
             if (!ownsForegroundRefresh(generation)) return
         }
         if (ownsPendingHealthConnection()) {
-            needsForegroundRefresh = false
             return
         }
-        needsForegroundRefresh = false
         if (_state.value.phase != AppPhase.Ready) {
             return
         }
