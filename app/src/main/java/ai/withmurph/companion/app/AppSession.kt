@@ -1308,7 +1308,7 @@ class AppSession(
             }
             true
         }
-        if (completed) syncNow()
+        if (completed && !needsForegroundRefresh) syncNow()
         return completed
     }
 

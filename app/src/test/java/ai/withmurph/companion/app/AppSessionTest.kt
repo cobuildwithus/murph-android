@@ -878,6 +878,52 @@ class AppSessionTest {
     }
 
     @Test
+    fun historyCompletionBeforeForegroundRefreshRunsTheFirstSyncOnce() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        fixture.session.didEnterBackground()
+        val statusCallsBeforeCompletion = fixture.api.statusSources.size
+
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion, fixture.api.statusSources.size)
+        fixture.session.didBecomeActive()
+
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
+    fun foregroundRefreshBeforeHistoryCompletionRunsTheFirstSyncOnce() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        fixture.session.didEnterBackground()
+        val statusCallsBeforeCompletion = fixture.api.statusSources.size
+
+        fixture.session.didBecomeActive()
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion, fixture.api.statusSources.size)
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
     fun failedFinalPreConnectStatusRefreshKeepsJunctionUntouchedAndStatusStale() = runTest {
         val fixture = fixture()
         fixture.session.start()
