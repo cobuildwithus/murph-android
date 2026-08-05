@@ -18,6 +18,12 @@ import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialOnboarding
+import ai.withmurph.companion.core.InitialOnboardingCompletionAction
+import ai.withmurph.companion.core.InitialOnboardingCompletionRequest
+import ai.withmurph.companion.core.InitialOnboardingContactCardRequest
+import ai.withmurph.companion.core.InitialOnboardingPreferences
+import ai.withmurph.companion.core.InitialOnboardingStatus
 import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentStatus
@@ -35,6 +41,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 
 class AppSession(
@@ -51,6 +58,7 @@ class AppSession(
     private val healthMutex = Mutex()
     private val addressBookMutex = Mutex()
     private val launchConsentMutex = Mutex()
+    private val initialOnboardingMutex = Mutex()
     private var hasCompletedStartup = false
     private var needsForegroundRefresh = false
     private var sessionEpoch = 0
@@ -62,6 +70,8 @@ class AppSession(
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
     private var nextHealthPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
+    private var nextInitialOnboardingContactCardHandoffId = 1
+    private var initialOnboardingGeneration = 0
 
     private val _state = MutableStateFlow(
         AppUiState(totalResourceCount = health.totalResourceCount),
@@ -126,6 +136,273 @@ class AppSession(
             acceptLaunchConsentLocked(pending, status)
         } ?: return
         resumeLaunchConsentFollowUp(followUp)
+    }
+
+    fun selectInitialOnboardingAvatar(avatarId: String) {
+        updateInitialOnboardingDraft { onboarding, draft ->
+            if (onboarding.contactCard?.avatars?.none { it.id == avatarId } != false) draft
+            else draft.copy(avatarId = avatarId)
+        }
+    }
+
+    fun selectInitialOnboardingMainPersona(personaId: String) {
+        updateInitialOnboardingDraft { onboarding, draft ->
+            val persona = onboarding.catalog?.personas?.firstOrNull { it.id == personaId }
+                ?: return@updateInitialOnboardingDraft draft
+            draft.copy(
+                mainPersonaId = persona.id,
+                supportingPersonaId = draft.supportingPersonaId?.takeIf { it != persona.id },
+                voiceId = persona.defaultVoiceId,
+                toneId = persona.defaultTone,
+            )
+        }
+    }
+
+    fun selectInitialOnboardingSupportingPersona(personaId: String?) {
+        updateInitialOnboardingDraft { onboarding, draft ->
+            val valid = personaId == null || (
+                personaId != draft.mainPersonaId &&
+                    onboarding.catalog?.personas?.any { it.id == personaId } == true
+                )
+            if (valid) draft.copy(supportingPersonaId = personaId) else draft
+        }
+    }
+
+    fun selectInitialOnboardingVoice(voiceId: String) {
+        updateInitialOnboardingDraft { onboarding, draft ->
+            if (onboarding.catalog?.voices?.none { it.id == voiceId } != false) draft
+            else draft.copy(voiceId = voiceId)
+        }
+    }
+
+    fun selectInitialOnboardingTone(toneId: String) {
+        updateInitialOnboardingDraft { onboarding, draft ->
+            if (onboarding.catalog?.tones?.none { it.id == toneId } != false) draft
+            else draft.copy(toneId = toneId)
+        }
+    }
+
+    fun setInitialOnboardingStage(stage: InitialOnboardingStage) {
+        val current = _state.value
+        if (
+            current.phase != AppPhase.Ready ||
+            current.initialOnboarding?.status != InitialOnboardingStatus.Pending ||
+            current.launchConsentRecovery != null ||
+            current.isInitialOnboardingSaving
+        ) return
+        _state.update { state -> state.copy(initialOnboardingStage = stage) }
+    }
+
+    suspend fun skipInitialOnboarding() {
+        completeInitialOnboardingRequest(
+            InitialOnboardingCompletionRequest(
+                action = InitialOnboardingCompletionAction.Skip,
+                preferences = null,
+            ),
+        )
+    }
+
+    suspend fun saveInitialOnboarding() {
+        val draft = _state.value.initialOnboardingDraft ?: return
+        completeInitialOnboardingRequest(
+            InitialOnboardingCompletionRequest(
+                action = InitialOnboardingCompletionAction.Save,
+                preferences = InitialOnboardingPreferences(
+                    persona = draft.supportingPersonaId?.let { supporting ->
+                        "${draft.mainPersonaId}-with-$supporting"
+                    } ?: draft.mainPersonaId,
+                    tone = draft.toneId,
+                    voice = draft.voiceId,
+                ),
+            ),
+        )
+    }
+
+    suspend fun prepareInitialOnboardingContactCard() {
+        val avatarId = _state.value.initialOnboardingDraft?.avatarId ?: return
+        prepareInitialOnboardingContactCard(avatarId)
+    }
+
+    fun consumeInitialOnboardingContactCardHandoff(id: Int): String? {
+        while (true) {
+            val current = _state.value
+            val handoff = current.initialOnboardingContactCardHandoff
+                ?.takeIf { it.id == id } ?: return null
+            if (
+                _state.compareAndSet(
+                    current,
+                    current.copy(initialOnboardingContactCardHandoff = null),
+                )
+            ) return handoff.url
+        }
+    }
+
+    fun dismissCompletedInitialOnboarding() {
+        if (!_state.value.initialOnboardingCompletedNow) return
+        clearInitialOnboardingState()
+    }
+
+    private fun updateInitialOnboardingDraft(
+        update: (InitialOnboarding, InitialOnboardingDraft) -> InitialOnboardingDraft,
+    ) {
+        val current = _state.value
+        val onboarding = current.initialOnboarding ?: return
+        val draft = current.initialOnboardingDraft ?: return
+        if (
+            current.phase != AppPhase.Ready ||
+            onboarding.status != InitialOnboardingStatus.Pending ||
+            current.launchConsentRecovery != null ||
+            current.isInitialOnboardingSaving
+        ) return
+        _state.update { state ->
+            if (state.initialOnboarding !== onboarding || state.initialOnboardingDraft != draft) {
+                state
+            } else {
+                state.copy(initialOnboardingDraft = update(onboarding, draft))
+            }
+        }
+    }
+
+    private suspend fun completeInitialOnboardingRequest(
+        request: InitialOnboardingCompletionRequest,
+    ) {
+        val memberKey = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        initialOnboardingMutex.withLock {
+            val current = _state.value
+            if (
+                current.phase != AppPhase.Ready ||
+                current.initialOnboarding?.status != InitialOnboardingStatus.Pending ||
+                hasActiveLaunchConsentRecovery() ||
+                current.isInitialOnboardingSaving ||
+                current.initialOnboardingCompletedNow ||
+                memberKey != currentMemberKey ||
+                epoch != sessionEpoch
+            ) return@withLock
+            initialOnboardingGeneration += 1
+            _state.update {
+                it.copy(isInitialOnboardingSaving = true, initialOnboardingMessage = null)
+            }
+            try {
+                val response = api.completeInitialOnboarding(memberKey, request)
+                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                if (response.status != InitialOnboardingStatus.Completed) {
+                    throw CompanionApiException.InvalidResponse
+                }
+                val showsWelcome =
+                    request.action == InitialOnboardingCompletionAction.Save &&
+                        response.completedNow == true
+                if (showsWelcome) {
+                    _state.update {
+                        it.copy(
+                            isInitialOnboardingSaving = false,
+                            initialOnboardingCompletedNow = true,
+                            initialOnboardingStage = InitialOnboardingStage.Welcome,
+                            initialOnboardingMessage = null,
+                        )
+                    }
+                } else {
+                    clearInitialOnboardingState()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: CompanionApiException.ConsentRequired) {
+                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                _state.update { it.copy(isInitialOnboardingSaving = false) }
+                beginLaunchConsentRecovery(
+                    expectedEpoch = epoch,
+                    memberKey = memberKey,
+                    followUp = LaunchConsentFollowUp.CompleteInitialOnboarding(request),
+                    healthLockHeld = false,
+                )
+            } catch (_: CompanionApiException.AccountConflict) {
+                publishAccountConflictFailure()
+            } catch (error: CompanionApiException) {
+                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                when (error) {
+                    CompanionApiException.Unauthorized,
+                    CompanionApiException.NoAccount ->
+                        publishInitialOnboardingMemberBoundaryFailure(
+                            "Your Murph session changed. Try a different sign-in.",
+                        )
+                    else -> publishInitialOnboardingFailure(
+                        "We couldn't save your setup yet. Your choices are still here. Try again.",
+                    )
+                }
+            } catch (_: Exception) {
+                if (ownsInitialOnboardingWork(memberKey, epoch)) {
+                    publishInitialOnboardingFailure(
+                        "We couldn't save your setup yet. Your choices are still here. Try again.",
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun prepareInitialOnboardingContactCard(avatarId: String) {
+        val memberKey = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        initialOnboardingMutex.withLock {
+            val current = _state.value
+            if (
+                current.phase != AppPhase.Ready ||
+                current.initialOnboarding?.contactCard?.avatars?.none { it.id == avatarId } != false ||
+                hasActiveLaunchConsentRecovery() ||
+                current.isInitialOnboardingSaving ||
+                current.initialOnboardingCompletedNow ||
+                !ownsInitialOnboardingWork(memberKey, epoch)
+            ) return@withLock
+            _state.update {
+                it.copy(isInitialOnboardingSaving = true, initialOnboardingMessage = null)
+            }
+            try {
+                val response = api.prepareInitialOnboardingContactCard(
+                    memberKey,
+                    InitialOnboardingContactCardRequest(avatarId),
+                )
+                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                val handoffId = nextInitialOnboardingContactCardHandoffId++
+                _state.update {
+                    it.copy(
+                        isInitialOnboardingSaving = false,
+                        initialOnboardingStage = InitialOnboardingStage.MainPersona,
+                        initialOnboardingContactCardHandoff =
+                            PendingInitialOnboardingContactCardHandoff(handoffId, response.url),
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: CompanionApiException.ConsentRequired) {
+                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                _state.update { it.copy(isInitialOnboardingSaving = false) }
+                beginLaunchConsentRecovery(
+                    expectedEpoch = epoch,
+                    memberKey = memberKey,
+                    followUp = LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(avatarId),
+                    healthLockHeld = false,
+                )
+            } catch (_: CompanionApiException.AccountConflict) {
+                publishAccountConflictFailure()
+            } catch (error: CompanionApiException) {
+                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                when (error) {
+                    CompanionApiException.Unauthorized,
+                    CompanionApiException.NoAccount ->
+                        publishInitialOnboardingMemberBoundaryFailure(
+                            "Your Murph session changed. Try a different sign-in.",
+                        )
+                    else -> publishInitialOnboardingFailure(
+                        "We couldn't open the contact card. Check your connection and try again.",
+                    )
+                }
+            } catch (_: Exception) {
+                if (ownsInitialOnboardingWork(memberKey, epoch)) {
+                    publishInitialOnboardingFailure(
+                        "We couldn't open the contact card. Check your connection and try again.",
+                    )
+                }
+            }
+        }
     }
 
     fun consumeHealthPermissionLaunchRequest(requestId: Int): Boolean {
@@ -388,6 +665,11 @@ class AppSession(
                             "Your session needs a refresh before sharing contacts. Try again.",
                         )
                         return@withLock false
+                    } catch (_: CompanionApiException.AccountConflict) {
+                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                            publishAccountConflictFailure()
+                        }
+                        return@withLock false
                     } catch (_: Exception) {
                         publishAddressBookMessage(
                             pending.memberKey,
@@ -619,6 +901,11 @@ class AppSession(
                         epoch,
                         "Your session needs a refresh before deleting shared names. Try again.",
                     )
+                    return
+                } catch (_: CompanionApiException.AccountConflict) {
+                    if (ownsAddressBookWork(memberKey, epoch)) {
+                        publishAccountConflictFailure()
+                    }
                     return
                 } catch (_: Exception) {
                     publishAddressBookMessage(
@@ -923,6 +1210,12 @@ class AppSession(
                     _state.update { it.copy(isConnectingHealth = false) }
                 }
                 throw error
+            } catch (_: CompanionApiException.AccountConflict) {
+                pendingHealthConnection = null
+                if (epoch == sessionEpoch) {
+                    publishAccountConflictFailureWhileHealthLocked()
+                }
+                false
             } catch (error: Exception) {
                 pendingHealthConnection = null
                 val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
@@ -1008,6 +1301,13 @@ class AppSession(
         needsForegroundRefresh = false
         val authAllowsSync = reconcileForegroundAuth()
         if (
+            authAllowsSync &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.initialOnboarding != null
+        ) {
+            refreshInitialOnboardingAfterForeground()
+        }
+        if (
             (authAllowsSync || ownsPendingHealthConnection()) &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.authVerifiedOnline
@@ -1058,6 +1358,73 @@ class AppSession(
             syncNow()
         }
     }
+
+    private suspend fun refreshInitialOnboardingAfterForeground() {
+        if (!initialOnboardingMutex.tryLock()) return
+        try {
+            val memberKey = currentMemberKey ?: return
+            val epoch = sessionEpoch
+            val generation = initialOnboardingGeneration
+            val current = _state.value
+            if (
+                current.phase != AppPhase.Ready ||
+                current.initialOnboarding == null ||
+                current.isInitialOnboardingSaving ||
+                current.initialOnboardingCompletedNow ||
+                current.launchConsentRecovery != null
+            ) return
+            val response = try {
+                api.fetchInitialOnboarding(memberKey)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: CompanionApiException.ConsentRequired) {
+                if (ownsInitialOnboardingRefresh(memberKey, epoch, generation)) {
+                    beginLaunchConsentRecovery(
+                        expectedEpoch = epoch,
+                        memberKey = memberKey,
+                        followUp = LaunchConsentFollowUp.Reconcile,
+                        healthLockHeld = false,
+                    )
+                }
+                return
+            } catch (_: CompanionApiException.AccountConflict) {
+                if (ownsInitialOnboardingRefresh(memberKey, epoch, generation)) {
+                    publishAccountConflictFailure()
+                }
+                return
+            } catch (error: CompanionApiException) {
+                if (
+                    ownsInitialOnboardingRefresh(memberKey, epoch, generation) &&
+                    (error == CompanionApiException.Unauthorized ||
+                        error == CompanionApiException.NoAccount)
+                ) {
+                    publishInitialOnboardingMemberBoundaryFailure(
+                        "Your Murph session changed. Try a different sign-in.",
+                    )
+                }
+                return
+            } catch (_: Exception) {
+                return
+            }
+            if (!ownsInitialOnboardingRefresh(memberKey, epoch, generation)) return
+            if (response.status == InitialOnboardingStatus.Completed) {
+                clearInitialOnboardingState()
+            }
+            // Pending refreshes are removal-only: never replace the mounted
+            // projection or its unsaved draft.
+        } finally {
+            initialOnboardingMutex.unlock()
+        }
+    }
+
+    private fun ownsInitialOnboardingRefresh(
+        memberKey: String,
+        epoch: Int,
+        generation: Int,
+    ): Boolean = ownsInitialOnboardingWork(memberKey, epoch) &&
+        generation == initialOnboardingGeneration &&
+        !_state.value.isInitialOnboardingSaving &&
+        !_state.value.initialOnboardingCompletedNow
 
     private suspend fun refreshActiveLaunchConsentAfterForeground() {
         val pending = pendingLaunchConsentRecovery ?: return
@@ -1170,11 +1537,12 @@ class AppSession(
                 (previousMemberKey != null && previousMemberKey != authState.memberKey)
         if (mustDistrustPersistedHealthSession) {
             if (!resetHealthSdkAtTrustBoundary()) return
+            clearInitialOnboardingState()
             localState.clearMemberScopedState()
         }
         localState.memberKey = authState.memberKey
         currentMemberKey = authState.memberKey
-        val epoch = sessionEpoch
+        var epoch = sessionEpoch
         val requested = healthWasRequested()
         if (authState.verifiedOnline) {
             currentAuthOwnershipLoss(authState.memberKey)?.let { observed ->
@@ -1216,6 +1584,7 @@ class AppSession(
                     return
                 }
                 if (!resetHealthSdkAtTrustBoundary()) return
+                epoch = sessionEpoch
             } catch (error: CompanionApiException.Unauthorized) {
                 if (epoch != sessionEpoch) return
                 publishAuthoritativeResumeFailure(
@@ -1229,6 +1598,10 @@ class AppSession(
                     message = connectionErrorMessage(error),
                     canRetry = false,
                 )
+                return
+            } catch (_: CompanionApiException.AccountConflict) {
+                if (epoch != sessionEpoch) return
+                publishAccountConflictFailure()
                 return
             } catch (error: CompanionApiException.ConsentRequired) {
                 if (epoch != sessionEpoch) return
@@ -1261,6 +1634,7 @@ class AppSession(
                 reconcileObservedAuthState(authState.memberKey, observed)
                 return
             }
+            if (!fetchInitialOnboardingProjection(authState.memberKey, epoch)) return
         }
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
@@ -1503,15 +1877,8 @@ class AppSession(
     ): AuthSessionState? {
         if (epoch != sessionEpoch) throw CancellationException()
         val response = api.createJunctionSignInToken(
-            SignInTokenRequest(
-                appInstallationId = localState.installationId,
-                appVersion = config.appVersion,
-                connectionIntent = intent,
-                sdkVersions = mapOf(
-                    "vital" to config.junctionSdkVersion,
-                    "privy" to config.privySdkVersion,
-                ),
-            ),
+            memberKey = memberKey,
+            request = signInTokenRequest(intent),
         )
         if (epoch != sessionEpoch) throw CancellationException()
         if (response.environment != config.environment.wireValue) {
@@ -1672,8 +2039,9 @@ class AppSession(
         }
 
         if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return null
+        val memberKey = currentMemberKey ?: return null
         val status = try {
-            api.fetchSyncStatus(HEALTH_CONNECT_SOURCE)
+            api.fetchSyncStatus(memberKey, HEALTH_CONNECT_SOURCE)
         } catch (error: CancellationException) {
             throw error
         } catch (error: CompanionApiException.Unauthorized) {
@@ -1688,8 +2056,10 @@ class AppSession(
                 canRetry = false,
             )
             return null
+        } catch (_: CompanionApiException.AccountConflict) {
+            publishAccountConflictFailureWhileHealthLocked()
+            return null
         } catch (error: CompanionApiException.ConsentRequired) {
-            val memberKey = currentMemberKey ?: return null
             beginLaunchConsentRecovery(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
@@ -1793,17 +2163,18 @@ class AppSession(
     }
 
     private suspend fun verifyBackendMember(epoch: Int): Boolean {
+        val memberKey = currentMemberKey ?: return false
         return try {
-            api.fetchSyncStatus(HEALTH_CONNECT_SOURCE)
+            api.fetchSyncStatus(memberKey, HEALTH_CONNECT_SOURCE)
             epoch == sessionEpoch
         } catch (error: CancellationException) {
             throw error
         } catch (error: CompanionApiException.NoAccount) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
-                message = "This sign-in isn't linked to an active Murph account.",
-                canRetry = false,
-            )
+            admitBackendMember(memberKey, epoch)
+        } catch (error: CompanionApiException.AccountConflict) {
+            if (epoch != sessionEpoch) return false
+            publishAccountConflictFailure()
             false
         } catch (error: CompanionApiException.ConsentRequired) {
             if (epoch != sessionEpoch) return false
@@ -1829,6 +2200,275 @@ class AppSession(
                 canRetry = true,
             )
             false
+        }
+    }
+
+    private suspend fun fetchInitialOnboardingProjection(
+        memberKey: String,
+        epoch: Int,
+    ): Boolean {
+        if (
+            epoch != sessionEpoch ||
+            memberKey != currentMemberKey ||
+            memberKey != localState.memberKey
+        ) return false
+        val projection = try {
+            api.fetchInitialOnboarding(memberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: CompanionApiException.ConsentRequired) {
+            if (epoch != sessionEpoch) return false
+            beginLaunchConsentRecovery(
+                expectedEpoch = epoch,
+                memberKey = memberKey,
+                followUp = LaunchConsentFollowUp.Reconcile,
+                healthLockHeld = false,
+            )
+            return false
+        } catch (_: CompanionApiException.AccountConflict) {
+            if (epoch != sessionEpoch) return false
+            publishAccountConflictFailure()
+            return false
+        } catch (error: CompanionApiException) {
+            if (epoch != sessionEpoch) return false
+            when (error) {
+                CompanionApiException.Unauthorized,
+                CompanionApiException.NoAccount ->
+                    publishInitialOnboardingMemberBoundaryFailure(
+                        "Your Murph session changed. Try a different sign-in.",
+                    )
+                else -> publishBackendBootstrapFailure(
+                    message = "We couldn't load account setup. Check your connection and try again.",
+                    canRetry = true,
+                )
+            }
+            return false
+        } catch (_: Exception) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message = "We couldn't load account setup. Check your connection and try again.",
+                canRetry = true,
+            )
+            return false
+        }
+        if (
+            epoch != sessionEpoch ||
+            memberKey != currentMemberKey ||
+            memberKey != localState.memberKey
+        ) return false
+        applyInitialOnboardingProjection(projection)
+        return true
+    }
+
+    private fun applyInitialOnboardingProjection(projection: InitialOnboarding) {
+        if (projection.status == InitialOnboardingStatus.Completed) {
+            clearInitialOnboardingState()
+            return
+        }
+        val catalog = projection.catalog ?: return
+        val current = _state.value
+        if (
+            current.initialOnboarding?.status == InitialOnboardingStatus.Pending &&
+            current.initialOnboardingDraft != null
+        ) {
+            // A retry after consent keeps the exact ephemeral draft. The
+            // canonical server is still authoritative for completion only.
+            _state.update { it.copy(initialOnboardingMessage = null) }
+            return
+        }
+        val personaParts = resolveInitialOnboardingPersonaParts(
+            projection.preferences.persona,
+            catalog.personas.map { it.id },
+        )
+        val mainPersona = catalog.personas.firstOrNull { it.id == personaParts.first }
+            ?: catalog.personas.first()
+        val voiceId = projection.preferences.voice
+            ?.takeIf { selected -> catalog.voices.any { it.id == selected } }
+            ?: mainPersona.defaultVoiceId
+        val toneId = projection.preferences.tone
+            ?.takeIf { selected -> catalog.tones.any { it.id == selected } }
+            ?: mainPersona.defaultTone
+        initialOnboardingGeneration += 1
+        _state.update {
+            it.copy(
+                initialOnboarding = projection,
+                initialOnboardingStage = if (projection.contactCard != null) {
+                    InitialOnboardingStage.Contact
+                } else {
+                    InitialOnboardingStage.MainPersona
+                },
+                initialOnboardingDraft = InitialOnboardingDraft(
+                    avatarId = projection.contactCard?.defaultAvatarId,
+                    mainPersonaId = mainPersona.id,
+                    supportingPersonaId = personaParts.second,
+                    voiceId = voiceId,
+                    toneId = toneId,
+                ),
+                isInitialOnboardingSaving = false,
+                initialOnboardingCompletedNow = false,
+                initialOnboardingMessage = null,
+                initialOnboardingContactCardHandoff = null,
+            )
+        }
+    }
+
+    private fun resolveInitialOnboardingPersonaParts(
+        value: String?,
+        personaIds: List<String>,
+    ): Pair<String?, String?> {
+        if (value == null) return null to null
+        if (value in personaIds) return value to null
+        personaIds.forEach { main ->
+            val prefix = "$main-with-"
+            if (value.startsWith(prefix)) {
+                val supporting = value.removePrefix(prefix)
+                if (supporting != main && supporting in personaIds) return main to supporting
+            }
+        }
+        return null to null
+    }
+
+    private fun clearInitialOnboardingState() {
+        initialOnboardingGeneration += 1
+        _state.update {
+            it.copy(
+                initialOnboarding = null,
+                initialOnboardingStage = null,
+                initialOnboardingDraft = null,
+                isInitialOnboardingSaving = false,
+                initialOnboardingCompletedNow = false,
+                initialOnboardingMessage = null,
+                initialOnboardingContactCardHandoff = null,
+            )
+        }
+    }
+
+    private fun ownsInitialOnboardingWork(memberKey: String, epoch: Int): Boolean =
+        epoch == sessionEpoch &&
+            memberKey == currentMemberKey &&
+            memberKey == localState.memberKey &&
+            _state.value.initialOnboarding != null &&
+            !localState.signOutPending
+
+    private fun publishInitialOnboardingFailure(message: String) {
+        _state.update {
+            it.copy(isInitialOnboardingSaving = false, initialOnboardingMessage = message)
+        }
+    }
+
+    private suspend fun publishInitialOnboardingMemberBoundaryFailure(message: String) {
+        if (!resetHealthSdkAtTrustBoundary()) return
+        currentMemberKey = null
+        localState.clearMemberScopedState()
+        clearInitialOnboardingState()
+        _state.update {
+            it.copy(
+                phase = AppPhase.Failed(
+                    message = message,
+                    canRetry = false,
+                    canSignOut = true,
+                    signOutLabel = "Try a different sign-in",
+                ),
+            )
+        }
+    }
+
+    private suspend fun admitBackendMember(memberKey: String, epoch: Int): Boolean {
+        return try {
+            val response = api.createJunctionSignInToken(
+                memberKey = memberKey,
+                request = signInTokenRequest(ConnectionIntent.Resume),
+            )
+            if (epoch != sessionEpoch) return false
+            if (response.environment != config.environment.wireValue) {
+                throw CompanionApiException.InvalidResponse
+            }
+            _state.update { it.copy(backendEnvironment = response.environment) }
+            currentAuthOwnershipLoss(memberKey)?.let { observed ->
+                reconcileObservedAuthState(memberKey, observed)
+                return false
+            }
+            // Admission and Health identity are deliberately separate. A token
+            // returned for an existing connection is discarded until the user
+            // explicitly resumes Health Connect.
+            true
+        } catch (_: CompanionApiException.ReconnectRequired) {
+            // The server performs canonical member admission before resolving
+            // Junction lifecycle. This exact response means access is active but
+            // there is no established Health connection to resume.
+            epoch == sessionEpoch && memberKey == currentMemberKey
+        } catch (_: CompanionApiException.ConsentRequired) {
+            if (epoch != sessionEpoch) return false
+            beginLaunchConsentRecovery(
+                expectedEpoch = epoch,
+                memberKey = memberKey,
+                followUp = LaunchConsentFollowUp.Reconcile,
+                healthLockHeld = false,
+            )
+            false
+        } catch (_: CompanionApiException.AccountConflict) {
+            if (epoch != sessionEpoch) return false
+            publishAccountConflictFailure()
+            false
+        } catch (_: CompanionApiException.Unauthorized) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message = "Your session needs a refresh. Sign in again.",
+                canRetry = false,
+            )
+            false
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message = "Murph couldn't finish account setup. Check your connection and try again.",
+                canRetry = true,
+            )
+            false
+        }
+    }
+
+    private suspend fun publishAccountConflictFailure() {
+        if (!resetHealthSdkAtTrustBoundary()) return
+        finishAccountConflictFailure()
+    }
+
+    /** Called only while [healthMutex] is held. */
+    private suspend fun publishAccountConflictFailureWhileHealthLocked() {
+        invalidateSessionEpoch()
+        try {
+            health.signOutSdk()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _state.update { current ->
+                current.copy(
+                    phase = AppPhase.Failed(
+                        message = "Murph couldn't safely reset health sync. Keep the app open and try again.",
+                        canRetry = true,
+                        canSignOut = true,
+                    ),
+                )
+            }
+            return
+        }
+        finishAccountConflictFailure()
+    }
+
+    private fun finishAccountConflictFailure() {
+        currentMemberKey = null
+        localState.clearMemberScopedState()
+        clearInitialOnboardingState()
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = "This sign-in conflicts with another Murph account. Try a different sign-in.",
+                    canRetry = false,
+                    canSignOut = true,
+                    signOutLabel = "Try a different sign-in",
+                ),
+            )
         }
     }
 
@@ -2112,7 +2752,7 @@ class AppSession(
                 launchConsentRecovery = current.launchConsentRecovery?.copy(
                     phase = LaunchConsentRecoveryPhase.Loading,
                     message = "Loading the latest consent documents.",
-                    canDismiss = false,
+                    canDismiss = true,
                     canAccept = false,
                 ),
             )
@@ -2134,6 +2774,11 @@ class AppSession(
                 message = "This sign-in isn't linked to an active Murph account.",
                 canRetry = false,
             )
+            return
+        } catch (_: CompanionApiException.AccountConflict) {
+            if (ownsLaunchConsentRecovery(pending)) {
+                publishAccountConflictFailure()
+            }
             return
         } catch (_: Exception) {
             publishLaunchConsentLoadFailure(
@@ -2186,7 +2831,7 @@ class AppSession(
             val missingScopesBefore = latest.missingLaunchScopes.map { it.scope }.toSet()
             val request = LaunchConsentAcceptanceRequest(
                 scope = nextScope.scope,
-                acceptedDocumentVersions = nextScope.missingDocuments.associate {
+                acceptedDocumentVersions = nextScope.documents.associate {
                     it.id to it.version
                 },
             )
@@ -2210,6 +2855,11 @@ class AppSession(
                     message = "This sign-in isn't linked to an active Murph account.",
                     canRetry = false,
                 )
+                return null
+            } catch (_: CompanionApiException.AccountConflict) {
+                if (ownsLaunchConsentRecovery(pending)) {
+                    publishAccountConflictFailure()
+                }
                 return null
             } catch (_: Exception) {
                 publishLaunchConsentRequired(
@@ -2295,6 +2945,11 @@ class AppSession(
                 message = "This sign-in isn't linked to an active Murph account.",
                 canRetry = false,
             )
+            return
+        } catch (_: CompanionApiException.AccountConflict) {
+            if (ownsLaunchConsentRecovery(pending)) {
+                publishAccountConflictFailure()
+            }
             return
         } catch (_: Exception) {
             publishLaunchConsentRequired(
@@ -2392,6 +3047,10 @@ class AppSession(
                     }
                     completeAddressBookPermissionFlow(permissionGranted = true)
                 }
+                is LaunchConsentFollowUp.CompleteInitialOnboarding ->
+                    completeInitialOnboardingRequest(followUp.request)
+                is LaunchConsentFollowUp.PrepareInitialOnboardingContactCard ->
+                    prepareInitialOnboardingContactCard(followUp.avatarId)
             }
         } finally {
             if (!hasActiveLaunchConsentRecovery()) {
@@ -2622,6 +3281,10 @@ class AppSession(
                 epoch,
                 "Contacts access is off. Murph will retry exact deletion after your session is refreshed.",
             )
+        } catch (_: CompanionApiException.AccountConflict) {
+            if (ownsAddressBookWork(memberKey, epoch)) {
+                publishAccountConflictFailure()
+            }
         } catch (_: Exception) {
             publishAddressBookMessage(
                 memberKey,
@@ -2728,6 +3391,11 @@ class AppSession(
                 epoch,
                 "Address-book sharing isn't available for this Murph account.",
             )
+            return null
+        } catch (_: CompanionApiException.AccountConflict) {
+            if (ownsAddressBookWork(memberKey, epoch)) {
+                publishAccountConflictFailure()
+            }
             return null
         } catch (_: Exception) {
             publishAddressBookUnavailable(
@@ -2973,6 +3641,8 @@ class AppSession(
         CompanionApiException.Network -> "Murph couldn't reach the network. Check your connection and try again."
         CompanionApiException.Unauthorized -> "Your session needs a refresh. Sign in again."
         CompanionApiException.NoAccount -> "This sign-in isn't linked to an active Murph account."
+        CompanionApiException.AccountConflict ->
+            "This sign-in conflicts with another Murph account. Try a different sign-in."
         CompanionApiException.ConsentRequired -> CONSENT_REQUIRED_MESSAGE
         CompanionApiException.ReconnectRequired -> "Reconnect Health Connect to resume syncing."
         else -> "Murph couldn't finish connecting Health Connect. Try again in a moment."
@@ -3018,6 +3688,12 @@ class AppSession(
         data class AddressBookReplacement(
             val pending: PendingAddressBookPermissionFlow,
         ) : LaunchConsentFollowUp
+        data class CompleteInitialOnboarding(
+            val request: InitialOnboardingCompletionRequest,
+        ) : LaunchConsentFollowUp
+        data class PrepareInitialOnboardingContactCard(
+            val avatarId: String,
+        ) : LaunchConsentFollowUp
     }
 
     private companion object {
@@ -3027,4 +3703,16 @@ class AppSession(
         const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
             "Health Connect access is off. Reconnect and choose at least one category."
     }
+
+    private fun signInTokenRequest(intent: ConnectionIntent): SignInTokenRequest =
+        SignInTokenRequest(
+            appInstallationId = localState.installationId,
+            appVersion = config.appVersion,
+            connectionIntent = intent,
+            sdkVersions = mapOf(
+                "vital" to config.junctionSdkVersion,
+                "privy" to config.privySdkVersion,
+            ),
+            timeZone = ZoneId.systemDefault().id,
+        )
 }

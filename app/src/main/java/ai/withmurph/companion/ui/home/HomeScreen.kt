@@ -1,6 +1,7 @@
 package ai.withmurph.companion.ui.home
 
 import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.ui.components.MurphCard
@@ -37,6 +38,7 @@ fun HomeScreen(
     onOpenHealthConnect: () -> Unit,
     onShowWhoopGuide: () -> Unit,
     onSyncNow: () -> Unit,
+    onShareAddressBook: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -55,6 +57,7 @@ fun HomeScreen(
             else -> SyncStatusContent(
                 state = state,
                 onSyncNow = onSyncNow,
+                onShareAddressBook = onShareAddressBook,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -176,6 +179,7 @@ private fun SetupContent(
 private fun SyncStatusContent(
     state: AppUiState,
     onSyncNow: () -> Unit,
+    onShareAddressBook: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sync = state.healthSync
@@ -268,6 +272,30 @@ private fun SyncStatusContent(
             onClick = onSyncNow,
             enabled = !state.isSyncingHealth,
         )
+
+        val addressBook = state.addressBookSharing
+        if (
+            addressBook is AddressBookSharingState.Server &&
+            !addressBook.enabled &&
+            addressBook.canWrite
+        ) {
+            MurphCard {
+                Text(
+                    text = "Help Murph recognize people",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MurphColors.Slate,
+                )
+                Text(
+                    text = "Optionally share friendly labels for the people you talk about. Murph won't send invitations or read contacts in the background.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MurphColors.SlateMuted,
+                )
+                MurphPrimaryButton(
+                    text = "Set up Friendly Names",
+                    onClick = onShareAddressBook,
+                )
+            }
+        }
 
         if (state.healthMessage != null) {
             Text(

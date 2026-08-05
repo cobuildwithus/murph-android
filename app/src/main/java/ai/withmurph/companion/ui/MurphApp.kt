@@ -4,6 +4,7 @@ import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.AppUiState
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
+import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.auth.CountryDialCode
 import ai.withmurph.companion.auth.LoginUiState
 import ai.withmurph.companion.core.HealthSyncState
@@ -17,6 +18,7 @@ import ai.withmurph.companion.ui.components.MurphLinkButton
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.home.HomeScreen
 import ai.withmurph.companion.ui.login.LoginScreen
+import ai.withmurph.companion.ui.onboarding.InitialOnboardingScreen
 import ai.withmurph.companion.ui.settings.SettingsScreen
 import ai.withmurph.companion.ui.theme.MurphColors
 import androidx.compose.foundation.BorderStroke
@@ -91,7 +93,13 @@ fun MurphApp(
             onOpenPrivacy = actions.onOpenPrivacy,
             onOpenTerms = actions.onOpenTerms,
         )
-        AppPhase.Ready -> ReadyApp(appState, actions)
+        AppPhase.Ready -> if (
+            appState.initialOnboarding != null && appState.launchConsentRecovery == null
+        ) {
+            InitialOnboardingScreen(appState, actions)
+        } else {
+            ReadyApp(appState, actions)
+        }
         is AppPhase.Failed -> FailureScreen(phase, actions)
     }
 }
@@ -170,6 +178,13 @@ private fun ReadyApp(
                     onSyncNow = {
                         if (state.launchConsentRecovery == null) {
                             actions.onSyncNow()
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
+                    onShareAddressBook = {
+                        if (state.launchConsentRecovery == null) {
+                            showsAddressBookConsent = true
                         } else {
                             actions.onShowLaunchConsent()
                         }
@@ -870,7 +885,7 @@ private fun FailureScreen(
             }
             if (failure.canSignOut) {
                 Spacer(Modifier.height(4.dp))
-                MurphLinkButton("Sign out and start fresh", actions.onSignOut)
+                MurphLinkButton(failure.signOutLabel, actions.onSignOut)
             }
         }
     }
@@ -895,6 +910,17 @@ data class MurphActions(
     val onDismissLaunchConsent: () -> Unit,
     val onRetryLaunchConsent: () -> Unit,
     val onAcceptLaunchConsent: () -> Unit,
+    val onSelectInitialOnboardingAvatar: (String) -> Unit,
+    val onSelectInitialOnboardingMainPersona: (String) -> Unit,
+    val onSelectInitialOnboardingSupportingPersona: (String?) -> Unit,
+    val onSelectInitialOnboardingVoice: (String) -> Unit,
+    val onSelectInitialOnboardingTone: (String) -> Unit,
+    val onSetInitialOnboardingStage: (InitialOnboardingStage) -> Unit,
+    val onPrepareInitialOnboardingContactCard: () -> Unit,
+    val onSkipInitialOnboarding: () -> Unit,
+    val onSaveInitialOnboarding: () -> Unit,
+    val onDismissCompletedInitialOnboarding: () -> Unit,
+    val onOpenInitialOnboardingContact: (String) -> Unit,
     val onOpenConsentDocument: (String) -> Unit,
     val onOpenAppSettings: () -> Unit,
     val onOpenPrivacy: () -> Unit,

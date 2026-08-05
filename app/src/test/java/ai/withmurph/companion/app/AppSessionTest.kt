@@ -12,6 +12,22 @@ import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialOnboarding
+import ai.withmurph.companion.core.InitialOnboardingCatalog
+import ai.withmurph.companion.core.InitialOnboardingCompletionAction
+import ai.withmurph.companion.core.InitialOnboardingCompletionRequest
+import ai.withmurph.companion.core.InitialOnboardingContactAction
+import ai.withmurph.companion.core.InitialOnboardingContactAvatar
+import ai.withmurph.companion.core.InitialOnboardingContactAvatarKind
+import ai.withmurph.companion.core.InitialOnboardingContactCard
+import ai.withmurph.companion.core.InitialOnboardingContactCardHandoff
+import ai.withmurph.companion.core.InitialOnboardingContactCardRequest
+import ai.withmurph.companion.core.InitialOnboardingContactKind
+import ai.withmurph.companion.core.InitialOnboardingPersona
+import ai.withmurph.companion.core.InitialOnboardingPreferences
+import ai.withmurph.companion.core.InitialOnboardingStatus
+import ai.withmurph.companion.core.InitialOnboardingTone
+import ai.withmurph.companion.core.InitialOnboardingVoice
 import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
@@ -35,6 +51,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.time.ZoneId
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppSessionTest {
@@ -53,17 +70,230 @@ class AppSessionTest {
     }
 
     @Test
-    fun signedInLaunchStopsBeforeHealthSetupWhenMurphAccountIsMissing() = runTest {
+    fun signedInLaunchAdmitsMissingAccountWithoutStartingHealth() = runTest {
         val fixture = fixture()
         fixture.api.statusError = CompanionApiException.NoAccount
 
         fixture.session.start()
 
-        val failure = fixture.session.state.value.phase as AppPhase.Failed
-        assertEquals("This sign-in isn't linked to an active Murph account.", failure.message)
-        assertEquals(false, failure.canRetry)
-        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
         assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.connectCalls)
+        assertEquals(ZoneId.systemDefault().id, fixture.api.signInRequests.single().timeZone)
+    }
+
+    @Test
+    fun freshAdmissionTreatsReconnectRequiredAsActiveWithoutIdentifyingHealth() = runTest {
+        val fixture = fixture()
+        fixture.api.statusError = CompanionApiException.NoAccount
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+
+        fixture.session.start()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(0, fixture.health.identifyCalls)
+    }
+
+    @Test
+    fun freshAdmissionRecoversConsentThenRetriesCanonicalSignup() = runTest {
+        val fixture = fixture()
+        fixture.api.statusError = CompanionApiException.NoAccount
+        fixture.api.signInError = CompanionApiException.ConsentRequired
+
+        fixture.session.start()
+
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+        assertEquals(listOf(ConnectionIntent.Resume, ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(0, fixture.health.identifyCalls)
+    }
+
+    @Test
+    fun accountConflictClosesMemberAndHealthAuthority() = runTest {
+        val fixture = fixture()
+        fixture.api.statusError = CompanionApiException.NoAccount
+        fixture.api.signInError = CompanionApiException.AccountConflict
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertNull(fixture.localState.memberKey)
+        assertFalse(fixture.health.signedIn)
+    }
+
+    @Test
+    fun signedInLaunchMountsServerOwnedInitialOnboardingWithoutStartingHealth() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+
+        fixture.session.start()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(InitialOnboardingStage.Contact, fixture.session.state.value.initialOnboardingStage)
+        assertEquals("classic", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
+        assertEquals("murph", fixture.session.state.value.initialOnboardingDraft?.voiceId)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.connectCalls)
+    }
+
+    @Test
+    fun saveInitialOnboardingPersistsExactDraftAndShowsWelcomeOnlyForFirstWriter() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.session.selectInitialOnboardingSupportingPersona("classic")
+        fixture.session.selectInitialOnboardingVoice("murph")
+        fixture.session.selectInitialOnboardingTone("casual")
+
+        fixture.session.saveInitialOnboarding()
+
+        val request = fixture.api.initialOnboardingCompletions.single().second
+        assertEquals(InitialOnboardingCompletionAction.Save, request.action)
+        assertEquals("coach-with-classic", request.preferences?.persona)
+        assertEquals("casual", request.preferences?.tone)
+        assertEquals(InitialOnboardingStage.Welcome, fixture.session.state.value.initialOnboardingStage)
+        assertTrue(fixture.session.state.value.initialOnboardingCompletedNow)
+
+        fixture.session.dismissCompletedInitialOnboarding()
+        assertNull(fixture.session.state.value.initialOnboarding)
+    }
+
+    @Test
+    fun staleInitialOnboardingSaveClosesQuietlyWithoutWelcome() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.api.initialOnboardingCompletedNow = false
+        fixture.session.start()
+
+        fixture.session.saveInitialOnboarding()
+
+        assertEquals(1, fixture.api.initialOnboardingCompletions.size)
+        assertNull(fixture.session.state.value.initialOnboarding)
+        assertFalse(fixture.session.state.value.initialOnboardingCompletedNow)
+    }
+
+    @Test
+    fun skipInitialOnboardingNeverShowsWelcome() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.session.start()
+
+        fixture.session.skipInitialOnboarding()
+
+        val request = fixture.api.initialOnboardingCompletions.single().second
+        assertEquals(InitialOnboardingCompletionAction.Skip, request.action)
+        assertNull(request.preferences)
+        assertNull(fixture.session.state.value.initialOnboarding)
+        assertFalse(fixture.session.state.value.initialOnboardingCompletedNow)
+    }
+
+    @Test
+    fun failedInitialOnboardingSaveRetainsDraftAndOffersFullSignOut() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.api.initialOnboardingCompletionError = CompanionApiException.Network
+
+        fixture.session.saveInitialOnboarding()
+
+        assertEquals("coach", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
+        assertTrue(fixture.session.state.value.initialOnboardingMessage.orEmpty().contains("choices"))
+        assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
+    }
+
+    @Test
+    fun contactCardHandoffIsMemberBoundAndConsumedOnce() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+
+        fixture.session.prepareInitialOnboardingContactCard()
+
+        val event = fixture.session.state.value.initialOnboardingContactCardHandoff!!
+        assertEquals("classic", fixture.api.initialOnboardingContactCards.single().second.avatarId)
+        assertEquals("https://example.test/contact-card", fixture.session.consumeInitialOnboardingContactCardHandoff(event.id))
+        assertNull(fixture.session.consumeInitialOnboardingContactCardHandoff(event.id))
+        assertEquals(InitialOnboardingStage.MainPersona, fixture.session.state.value.initialOnboardingStage)
+    }
+
+    @Test
+    fun foregroundPendingRefreshIsRemovalOnlyButCompletedRefreshClosesFlow() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.api.initialOnboarding = pendingInitialOnboarding().copy(
+            preferences = InitialOnboardingPreferences("classic", "formal", "murph"),
+        )
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals("coach", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
+
+        fixture.api.initialOnboarding = completedInitialOnboarding()
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertNull(fixture.session.state.value.initialOnboarding)
+    }
+
+    @Test
+    fun duplicateInitialOnboardingCompletionHasOneWriter() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.session.start()
+        val gate = CompletableDeferred<Unit>()
+        fixture.api.initialOnboardingCompletionGate = gate
+
+        val first = async { fixture.session.saveInitialOnboarding() }
+        fixture.api.initialOnboardingCompletionEntered.await()
+        val second = async { fixture.session.saveInitialOnboarding() }
+        runCurrent()
+        gate.complete(Unit)
+        first.await()
+        second.await()
+
+        assertEquals(1, fixture.api.initialOnboardingCompletions.size)
+        assertEquals(InitialOnboardingStage.Welcome, fixture.session.state.value.initialOnboardingStage)
+    }
+
+    @Test
+    fun consentInterruptedSaveResumesTheExactInitialOnboardingDraft() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.api.initialOnboardingCompletionError = CompanionApiException.ConsentRequired
+
+        fixture.session.saveInitialOnboarding()
+
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        fixture.api.initialOnboardingCompletionError = null
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(2, fixture.api.initialOnboardingCompletions.size)
+        assertEquals(
+            fixture.api.initialOnboardingCompletions[0].second,
+            fixture.api.initialOnboardingCompletions[1].second,
+        )
+        assertEquals(InitialOnboardingStage.Welcome, fixture.session.state.value.initialOnboardingStage)
     }
 
     @Test
@@ -81,6 +311,22 @@ class AppSessionTest {
         assertEquals(listOf(MEMBER_KEY), fixture.api.launchConsentFetches)
         assertEquals(1, fixture.health.signOutCalls)
         assertTrue(fixture.api.intents.isEmpty())
+    }
+
+    @Test
+    fun accountConflictWhileLoadingConsentClosesMemberAndHealthAuthority() = runTest {
+        val fixture = fixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.api.launchConsentFetchError = CompanionApiException.AccountConflict
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertNull(fixture.localState.memberKey)
+        assertFalse(fixture.health.signedIn)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
     }
 
     @Test
@@ -108,6 +354,46 @@ class AppSessionTest {
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertEquals(null, fixture.session.state.value.launchConsentRecovery)
         assertEquals(listOf("health_connect", "health_connect"), fixture.api.statusSources)
+    }
+
+    @Test
+    fun revisedConsentSubmitsEveryCurrentDocumentForTheScope() = runTest {
+        val fixture = fixture()
+        val previous = LaunchConsentDocument(
+            id = "privacy",
+            title = "Privacy",
+            version = "2026-06-01",
+            href = "https://example.test/privacy",
+            pdfHref = null,
+        )
+        val revised = previous.copy(version = "2026-08-01")
+        val legal = fixture.api.launchConsentStatus.launchScopes.first {
+            it.scope == LaunchConsentScope.Legal
+        }
+        fixture.api.launchConsentStatus = fixture.api.launchConsentStatus.copy(
+            launchScopes = fixture.api.launchConsentStatus.launchScopes.map { scope ->
+                when (scope.scope) {
+                    LaunchConsentScope.Legal -> scope.copy(
+                        documents = legal.documents + revised,
+                        missingDocuments = listOf(revised),
+                    )
+                    LaunchConsentScope.HealthData -> scope.copy(
+                        granted = true,
+                        missingDocuments = emptyList(),
+                    )
+                }
+            },
+        )
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.session.start()
+        fixture.api.statusError = null
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(
+            mapOf("legal" to "2026-07-01", "privacy" to "2026-08-01"),
+            fixture.api.launchConsentAcceptances.single().second.acceptedDocumentVersions,
+        )
     }
 
     @Test
@@ -2097,11 +2383,22 @@ class AppSessionTest {
     }
 
     @Test
-    fun noSetupOfflineRecoveryRevalidatesMissingAccountBeforePermissions() = runTest {
-        assertNoSetupOfflineRecoveryFailure(
-            failure = CompanionApiException.NoAccount,
-            expectedMessage = "This sign-in isn't linked to an active Murph account.",
-        )
+    fun noSetupOfflineRecoveryAdmitsMissingAccountBeforePermissions() = runTest {
+        val fixture = fixture()
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.session.start()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.api.statusError = CompanionApiException.NoAccount
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.connectCalls)
     }
 
     @Test
@@ -3239,34 +3536,6 @@ class AppSessionTest {
         assertFalse(fixture.session.state.value.isConnectingHealth)
     }
 
-    private suspend fun assertNoSetupOfflineRecoveryFailure(
-        failure: CompanionApiException,
-        expectedMessage: String,
-    ) {
-        val fixture = fixture()
-        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
-        fixture.localState.memberKey = MEMBER_KEY
-        fixture.session.start()
-        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
-        assertFalse(fixture.session.state.value.authVerifiedOnline)
-        assertTrue(fixture.api.statusSources.isEmpty())
-        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
-        fixture.api.statusError = failure
-
-        fixture.session.didEnterBackground()
-        fixture.session.didBecomeActive()
-
-        val rendered = fixture.session.state.value.phase as AppPhase.Failed
-        assertEquals(expectedMessage, rendered.message)
-        assertEquals(listOf("health_connect"), fixture.api.statusSources)
-        assertFalse(fixture.session.prepareHealthConnection())
-        assertTrue(fixture.api.intents.isEmpty())
-        assertEquals(0, fixture.health.identifyCalls)
-        assertEquals(0, fixture.health.configureCalls)
-        assertEquals(0, fixture.health.connectCalls)
-        assertEquals(0, fixture.health.syncCalls)
-    }
-
     private fun fixture(
         now: Instant = Instant.parse("2026-07-25T18:00:00Z"),
         memberKey: String = MEMBER_KEY,
@@ -3389,6 +3658,7 @@ class AppSessionTest {
         private val currentAuthState: () -> AuthSessionState,
     ) : CompanionApi {
         val intents = mutableListOf<ConnectionIntent>()
+        val signInRequests = mutableListOf<SignInTokenRequest>()
         val tokenAuthMemberKeys = mutableListOf<String?>()
         val statusSources = mutableListOf<String>()
         var status = CompanionSyncStatus(lastDataReceivedAt = null, resources = emptyMap())
@@ -3414,10 +3684,22 @@ class AppSessionTest {
         val launchConsentFetches = mutableListOf<String>()
         val launchConsentAcceptances =
             mutableListOf<Pair<String, LaunchConsentAcceptanceRequest>>()
+        var initialOnboarding = completedInitialOnboarding()
+        var initialOnboardingFetchError: Throwable? = null
+        var initialOnboardingCompletionError: Throwable? = null
+        var initialOnboardingCompletionGate: CompletableDeferred<Unit>? = null
+        val initialOnboardingCompletionEntered = CompletableDeferred<Unit>()
+        var initialOnboardingCompletedNow = true
+        var initialOnboardingContactCardError: Throwable? = null
+        val initialOnboardingCompletions =
+            mutableListOf<Pair<String, InitialOnboardingCompletionRequest>>()
+        val initialOnboardingContactCards =
+            mutableListOf<Pair<String, InitialOnboardingContactCardRequest>>()
 
         override suspend fun createJunctionSignInToken(
             request: SignInTokenRequest,
         ): SignInTokenResponse {
+            signInRequests += request
             intents += request.connectionIntent
             tokenAuthMemberKeys +=
                 (currentAuthState() as? AuthSessionState.SignedIn)?.memberKey
@@ -3462,6 +3744,29 @@ class AppSessionTest {
             }
             launchConsentFetchError?.let { throw it }
             return launchConsentStatus
+        }
+
+        override suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding =
+            initialOnboardingFetchError?.let { throw it } ?: initialOnboarding
+
+        override suspend fun completeInitialOnboarding(
+            memberKey: String,
+            request: InitialOnboardingCompletionRequest,
+        ): InitialOnboarding {
+            initialOnboardingCompletions += memberKey to request
+            initialOnboardingCompletionEntered.complete(Unit)
+            initialOnboardingCompletionGate?.await()
+            initialOnboardingCompletionError?.let { throw it }
+            return completedInitialOnboarding(completedNow = initialOnboardingCompletedNow)
+        }
+
+        override suspend fun prepareInitialOnboardingContactCard(
+            memberKey: String,
+            request: InitialOnboardingContactCardRequest,
+        ): InitialOnboardingContactCardHandoff {
+            initialOnboardingContactCards += memberKey to request
+            initialOnboardingContactCardError?.let { throw it }
+            return InitialOnboardingContactCardHandoff("https://example.test/contact-card")
         }
 
         override suspend fun acceptLaunchConsent(
@@ -3657,16 +3962,85 @@ class AppSessionTest {
                     LaunchConsentScopeStatus(
                         scope = LaunchConsentScope.Legal,
                         granted = granted,
+                        documents = listOf(legal),
                         missingDocuments = if (granted) emptyList() else listOf(legal),
                     ),
                     LaunchConsentScopeStatus(
                         scope = LaunchConsentScope.HealthData,
                         granted = granted,
+                        documents = listOf(health),
                         missingDocuments = if (granted) emptyList() else listOf(health),
                     ),
                 ),
             )
         }
+
+        fun completedInitialOnboarding(completedNow: Boolean? = null) = InitialOnboarding(
+            status = InitialOnboardingStatus.Completed,
+            completedNow = completedNow,
+            preferences = InitialOnboardingPreferences(null, null, null),
+            catalog = null,
+            contactCard = null,
+            contactAction = null,
+        )
+
+        fun pendingInitialOnboarding(
+            contactCard: InitialOnboardingContactCard? = InitialOnboardingContactCard(
+                avatars = listOf(
+                    InitialOnboardingContactAvatar(
+                        id = "classic",
+                        kind = InitialOnboardingContactAvatarKind.Logo,
+                        label = "Classic",
+                        imageUrl = null,
+                    ),
+                ),
+                defaultAvatarId = "classic",
+            ),
+        ) = InitialOnboarding(
+            status = InitialOnboardingStatus.Pending,
+            completedNow = null,
+            preferences = InitialOnboardingPreferences(null, null, null),
+            catalog = InitialOnboardingCatalog(
+                personas = listOf(
+                    InitialOnboardingPersona(
+                        id = "classic",
+                        label = "Classic",
+                        description = "Warm and clear",
+                        supportDescription = "Adds warmth",
+                        defaultTone = "formal",
+                        defaultVoiceId = "murph",
+                        recommendedVoiceIds = listOf("murph"),
+                    ),
+                    InitialOnboardingPersona(
+                        id = "coach",
+                        label = "Coach",
+                        description = "Direct and motivating",
+                        supportDescription = "Adds momentum",
+                        defaultTone = "formal",
+                        defaultVoiceId = "murph",
+                        recommendedVoiceIds = listOf("murph"),
+                    ),
+                ),
+                voices = listOf(
+                    InitialOnboardingVoice(
+                        id = "murph",
+                        label = "Murph",
+                        description = "Warm and direct",
+                        previewUrl = "https://example.test/audio/murph.mp3",
+                    ),
+                ),
+                tones = listOf(
+                    InitialOnboardingTone("formal", "Formal", "Want to work on sleep first?"),
+                    InitialOnboardingTone("casual", "Casual", "wanna fix sleep first?"),
+                ),
+            ),
+            contactCard = contactCard,
+            contactAction = InitialOnboardingContactAction(
+                href = "sms:+15555550123",
+                kind = InitialOnboardingContactKind.Text,
+                label = "Text Murph",
+            ),
+        )
 
         fun grantLaunchConsentScope(
             status: LaunchConsentStatus,

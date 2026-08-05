@@ -340,7 +340,7 @@ private fun CodeStage(
             onComplete = onConfirmCode,
         )
         MurphPrimaryButton(
-            text = if (state.isInFlight) "Signing in…" else "Sign in",
+            text = if (state.isInFlight) "Continuing…" else "Continue",
             onClick = onConfirmCode,
             enabled = state.canConfirmCode,
         )

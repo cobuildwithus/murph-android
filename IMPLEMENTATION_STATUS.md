@@ -3,9 +3,10 @@
 ## Implemented in this skeleton
 
 - Complete Gradle project metadata, dependency catalog, manifest, theme, resources, and native package layout.
-- Privy initialization, restored auth-state handling, phone/email OTP, identity-token bearer auth, and logout boundary.
-- Existing companion sign-in-token and status API client, including an active-member and legal-consent bootstrap check.
-- Native signed-in launch-consent recovery through the companion legal-consent endpoint, with strict unambiguous `murph.hosted-consent-status.v1` parsing, same-origin HTTPS document links, at-most-two sequential exact missing-scope acceptance bodies, monotonic-progress enforcement, canonical `CONSENT_DOCUMENT_VERSIONS_STALE` reload handling, partial-success retention, and no persisted consent truth.
+- Privy initialization, restored auth-state handling, one neutral phone/email OTP flow for new and returning members, identity-token bearer auth, and logout boundary.
+- Canonical missing-account admission through the existing member-fenced sign-in-token transaction, with the returned Junction token discarded until explicit Health Connect permission, system-time-zone projection, exact account-conflict teardown, and no parallel app-owned signup endpoint.
+- Server-owned `murph.companion.initial-onboarding.v1` setup for contact card, main and supporting personas, voice preview, tone, first-writer Welcome, contact handoff, stale-completion handling, foreground removal-only reconciliation, and exact consent-interrupted continuation.
+- Native signed-in launch-consent recovery through the companion legal-consent endpoint, with strict unambiguous `murph.hosted-consent-status.v1` parsing, same-origin HTTPS document links, at-most-two sequential missing-scope acceptance bodies containing every canonical document and exact version in each scope, dismissible loading, monotonic-progress enforcement, canonical `CONSENT_DOCUMENT_VERSIONS_STALE` reload handling, partial-success retention, and no persisted consent truth.
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
 - Transactional Junction Health Connect setup and permission recovery, including foreground preservation of an owned Connect attempt, post-consent grant refresh before connection, authoritative sign-out/member-switch cancellation, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, and setup-time history permission.
 - Current-member and backend-consent preflight before health uploads, plus account-switch, reinstall, incomplete-setup, stale-session, native launch-consent recovery, and fail-closed sign-out safeguards. Sign-out atomically records a durable tombstone and invalidates setup authorization before waiting on startup or touching either SDK; process reconstruction finishes Junction-first, Privy-second teardown before restoration.
@@ -19,15 +20,22 @@
   replacement, live-member revalidation before each contact read,
   consent-aware preflight/replacement/Stop continuations, durable exact-revision
   permission-loss deletion replay, and no persisted contact values.
-- Compose login, setup, status, WHOOP guidance, consent, settings, and failure
-  screens matched to the shared `murph-ios` visual system.
+- A Home Friendly Names setup card after Health Connect is active, reusing the
+  same explicit consent and foreground-only projection until server sharing is
+  enabled.
+- Compose login, first-run setup, status, WHOOP guidance, consent, settings, and
+  failure screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
   setup, waiting, synced, delayed, attention, consent required, consent load
-  failure, and failure states.
+  failure, all first-run onboarding stages, and failure states.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
 - Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, strict native launch-consent parsing, canonical stale reload, bounded progress, partial-success retention, exact blocked-action recovery, pre-sync trust checks, cancellation recovery, OTP cleanup, provider availability, backend receipt truth, member-switch teardown, address-book projection/API strictness, durable mutation replay, CAS behavior, permission-loss cleanup, operation coalescing, ownership fencing, and rendered Settings state.
+- Unit tests for new-account admission, member fencing, account-conflict teardown,
+  system timezone, strict onboarding parsing and request bodies, save/skip,
+  first-writer races, draft preservation, contact handoff, and consent-interrupted
+  completion.
 
 ## Executable verification
 

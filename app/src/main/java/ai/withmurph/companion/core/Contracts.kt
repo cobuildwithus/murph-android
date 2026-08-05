@@ -34,7 +34,30 @@ interface AuthProvider {
 
 interface CompanionApi {
     suspend fun createJunctionSignInToken(request: SignInTokenRequest): SignInTokenResponse
+    suspend fun createJunctionSignInToken(
+        memberKey: String,
+        request: SignInTokenRequest,
+    ): SignInTokenResponse = createJunctionSignInToken(request)
+
     suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus
+    suspend fun fetchSyncStatus(
+        memberKey: String,
+        sourceProviderSlug: String,
+    ): CompanionSyncStatus = fetchSyncStatus(sourceProviderSlug)
+
+    suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding =
+        throw CompanionApiException.InvalidResponse
+
+    suspend fun completeInitialOnboarding(
+        memberKey: String,
+        request: InitialOnboardingCompletionRequest,
+    ): InitialOnboarding = throw CompanionApiException.InvalidResponse
+
+    suspend fun prepareInitialOnboardingContactCard(
+        memberKey: String,
+        request: InitialOnboardingContactCardRequest,
+    ): InitialOnboardingContactCardHandoff = throw CompanionApiException.InvalidResponse
+
     suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus =
         throw CompanionApiException.InvalidResponse
 

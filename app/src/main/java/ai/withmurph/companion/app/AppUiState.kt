@@ -3,6 +3,7 @@ package ai.withmurph.companion.app
 import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.LaunchConsentStatus
 
 sealed interface AppPhase {
@@ -13,6 +14,7 @@ sealed interface AppPhase {
         val message: String,
         val canRetry: Boolean = true,
         val canSignOut: Boolean = false,
+        val signOutLabel: String = "Sign out and start fresh",
     ) : AppPhase
 }
 
@@ -33,8 +35,37 @@ data class AppUiState(
     val contactsPermissionDenied: Boolean = false,
     val addressBookMessage: String? = null,
     val launchConsentRecovery: LaunchConsentRecoveryUiState? = null,
+    val initialOnboarding: InitialOnboarding? = null,
+    val initialOnboardingStage: InitialOnboardingStage? = null,
+    val initialOnboardingDraft: InitialOnboardingDraft? = null,
+    val isInitialOnboardingSaving: Boolean = false,
+    val initialOnboardingCompletedNow: Boolean = false,
+    val initialOnboardingMessage: String? = null,
+    val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
     val pendingHealthPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
+)
+
+data class PendingInitialOnboardingContactCardHandoff(
+    val id: Int,
+    val url: String,
+)
+
+enum class InitialOnboardingStage {
+    Contact,
+    MainPersona,
+    SupportingPersona,
+    Voice,
+    Tone,
+    Welcome,
+}
+
+data class InitialOnboardingDraft(
+    val avatarId: String?,
+    val mainPersonaId: String,
+    val supportingPersonaId: String?,
+    val voiceId: String,
+    val toneId: String,
 )
 
 enum class LaunchConsentRecoveryPhase {
@@ -52,6 +83,7 @@ data class LaunchConsentRecoveryUiState(
     val message: String? = null,
     val showSheet: Boolean = true,
     val canDismiss: Boolean = phase == LaunchConsentRecoveryPhase.Required ||
+        phase == LaunchConsentRecoveryPhase.Loading ||
         phase == LaunchConsentRecoveryPhase.LoadFailed,
     val canAccept: Boolean = phase == LaunchConsentRecoveryPhase.Required &&
         status?.missingLaunchScopes?.isNotEmpty() == true,

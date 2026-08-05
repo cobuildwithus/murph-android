@@ -4,10 +4,25 @@ import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.AppUiState
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
+import ai.withmurph.companion.app.InitialOnboardingDraft
+import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.auth.CountryDialCode
 import ai.withmurph.companion.auth.LoginUiState
+import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.InitialOnboarding
+import ai.withmurph.companion.core.InitialOnboardingCatalog
+import ai.withmurph.companion.core.InitialOnboardingContactAction
+import ai.withmurph.companion.core.InitialOnboardingContactAvatar
+import ai.withmurph.companion.core.InitialOnboardingContactAvatarKind
+import ai.withmurph.companion.core.InitialOnboardingContactCard
+import ai.withmurph.companion.core.InitialOnboardingContactKind
+import ai.withmurph.companion.core.InitialOnboardingPersona
+import ai.withmurph.companion.core.InitialOnboardingPreferences
+import ai.withmurph.companion.core.InitialOnboardingStatus
+import ai.withmurph.companion.core.InitialOnboardingTone
+import ai.withmurph.companion.core.InitialOnboardingVoice
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
@@ -55,6 +70,13 @@ private enum class ScreenshotScenario {
     Attention,
     ConsentRequired,
     ConsentLoadFailure,
+    OnboardingContact,
+    OnboardingPersona,
+    OnboardingSupporting,
+    OnboardingVoice,
+    OnboardingTone,
+    OnboardingWelcome,
+    FriendlyNames,
     Failure;
 
     fun appState(now: Instant): AppUiState = when (this) {
@@ -78,6 +100,22 @@ private enum class ScreenshotScenario {
                 phase = LaunchConsentRecoveryPhase.LoadFailed,
                 message = "Murph couldn't load the latest consent documents. Check your connection and try again.",
                 showSheet = true,
+            ),
+        )
+        OnboardingContact -> onboardingState(InitialOnboardingStage.Contact)
+        OnboardingPersona -> onboardingState(InitialOnboardingStage.MainPersona)
+        OnboardingSupporting -> onboardingState(InitialOnboardingStage.SupportingPersona)
+        OnboardingVoice -> onboardingState(InitialOnboardingStage.Voice)
+        OnboardingTone -> onboardingState(InitialOnboardingStage.Tone)
+        OnboardingWelcome -> onboardingState(InitialOnboardingStage.Welcome).copy(
+            initialOnboardingCompletedNow = true,
+        )
+        FriendlyNames -> ready(HealthSyncState.Synced(now)).copy(
+            addressBookSharing = AddressBookSharingState.Server(
+                enabled = false,
+                storedContactCount = 0,
+                canWrite = true,
+                ownedByInstallation = false,
             ),
         )
         Failure -> AppUiState(
@@ -105,6 +143,13 @@ private enum class ScreenshotScenario {
         Attention,
         ConsentRequired,
         ConsentLoadFailure,
+        OnboardingContact,
+        OnboardingPersona,
+        OnboardingSupporting,
+        OnboardingVoice,
+        OnboardingTone,
+        OnboardingWelcome,
+        FriendlyNames,
         Failure -> LoginUiState()
     }
 
@@ -117,11 +162,72 @@ private enum class ScreenshotScenario {
         backendEnvironment = "screenshot",
     )
 
+    private fun onboardingState(stage: InitialOnboardingStage) =
+        ready(HealthSyncState.NotConnected).copy(
+            initialOnboarding = screenshotOnboarding(),
+            initialOnboardingStage = stage,
+            initialOnboardingDraft = InitialOnboardingDraft(
+                avatarId = "classic",
+                mainPersonaId = "classic",
+                supportingPersonaId = "coach",
+                voiceId = "murph",
+                toneId = "formal",
+            ),
+        )
+
     companion object {
         fun from(value: String?): ScreenshotScenario =
             entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: Setup
     }
 }
+
+private fun screenshotOnboarding() = InitialOnboarding(
+    status = InitialOnboardingStatus.Pending,
+    completedNow = null,
+    preferences = InitialOnboardingPreferences(null, null, null),
+    catalog = InitialOnboardingCatalog(
+        personas = listOf(
+            InitialOnboardingPersona(
+                "classic", "Classic", "Warm, perceptive, and direct.",
+                "Adds warmth and perspective.", "formal", "murph",
+                listOf("murph", "calm"),
+            ),
+            InitialOnboardingPersona(
+                "coach", "Coach", "Motivating without the noise.",
+                "Adds momentum when it helps.", "casual", "energy",
+                listOf("energy", "murph"),
+            ),
+            InitialOnboardingPersona(
+                "scientist", "Scientist", "Evidence first, clearly explained.",
+                "Adds useful context and precision.", "formal", "calm",
+                listOf("calm", "murph"),
+            ),
+        ),
+        voices = listOf(
+            InitialOnboardingVoice("murph", "Murph", "Warm and direct", "https://example.test/murph.mp3"),
+            InitialOnboardingVoice("calm", "Calm", "Measured and grounding", "https://example.test/calm.mp3"),
+            InitialOnboardingVoice("energy", "Energy", "Bright and motivating", "https://example.test/energy.mp3"),
+        ),
+        tones = listOf(
+            InitialOnboardingTone("formal", "Formal", "Your sleep is down this week. Want to work on sleep first?"),
+            InitialOnboardingTone("casual", "Casual", "sleep is way down this week. wanna fix sleep first?"),
+        ),
+    ),
+    contactCard = InitialOnboardingContactCard(
+        avatars = listOf(
+            InitialOnboardingContactAvatar("classic", InitialOnboardingContactAvatarKind.Logo, "Classic", null),
+            InitialOnboardingContactAvatar("sage", InitialOnboardingContactAvatarKind.Logo, "Sage", null),
+            InitialOnboardingContactAvatar("warm", InitialOnboardingContactAvatarKind.Headshot, "Warm", null),
+            InitialOnboardingContactAvatar("blank", InitialOnboardingContactAvatarKind.Blank, "Blank", null),
+        ),
+        defaultAvatarId = "classic",
+    ),
+    contactAction = InitialOnboardingContactAction(
+        href = "sms:+15555550123",
+        kind = InitialOnboardingContactKind.Text,
+        label = "Text Murph",
+    ),
+)
 
 private fun consentStatus(): LaunchConsentStatus {
     val legal = LaunchConsentDocument(
@@ -145,11 +251,13 @@ private fun consentStatus(): LaunchConsentStatus {
             LaunchConsentScopeStatus(
                 scope = LaunchConsentScope.Legal,
                 granted = false,
+                documents = listOf(legal),
                 missingDocuments = listOf(legal),
             ),
             LaunchConsentScopeStatus(
                 scope = LaunchConsentScope.HealthData,
                 granted = false,
+                documents = listOf(health),
                 missingDocuments = listOf(health),
             ),
         ),
@@ -175,6 +283,17 @@ private val NoOpActions = MurphActions(
     onDismissLaunchConsent = {},
     onRetryLaunchConsent = {},
     onAcceptLaunchConsent = {},
+    onSelectInitialOnboardingAvatar = {},
+    onSelectInitialOnboardingMainPersona = {},
+    onSelectInitialOnboardingSupportingPersona = {},
+    onSelectInitialOnboardingVoice = {},
+    onSelectInitialOnboardingTone = {},
+    onSetInitialOnboardingStage = {},
+    onPrepareInitialOnboardingContactCard = {},
+    onSkipInitialOnboarding = {},
+    onSaveInitialOnboarding = {},
+    onDismissCompletedInitialOnboarding = {},
+    onOpenInitialOnboardingContact = {},
     onOpenConsentDocument = {},
     onOpenAppSettings = {},
     onOpenPrivacy = {},

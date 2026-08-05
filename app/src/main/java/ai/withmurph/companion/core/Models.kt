@@ -42,11 +42,109 @@ data class SignInTokenRequest(
     val appVersion: String,
     val connectionIntent: ConnectionIntent,
     val sdkVersions: Map<String, String>,
+    val timeZone: String,
 )
 
 data class SignInTokenResponse(
     val signInToken: String,
     val environment: String,
+)
+
+enum class InitialOnboardingStatus(val wireValue: String) {
+    Pending("pending"),
+    Completed("completed"),
+}
+
+data class InitialOnboardingPreferences(
+    val persona: String?,
+    val tone: String?,
+    val voice: String?,
+)
+
+data class InitialOnboardingPersona(
+    val id: String,
+    val label: String,
+    val description: String,
+    val supportDescription: String,
+    val defaultTone: String,
+    val defaultVoiceId: String,
+    val recommendedVoiceIds: List<String>,
+)
+
+data class InitialOnboardingVoice(
+    val id: String,
+    val label: String,
+    val description: String,
+    val previewUrl: String,
+)
+
+data class InitialOnboardingTone(
+    val id: String,
+    val label: String,
+    val sample: String,
+)
+
+data class InitialOnboardingCatalog(
+    val personas: List<InitialOnboardingPersona>,
+    val voices: List<InitialOnboardingVoice>,
+    val tones: List<InitialOnboardingTone>,
+)
+
+enum class InitialOnboardingContactAvatarKind(val wireValue: String) {
+    Headshot("headshot"),
+    Logo("logo"),
+    Blank("blank"),
+}
+
+data class InitialOnboardingContactAvatar(
+    val id: String,
+    val kind: InitialOnboardingContactAvatarKind,
+    val label: String,
+    val imageUrl: String?,
+)
+
+data class InitialOnboardingContactCard(
+    val avatars: List<InitialOnboardingContactAvatar>,
+    val defaultAvatarId: String,
+)
+
+enum class InitialOnboardingContactKind(val wireValue: String) {
+    Text("text"),
+    Telegram("telegram"),
+    Email("email"),
+}
+
+data class InitialOnboardingContactAction(
+    val href: String,
+    val kind: InitialOnboardingContactKind,
+    val label: String,
+)
+
+data class InitialOnboarding(
+    val status: InitialOnboardingStatus,
+    val completedNow: Boolean?,
+    val preferences: InitialOnboardingPreferences,
+    val catalog: InitialOnboardingCatalog?,
+    val contactCard: InitialOnboardingContactCard?,
+    val contactAction: InitialOnboardingContactAction?,
+)
+
+enum class InitialOnboardingCompletionAction(val wireValue: String) {
+    Save("save"),
+    Skip("skip"),
+}
+
+data class InitialOnboardingCompletionRequest(
+    val action: InitialOnboardingCompletionAction,
+    val preferences: InitialOnboardingPreferences?,
+)
+
+data class InitialOnboardingContactCardRequest(
+    val avatarId: String,
+)
+
+data class InitialOnboardingContactCardHandoff(
+    val url: String,
 )
 
 data class CompanionSyncStatus(
@@ -67,6 +165,7 @@ data class LaunchConsentDocument(
 data class LaunchConsentScopeStatus(
     val scope: LaunchConsentScope,
     val granted: Boolean,
+    val documents: List<LaunchConsentDocument>,
     val missingDocuments: List<LaunchConsentDocument>,
 )
 
@@ -217,6 +316,7 @@ sealed class CompanionApiException(message: String) : Exception(message) {
     data object Network : CompanionApiException("Network request failed")
     data object Unauthorized : CompanionApiException("Authentication required")
     data object NoAccount : CompanionApiException("No Murph account")
+    data object AccountConflict : CompanionApiException("Murph account conflict")
     data object ConsentRequired : CompanionApiException("Murph consent required")
     data object StaleConsentDocuments : CompanionApiException("Consent documents changed")
     data object ReconnectRequired : CompanionApiException("Health connection must be reconnected")

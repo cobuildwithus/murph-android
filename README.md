@@ -1,12 +1,12 @@
 # Murph Android Companion
 
-A native Kotlin + Jetpack Compose companion that signs an existing Murph member in and bridges Health Connect into Murph through Junction.
+A native Kotlin + Jetpack Compose companion that creates or restores a Murph account, completes the shared first-run setup, and bridges Health Connect into Murph through Junction.
 
 This repository is intentionally narrow. It is not a general Murph mobile client.
 
 ## Included
 
-- Privy phone and email OTP sign-in.
+- Privy phone and email OTP account entry for new and returning members.
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
@@ -15,6 +15,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
+- Server-owned first-run contact-card, persona, voice, tone, and welcome setup.
 - WHOOP → Health Connect setup guidance.
 - Optional, server-backed familiar-name projection for unregistered phone participants in groups.
 - Settings, legal links, deletion, support, and sign-out.
@@ -62,7 +63,10 @@ Never put the Privy app secret in this app. The Android Privy app client must al
 - release package: `ai.withmurph.app`
 - debug package: `ai.withmurph.app.dev`
 
-Apply the accompanying backend patch before testing. Current Murph `main` rejects `platform: "android"`; the patch also makes sync status source-scoped so an Apple Health receipt cannot make the Android app report Health Connect as synced.
+Deploy the companion backend from Murph PR #1296 before testing account creation
+or first-run setup. Android deliberately reuses the backend's canonical account
+admission and onboarding owners; it does not create a second signup or catalog
+source in the app.
 
 ## Build and test
 
@@ -77,7 +81,9 @@ identifier is blank or the production backend URL is not absolute HTTPS.
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
 values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
-`attention`, `consentRequired`, `consentLoadFailure`, and `failure`.
+`attention`, `consentRequired`, `consentLoadFailure`, `onboardingContact`,
+`onboardingPersona`, `onboardingSupporting`, `onboardingVoice`,
+`onboardingTone`, `onboardingWelcome`, `friendlyNames`, and `failure`.
 
 Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
 
@@ -141,6 +147,21 @@ message.
 
 ## Connection lifecycle
 
+- One neutral OTP flow serves new and returning members. After Privy verifies
+  the destination, the app checks canonical membership. A missing account is
+  admitted through the existing member-fenced sign-in-token transaction; no
+  Junction token is retained or identified until the member explicitly grants
+  Health Connect access.
+- Every member-bound bootstrap, token, status, consent, onboarding, contact,
+  and sync continuation is fenced to the current Privy member. Canonical
+  account-conflict responses tear down local member and Junction authority and
+  require a different sign-in.
+- Pending first-run setup is loaded from the server after admission. Contact
+  card, persona, supporting persona, voice, and tone choices remain local draft
+  state until one exact save; Skip completes without preferences. First-writer
+  completion shows Welcome only to the request that completed setup, while a
+  stale completion closes quietly. Foreground refresh can remove completed
+  onboarding but never replace an in-progress draft.
 - The app does not create a Junction connection merely because a member signs in.
 - Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
 - A session restored while offline repeats that validation when Privy becomes
@@ -162,7 +183,8 @@ message.
 - When the backend returns structured launch consent required, Murph keeps the
   Privy member session, signs out only the local Junction SDK, strictly loads
   same-origin HTTPS legal and health-data documents in native UI, and posts at
-  most the two canonical missing scopes with exact returned document versions.
+  most the two canonical missing scopes with every canonical document and its
+  exact returned version for each accepted scope.
   `CONSENT_DOCUMENT_VERSIONS_STALE` reloads server truth, partial success is
   retained, and a valid response must make monotonic progress.
 - Consent recovery resumes the exact blocked startup, connect, sync, Health
@@ -202,6 +224,9 @@ message.
 - Sign-out and member switches invalidate contact work and clear the local
   revision/replay metadata so a late completion cannot mutate the next member's
   state.
+- Once Health Connect is active, Home keeps the optional Friendly Names setup
+  discoverable until server-backed sharing is enabled; it reuses the same
+  explicit foreground consent and one-shot projection owned by Settings.
 
 ## Release requirements
 

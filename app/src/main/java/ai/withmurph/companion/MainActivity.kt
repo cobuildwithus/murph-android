@@ -113,6 +113,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            LaunchedEffect(appState.initialOnboardingContactCardHandoff?.id) {
+                val event = appState.initialOnboardingContactCardHandoff
+                    ?: return@LaunchedEffect
+                lifecycle.withResumed {
+                    graph.session.consumeInitialOnboardingContactCardHandoff(event.id)
+                        ?.let(::openUri)
+                }
+            }
             MurphTheme {
                 MurphApp(
                     appState = appState,
@@ -171,6 +179,39 @@ class MainActivity : ComponentActivity() {
                             graph.applicationScope.launch {
                                 graph.session.acceptLaunchConsent()
                             }
+                        },
+                        onSelectInitialOnboardingAvatar =
+                            graph.session::selectInitialOnboardingAvatar,
+                        onSelectInitialOnboardingMainPersona =
+                            graph.session::selectInitialOnboardingMainPersona,
+                        onSelectInitialOnboardingSupportingPersona =
+                            graph.session::selectInitialOnboardingSupportingPersona,
+                        onSelectInitialOnboardingVoice =
+                            graph.session::selectInitialOnboardingVoice,
+                        onSelectInitialOnboardingTone =
+                            graph.session::selectInitialOnboardingTone,
+                        onSetInitialOnboardingStage =
+                            graph.session::setInitialOnboardingStage,
+                        onPrepareInitialOnboardingContactCard = {
+                            graph.applicationScope.launch {
+                                graph.session.prepareInitialOnboardingContactCard()
+                            }
+                        },
+                        onSkipInitialOnboarding = {
+                            graph.applicationScope.launch {
+                                graph.session.skipInitialOnboarding()
+                            }
+                        },
+                        onSaveInitialOnboarding = {
+                            graph.applicationScope.launch {
+                                graph.session.saveInitialOnboarding()
+                            }
+                        },
+                        onDismissCompletedInitialOnboarding =
+                            graph.session::dismissCompletedInitialOnboarding,
+                        onOpenInitialOnboardingContact = { url ->
+                            graph.session.dismissCompletedInitialOnboarding()
+                            openUri(url)
                         },
                         onOpenConsentDocument = ::openUri,
                         onOpenAppSettings = ::openAppSettings,

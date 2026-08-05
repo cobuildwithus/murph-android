@@ -76,6 +76,16 @@ fun MurphLogo(
 }
 
 @Composable
+fun MurphMark(modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(R.drawable.murph_mark),
+        contentDescription = null,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
+}
+
+@Composable
 fun MurphPrimaryButton(
     text: String,
     onClick: () -> Unit,
@@ -123,6 +133,28 @@ fun MurphOutlineButton(
         ),
     ) {
         Text(text = text, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
+fun MurphGhostButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().heightIn(min = 44.dp),
+        shape = RoundedCornerShape(16.dp),
+        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = MurphColors.Slate,
+            disabledContentColor = MurphColors.SlateMuted.copy(alpha = 0.5f),
+        ),
+    ) {
+        Text(text = text, style = MaterialTheme.typography.labelLarge)
     }
 }
 

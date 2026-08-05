@@ -18,6 +18,9 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialOnboarding
+import ai.withmurph.companion.core.InitialOnboardingPreferences
+import ai.withmurph.companion.core.InitialOnboardingStatus
 import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
@@ -40,6 +43,21 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AddressBookSessionTest {
+    @Test
+    fun accountConflictDuringAddressBookStatusClosesMemberAuthority() = runTest {
+        val fixture = fixture()
+        fixture.api.beforeStatusReturn = { _, _ ->
+            throw CompanionApiException.AccountConflict
+        }
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertNull(fixture.localState.memberKey)
+    }
+
     @Test
     fun explicitShareFetchesStatusBeforeReadingAndPublishesServerSuccess() = runTest {
         val fixture = fixture()
@@ -1002,6 +1020,15 @@ class AddressBookSessionTest {
             sourceProviderSlug: String,
         ): CompanionSyncStatus = CompanionSyncStatus(null, emptyMap())
 
+        override suspend fun fetchInitialOnboarding(memberKey: String) = InitialOnboarding(
+            status = InitialOnboardingStatus.Completed,
+            completedNow = null,
+            preferences = InitialOnboardingPreferences(null, null, null),
+            catalog = null,
+            contactCard = null,
+            contactAction = null,
+        )
+
         override suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus {
             launchConsentFetches += memberKey
             return launchConsentStatus
@@ -1252,11 +1279,13 @@ class AddressBookSessionTest {
                     LaunchConsentScopeStatus(
                         scope = LaunchConsentScope.Legal,
                         granted = granted,
+                        documents = listOf(legal),
                         missingDocuments = if (granted) emptyList() else listOf(legal),
                     ),
                     LaunchConsentScopeStatus(
                         scope = LaunchConsentScope.HealthData,
                         granted = granted,
+                        documents = listOf(health),
                         missingDocuments = if (granted) emptyList() else listOf(health),
                     ),
                 ),
