@@ -145,6 +145,7 @@ interface LocalState {
         receiptBaselineAt: InstantValue?,
         statusObservedAt: InstantValue,
     ): Boolean
+    fun requireHealthReconnect(): Boolean
     fun revokeHealthSetupAuthorization(): Boolean
     fun beginSignOut(): Boolean
     fun completeSignOut(): Boolean

@@ -169,9 +169,10 @@ message.
   online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
   After at least one category is granted, the app revalidates the member and
-  requests a backend token with `connectionIntent: "connect"`. If launch
-  consent interrupts that continuation, Murph refreshes Health Connect grants
-  again before connecting and aborts when none remain.
+  refreshes the server receipt baseline immediately before requesting a backend
+  token with `connectionIntent: "connect"`. If launch consent interrupts that
+  continuation, Murph refreshes Health Connect grants and the receipt baseline
+  again before connecting, and aborts when either check cannot complete.
 - The application session then owns the optional history-permission prompt
   across Activity recreation. It records completed setup and starts the first
   sync only after that prompt resolves or is unavailable. The setup marker,
@@ -182,7 +183,9 @@ message.
   `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and
   shows **Reconnect Health Connect**. Ordinary refresh remains read-only; only
   that visible action can reach a `connectionIntent: "connect"` request after
-  the Health Connect permission flow.
+  the Health Connect permission flow. Setup revocation and the typed reconnect
+  marker commit together, and the marker remains authoritative through token,
+  identify, connection, and history-permission work until final setup commits.
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a
   fresh `connect` transaction can begin.
@@ -212,8 +215,9 @@ message.
 - If that status cannot be refreshed, Android labels the cached projection
   **Last checked online** and never presents its frozen relative time or sync
   classification as a current result.
-- A source-scoped receipt must also be at or after the current setup boundary;
-  an older Health Connect receipt cannot prove the fresh connection worked.
+- A source-scoped receipt must be strictly newer than the final pre-connect
+  baseline; an older or equal Health Connect receipt cannot prove the fresh
+  connection worked.
 - Complete local permission revocation renders Not connected even while online
   account verification is temporarily unavailable.
 - Login destinations and OTP digits are protected from Android task snapshots,

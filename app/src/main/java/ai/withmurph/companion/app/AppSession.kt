@@ -1148,29 +1148,33 @@ class AppSession(
                     }
                     return false
                 }
-                if (
-                    fetchValidatedHealthStatus(
-                        epoch,
-                        LaunchConsentFollowUp.CompleteHealthPermission(
-                            pending.requestedAt,
-                            pending.receiptBaselineAt,
-                        ),
-                    ) == null
-                ) {
+                val finalPreConnectStatus = fetchValidatedHealthStatus(
+                    epoch,
+                    LaunchConsentFollowUp.CompleteHealthPermission(
+                        pending.requestedAt,
+                        pending.receiptBaselineAt,
+                    ),
+                )
+                if (finalPreConnectStatus == null) {
                     pendingHealthConnection = null
                     _state.update { it.copy(isConnectingHealth = false) }
                     return false
                 }
-                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                val refreshedPending = pending.copy(
+                    requestedAt = finalPreConnectStatus.observedAt,
+                    receiptBaselineAt = finalPreConnectStatus.lastDataReceivedAt,
+                )
+                pendingHealthConnection = refreshedPending
+                if (!ownsPendingHealthConnection(refreshedPending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
-                currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
+                currentAuthOwnershipLoss(refreshedPending.memberKey)?.let { authState ->
                     authStateToReconcile = authState
                     return@withLock abortPendingHealthConnection(epoch)
                 }
                 try {
                     identifyJunction(
-                        memberKey = pending.memberKey,
+                        memberKey = refreshedPending.memberKey,
                         intent = ConnectionIntent.Connect,
                         epoch = epoch,
                     )?.let { authState ->
@@ -1181,10 +1185,10 @@ class AppSession(
                     if (epoch == sessionEpoch) {
                         beginLaunchConsentRecovery(
                             expectedEpoch = epoch,
-                            memberKey = pending.memberKey,
+                            memberKey = refreshedPending.memberKey,
                             followUp = LaunchConsentFollowUp.CompleteHealthPermission(
-                                pending.requestedAt,
-                                pending.receiptBaselineAt,
+                                refreshedPending.requestedAt,
+                                refreshedPending.receiptBaselineAt,
                             ),
                             healthLockHeld = true,
                         )
@@ -1192,23 +1196,23 @@ class AppSession(
                     pendingHealthConnection = null
                     return@withLock false
                 }
-                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                if (!ownsPendingHealthConnection(refreshedPending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
-                currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
+                currentAuthOwnershipLoss(refreshedPending.memberKey)?.let { authState ->
                     authStateToReconcile = authState
                     return@withLock abortPendingHealthConnection(epoch)
                 }
                 health.configure()
                 health.connectAfterPermissionRequest()
-                if (!ownsPendingHealthConnection(pending.memberKey)) {
+                if (!ownsPendingHealthConnection(refreshedPending.memberKey)) {
                     return abortPendingHealthConnection(epoch)
                 }
-                currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
+                currentAuthOwnershipLoss(refreshedPending.memberKey)?.let { authState ->
                     authStateToReconcile = authState
                     return@withLock abortPendingHealthConnection(epoch)
                 }
-                pendingHealthConnection = pending.copy(awaitingHistoryPermission = true)
+                pendingHealthConnection = refreshedPending.copy(awaitingHistoryPermission = true)
                 _state.update { current ->
                     current.copy(
                         isConnectingHealth = true,
@@ -1660,7 +1664,7 @@ class AppSession(
                 health.configure()
             } catch (error: CompanionApiException.ReconnectRequired) {
                 if (epoch != sessionEpoch) return
-                if (!localState.revokeHealthSetupAuthorization()) {
+                if (!localState.requireHealthReconnect()) {
                     _state.update { current ->
                         current.copy(
                             phase = AppPhase.Failed(
@@ -1672,7 +1676,6 @@ class AppSession(
                     }
                     return
                 }
-                localState.healthReconnectRequired = true
                 if (!resetHealthSdkAtTrustBoundary()) return
                 epoch = sessionEpoch
             } catch (error: CompanionApiException.Unauthorized) {
@@ -1983,11 +1986,9 @@ class AppSession(
         if (response.environment != config.environment.wireValue) {
             throw CompanionApiException.InvalidResponse
         }
-        localState.healthReconnectRequired = false
         _state.update { current ->
             current.copy(
                 backendEnvironment = response.environment,
-                healthReconnectRequired = false,
             )
         }
         currentAuthOwnershipLoss(memberKey)?.let { return it }
@@ -2512,8 +2513,16 @@ class AppSession(
             // Junction lifecycle. This exact response means access is active but
             // there is no established Health connection to resume.
             if (epoch == sessionEpoch && memberKey == currentMemberKey) {
-                localState.healthReconnectRequired = true
-                true
+                if (localState.requireHealthReconnect()) {
+                    true
+                } else {
+                    publishBackendBootstrapFailure(
+                        message =
+                            "Murph couldn't safely remember that Health Connect needs to reconnect. Try again.",
+                        canRetry = true,
+                    )
+                    false
+                }
             } else {
                 false
             }

@@ -1130,6 +1130,15 @@ class AddressBookSessionTest {
             healthReconnectRequired = false
             return true
         }
+
+        override fun requireHealthReconnect(): Boolean {
+            healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
+            lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = true
+            return true
+        }
         var revision: Int? = null
         var replacement: AddressBookMutation? = null
         var deletion: AddressBookMutation? = null

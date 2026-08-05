@@ -70,6 +70,54 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
+    fun reconnectRequirementCommitsOneFailClosedRestartSnapshot() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.healthAccessRequestedAt = InstantValue(100)
+        state.healthReceiptBaselineAt = InstantValue(75)
+        state.lastKnownDataReceivedAt = InstantValue(90)
+        state.lastKnownStatusObservedAt = InstantValue(100)
+
+        assertTrue(state.requireHealthReconnect())
+
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertNull(reconstructed.healthAccessRequestedAt)
+        assertNull(reconstructed.healthReceiptBaselineAt)
+        assertNull(reconstructed.lastKnownDataReceivedAt)
+        assertNull(reconstructed.lastKnownStatusObservedAt)
+        assertTrue(reconstructed.healthReconnectRequired)
+    }
+
+    @Test
+    fun failedReconnectRequirementRestoresThePriorRestartSnapshot() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val requestedAt = InstantValue(200)
+        val baselineAt = InstantValue(175)
+        val receivedAt = InstantValue(190)
+        val observedAt = InstantValue(200)
+        state.healthAccessRequestedAt = requestedAt
+        state.healthReceiptBaselineAt = baselineAt
+        state.lastKnownDataReceivedAt = receivedAt
+        state.lastKnownStatusObservedAt = observedAt
+        preferences.failCommits = true
+
+        assertFalse(state.requireHealthReconnect())
+
+        assertEquals(requestedAt, state.healthAccessRequestedAt)
+        assertEquals(baselineAt, state.healthReceiptBaselineAt)
+        assertEquals(receivedAt, state.lastKnownDataReceivedAt)
+        assertEquals(observedAt, state.lastKnownStatusObservedAt)
+        assertFalse(state.healthReconnectRequired)
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(requestedAt, reconstructed.healthAccessRequestedAt)
+        assertEquals(baselineAt, reconstructed.healthReceiptBaselineAt)
+        assertEquals(receivedAt, reconstructed.lastKnownDataReceivedAt)
+        assertEquals(observedAt, reconstructed.lastKnownStatusObservedAt)
+        assertFalse(reconstructed.healthReconnectRequired)
+    }
+
+    @Test
     fun failedHealthRevocationRestoresLiveAndPersistedAuthorization() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
