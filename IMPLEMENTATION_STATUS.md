@@ -27,8 +27,12 @@
 - Compose login, first-run setup, status, WHOOP guidance, consent, settings, and
   failure screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
-  setup, explicit reconnect, waiting, synced, saved-status, delayed, attention, consent required, consent load
-  failure, all first-run onboarding stages, and failure states.
+  setup, explicit reconnect, waiting, synced, saved status (`savedStatus`),
+  delayed, attention, consent required, consent load failure, all first-run
+  onboarding stages, and failure states.
+- Exact-head Android visual-proof validation for changed shipped Compose
+  surfaces and visible resources, backed by durable emulator PNGs, a trusted
+  base verifier, and a required physical-device gap declaration.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
@@ -46,8 +50,9 @@ Android Gradle Plugin 8.10.1, compile SDK 36, and the real vendor artifacts:
 - Privy Android `0.12.0` APIs (`Privy.init`, `getAuthState`, `getUser`, `user.identityToken`, SMS/email OTP, `logout`).
 - Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the four-resource WHOOP bridge, and manual sync).
 
-`./scripts/verify.sh` passes, including Debug and Release unit tests, Android
-lint, and APK assembly. The debug APK was installed and cold-launched on a
+`./scripts/verify.sh` passes, including the visual-proof verifier tests,
+Debug and Release unit tests, Android lint, and APK assembly. The debug APK was
+installed and cold-launched on a
 Pixel 8 API 36 Google APIs emulator. Phone login, compact landscape scrolling,
 and country-picker dismissal were exercised with the keyboard visible.
 

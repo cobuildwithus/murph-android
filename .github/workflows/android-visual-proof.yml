@@ -1,0 +1,64 @@
+name: Android Visual Proof
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-visual-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          path: trusted
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Check out candidate without credentials
+        # The candidate is inspected as data only. No candidate script,
+        # dependency, action, or executable is run in this privileged workflow.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          allow-unsafe-pr-checkout: true
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+      - name: Make exact base available to candidate diff
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git -C candidate fetch --no-tags ../trusted "$GITHUB_BASE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: 24.14.1
+      - name: Require trusted verifier
+        run: |
+          trusted_checker=trusted/scripts/check-android-visual-proof.mjs
+          trusted_tests=trusted/scripts/check-android-visual-proof.test.mjs
+          if [[ ! -f "$trusted_checker" || ! -f "$trusted_tests" ]]; then
+            echo "The trusted visual-proof verifier is unavailable; refusing to continue." >&2
+            exit 1
+          fi
+      - name: Test visual-proof verifier
+        working-directory: candidate
+        run: node --test ../trusted/scripts/check-android-visual-proof.test.mjs
+      - name: Verify exact-head visual proof
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        working-directory: candidate
+        run: node ../trusted/scripts/check-android-visual-proof.mjs

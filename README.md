@@ -42,6 +42,7 @@ Requirements:
 - Gradle 8.11.1
 - Android Gradle Plugin 8.10.1 (pinned)
 - Kotlin 2.1.20+
+- Node.js 24.14.1
 
 The standard Gradle wrapper is checked in. Verify the pinned version with:
 
@@ -81,9 +82,26 @@ identifier is blank or the production backend URL is not absolute HTTPS.
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
 values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
-`attention`, `reconnectRequired`, `consentRequired`, `consentLoadFailure`, `onboardingContact`,
-`onboardingPersona`, `onboardingSupporting`, `onboardingVoice`,
-`onboardingTone`, `onboardingWelcome`, `friendlyNames`, and `failure`.
+`savedStatus`, `attention`, `reconnectRequired`, `consentRequired`,
+`consentLoadFailure`, `onboardingContact`, `onboardingPersona`,
+`onboardingSupporting`, `onboardingVoice`, `onboardingTone`,
+`onboardingWelcome`, `friendlyNames`, and `failure`.
+
+Every PR that changes shipped Compose UI or visible Android resources must
+include current emulator PNGs for each materially changed state. Keep them
+under `app-store-assets/review-evidence/<feature>/`, embed their exact-head
+raw GitHub URLs in the PR's `Android visual proof` section, and name any
+physical-device-only gaps. Capture durable evidence only from debug synthetic
+fixtures, inspect every image before commit, and never use real account,
+health, or contact data. `Android Visual Proof / verify` uses a base-owned
+`pull_request_target` workflow to run only the trusted base revision of the
+verifier while inspecting the candidate as data, so a PR cannot weaken the
+check and then certify itself. The bootstrap PR needs independent review
+because its base does not contain the workflow. Test the verifier locally with:
+
+```bash
+node --test scripts/check-android-visual-proof.test.mjs
+```
 
 Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
 
