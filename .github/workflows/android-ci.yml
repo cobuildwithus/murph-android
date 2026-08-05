@@ -1,0 +1,36 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_ID: ci-public-placeholder
+      ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_CLIENT_ID: ci-public-placeholder
+      ORG_GRADLE_PROJECT_MURPH_BACKEND_BASE_URL_PROD: https://example.invalid
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android 36 platform
+        run: sdkmanager "platforms;android-36"
+      - name: Verify Android app
+        run: ./scripts/verify.sh
