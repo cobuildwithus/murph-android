@@ -174,7 +174,9 @@ message.
   again before connecting and aborts when none remain.
 - The application session then owns the optional history-permission prompt
   across Activity recreation. It records completed setup and starts the first
-  sync only after that prompt resolves or is unavailable.
+  sync only after that prompt resolves or is unavailable. The setup marker,
+  receipt baseline, observation time, and reconnect clearance commit as one
+  restart snapshot; a failed commit rolls back the live Junction identity.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - If omitted or passive `resume` receives
   `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and

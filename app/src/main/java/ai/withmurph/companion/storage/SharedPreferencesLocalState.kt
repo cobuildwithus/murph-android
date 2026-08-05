@@ -145,6 +145,36 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
+    override fun completeHealthSetupAuthorization(
+        requestedAt: InstantValue,
+        receiptBaselineAt: InstantValue?,
+        statusObservedAt: InstantValue,
+    ): Boolean {
+        val previousRequestedAt = healthAccessRequestedAt
+        val previousReceiptBaselineAt = healthReceiptBaselineAt
+        val previousReceivedAt = lastKnownDataReceivedAt
+        val previousStatusObservedAt = lastKnownStatusObservedAt
+        val previousReconnectRequired = healthReconnectRequired
+        val committed = preferences.edit().apply {
+            writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
+            writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, receiptBaselineAt)
+            remove(KEY_LAST_DATA_RECEIVED_AT)
+            writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
+            remove(KEY_HEALTH_RECONNECT_REQUIRED)
+        }.commit()
+        if (!committed) {
+            restoreAuthorizationSnapshot(
+                previousRequestedAt,
+                previousReceiptBaselineAt,
+                previousReceivedAt,
+                previousStatusObservedAt,
+                previousReconnectRequired,
+            )
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
     override fun revokeHealthSetupAuthorization(): Boolean {
         val requestedAt = healthAccessRequestedAt
         val receiptBaselineAt = healthReceiptBaselineAt

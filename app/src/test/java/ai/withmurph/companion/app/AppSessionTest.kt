@@ -855,6 +855,39 @@ class AppSessionTest {
     }
 
     @Test
+    fun failedDurableSetupCompletionRollsBackBeforeAuthorizingRestart() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val statusObservationBeforeCompletion = fixture.localState.lastKnownStatusObservedAt
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        val signOutCalls = fixture.health.signOutCalls
+        fixture.localState.completeHealthAuthorizationSucceeds = false
+
+        assertFalse(fixture.session.completeHealthHistoryPermissionFlow())
+
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(null, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(
+            statusObservationBeforeCompletion,
+            fixture.localState.lastKnownStatusObservedAt,
+        )
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(null, fixture.session.state.value.pendingHealthHistoryPermissionRequestId)
+        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(
+            "Murph couldn't save Health Connect setup. Try again.",
+            fixture.session.state.value.healthMessage,
+        )
+    }
+
+    @Test
     fun sharingNoHealthCategoryDoesNotMarkSetupComplete() = runTest {
         val fixture = fixture()
         fixture.session.start()
@@ -4116,8 +4149,23 @@ class AppSessionTest {
         override var signOutPending = false
             private set
         var revokeHealthAuthorizationSucceeds = true
+        var completeHealthAuthorizationSucceeds = true
         var beginSignOutSucceeds = true
         var completeSignOutSucceeds = true
+
+        override fun completeHealthSetupAuthorization(
+            requestedAt: InstantValue,
+            receiptBaselineAt: InstantValue?,
+            statusObservedAt: InstantValue,
+        ): Boolean {
+            if (!completeHealthAuthorizationSucceeds) return false
+            healthAccessRequestedAt = requestedAt
+            healthReceiptBaselineAt = receiptBaselineAt
+            lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = statusObservedAt
+            healthReconnectRequired = false
+            return true
+        }
 
         override fun revokeHealthSetupAuthorization(): Boolean {
             if (!revokeHealthAuthorizationSucceeds) return false

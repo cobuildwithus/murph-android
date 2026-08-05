@@ -1117,6 +1117,19 @@ class AddressBookSessionTest {
         override var healthReconnectRequired = false
         override var signOutPending = false
             private set
+
+        override fun completeHealthSetupAuthorization(
+            requestedAt: InstantValue,
+            receiptBaselineAt: InstantValue?,
+            statusObservedAt: InstantValue,
+        ): Boolean {
+            healthAccessRequestedAt = requestedAt
+            healthReceiptBaselineAt = receiptBaselineAt
+            lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = statusObservedAt
+            healthReconnectRequired = false
+            return true
+        }
         var revision: Int? = null
         var replacement: AddressBookMutation? = null
         var deletion: AddressBookMutation? = null

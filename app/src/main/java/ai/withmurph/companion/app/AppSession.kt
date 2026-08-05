@@ -1265,15 +1265,30 @@ class AppSession(
             ) {
                 return@withLock false
             }
-            localState.healthAccessRequestedAt =
-                InstantValue(pending.requestedAt.toEpochMilli())
-            localState.healthReceiptBaselineAt = pending.receiptBaselineAt?.let {
-                InstantValue(it.toEpochMilli())
+            val requestedAt = InstantValue(pending.requestedAt.toEpochMilli())
+            val committed = localState.completeHealthSetupAuthorization(
+                requestedAt = requestedAt,
+                receiptBaselineAt = pending.receiptBaselineAt?.let {
+                    InstantValue(it.toEpochMilli())
+                },
+                statusObservedAt = requestedAt,
+            )
+            if (!committed) {
+                pendingHealthConnection = null
+                val rollbackSucceeded = rollbackIncompleteHealthSetup(pending.epoch)
+                _state.update { current ->
+                    current.copy(
+                        isConnectingHealth = false,
+                        pendingHealthHistoryPermissionRequestId = null,
+                        healthMessage = if (rollbackSucceeded) {
+                            "Murph couldn't save Health Connect setup. Try again."
+                        } else {
+                            "Murph couldn't safely reset health sync. Keep the app open and sign out."
+                        },
+                    )
+                }
+                return@withLock false
             }
-            localState.lastKnownDataReceivedAt = null
-            localState.lastKnownStatusObservedAt =
-                InstantValue(pending.requestedAt.toEpochMilli())
-            localState.healthReconnectRequired = false
             pendingHealthConnection = null
             _state.update { current ->
                 current.copy(

@@ -140,6 +140,11 @@ interface LocalState {
     fun completeAddressBookDeletion(mutationId: String, revision: Int): Boolean = false
     fun abandonAddressBookDeletion(mutationId: String): Boolean = false
 
+    fun completeHealthSetupAuthorization(
+        requestedAt: InstantValue,
+        receiptBaselineAt: InstantValue?,
+        statusObservedAt: InstantValue,
+    ): Boolean
     fun revokeHealthSetupAuthorization(): Boolean
     fun beginSignOut(): Boolean
     fun completeSignOut(): Boolean
