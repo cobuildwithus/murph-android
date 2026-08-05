@@ -924,6 +924,35 @@ class AppSessionTest {
     }
 
     @Test
+    fun historyCompletionDuringForegroundAuthRunsTheFirstSyncOnce() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        val statusCallsBeforeCompletion = fixture.api.statusSources.size
+        val authGate = CompletableDeferred<Unit>()
+        fixture.auth.currentStateGate = authGate
+        fixture.auth.currentStateEntered = CompletableDeferred()
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        fixture.auth.currentStateEntered.await()
+        fixture.auth.currentStateGate = null
+
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        authGate.complete(Unit)
+        foreground.await()
+
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
     fun staleForegroundRefreshCannotQueueASecondFirstSync() = runTest {
         val fixture = fixture()
         fixture.session.start()
@@ -4218,12 +4247,14 @@ class AppSessionTest {
         private val events: MutableList<String>,
     ) : AuthProvider {
         var currentStateGate: CompletableDeferred<Unit>? = null
+        var currentStateEntered = CompletableDeferred<Unit>()
         var signOutError: Throwable? = null
         var currentStateCalls = 0
         var signOutCalls = 0
 
         override suspend fun currentState(): AuthSessionState {
             currentStateCalls += 1
+            currentStateEntered.complete(Unit)
             currentStateGate?.await()
             return state
         }
