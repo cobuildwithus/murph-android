@@ -43,6 +43,7 @@ data class AppUiState(
     val initialOnboardingMessage: String? = null,
     val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
     val pendingHealthPermissionRequestId: Int? = null,
+    val pendingHealthHistoryPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
 )
 
@@ -74,7 +75,6 @@ enum class LaunchConsentRecoveryPhase {
     LoadFailed,
     Required,
     Saving,
-    Finishing,
 }
 
 data class LaunchConsentRecoveryUiState(
@@ -82,9 +82,6 @@ data class LaunchConsentRecoveryUiState(
     val status: LaunchConsentStatus? = null,
     val message: String? = null,
     val showSheet: Boolean = true,
-    val canDismiss: Boolean = phase == LaunchConsentRecoveryPhase.Required ||
-        phase == LaunchConsentRecoveryPhase.Loading ||
-        phase == LaunchConsentRecoveryPhase.LoadFailed,
     val canAccept: Boolean = phase == LaunchConsentRecoveryPhase.Required &&
         status?.missingLaunchScopes?.isNotEmpty() == true,
 )

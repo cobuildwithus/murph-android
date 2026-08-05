@@ -171,6 +171,9 @@ message.
   requests a backend token with `connectionIntent: "connect"`. If launch
   consent interrupts that continuation, Murph refreshes Health Connect grants
   again before connecting and aborts when none remain.
+- The application session then owns the optional history-permission prompt
+  across Activity recreation. It records completed setup and starts the first
+  sync only after that prompt resolves or is unavailable.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a

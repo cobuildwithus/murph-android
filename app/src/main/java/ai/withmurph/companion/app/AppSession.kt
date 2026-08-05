@@ -69,6 +69,7 @@ class AppSession(
     private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
     private var nextHealthPermissionRequestId = 1
+    private var nextHealthHistoryPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
     private var nextInitialOnboardingContactCardHandoffId = 1
     private var initialOnboardingGeneration = 0
@@ -108,8 +109,7 @@ class AppSession(
     fun dismissLaunchConsentRecovery() {
         val pending = pendingLaunchConsentRecovery ?: return
         if (!ownsLaunchConsentRecovery(pending)) return
-        val recovery = _state.value.launchConsentRecovery ?: return
-        if (!recovery.canDismiss) return
+        if (_state.value.launchConsentRecovery == null) return
         _state.update { current ->
             current.copy(
                 launchConsentRecovery = current.launchConsentRecovery?.copy(showSheet = false),
@@ -413,6 +413,21 @@ class AppSession(
                 _state.compareAndSet(
                     current,
                     current.copy(pendingHealthPermissionRequestId = null),
+                )
+            ) {
+                return true
+            }
+        }
+    }
+
+    fun consumeHealthHistoryPermissionLaunchRequest(requestId: Int): Boolean {
+        while (true) {
+            val current = _state.value
+            if (current.pendingHealthHistoryPermissionRequestId != requestId) return false
+            if (
+                _state.compareAndSet(
+                    current,
+                    current.copy(pendingHealthHistoryPermissionRequestId = null),
                 )
             ) {
                 return true
@@ -1120,6 +1135,7 @@ class AppSession(
                 _state.update { it.copy(isConnectingHealth = false) }
                 return false
             }
+            if (pending.awaitingHistoryPermission) return@withLock false
             val epoch = pending.epoch
             try {
                 if (!permissionRequestCompleted) {
@@ -1189,17 +1205,15 @@ class AppSession(
                     authStateToReconcile = authState
                     return@withLock abortPendingHealthConnection(epoch)
                 }
-                localState.healthAccessRequestedAt =
-                    InstantValue(pending.requestedAt.toEpochMilli())
-                pendingHealthConnection = null
+                pendingHealthConnection = pending.copy(awaitingHistoryPermission = true)
                 _state.update { current ->
                     current.copy(
-                        isConnectingHealth = false,
-                        healthSync = HealthSyncState.AwaitingFirstData,
+                        isConnectingHealth = true,
                         grantedResourceCount = health.grantedResourceCount(),
                         healthMessage = null,
                     )
                 }
+                requestHealthHistoryPermissionLaunch()
                 true
             } catch (error: CancellationException) {
                 pendingHealthConnection = null
@@ -1238,10 +1252,43 @@ class AppSession(
         return completed
     }
 
+    suspend fun completeHealthHistoryPermissionFlow(): Boolean {
+        val completed = healthMutex.withLock {
+            val pending = pendingHealthConnection
+            if (
+                pending == null ||
+                !pending.awaitingHistoryPermission ||
+                !ownsPendingHealthConnection(pending.memberKey)
+            ) {
+                return@withLock false
+            }
+            localState.healthAccessRequestedAt =
+                InstantValue(pending.requestedAt.toEpochMilli())
+            pendingHealthConnection = null
+            _state.update { current ->
+                current.copy(
+                    isConnectingHealth = false,
+                    pendingHealthHistoryPermissionRequestId = null,
+                    healthSync = HealthSyncState.AwaitingFirstData,
+                    grantedResourceCount = health.grantedResourceCount(),
+                    healthMessage = null,
+                )
+            }
+            true
+        }
+        if (completed) syncNow()
+        return completed
+    }
+
     fun cancelHealthPermissionFlow() {
         val pending = pendingHealthConnection
         if (pending == null) {
-            _state.update { it.copy(pendingHealthPermissionRequestId = null) }
+            _state.update {
+                it.copy(
+                    pendingHealthPermissionRequestId = null,
+                    pendingHealthHistoryPermissionRequestId = null,
+                )
+            }
             return
         }
         if (pending.epoch != sessionEpoch) return
@@ -1250,6 +1297,7 @@ class AppSession(
             it.copy(
                 isConnectingHealth = false,
                 pendingHealthPermissionRequestId = null,
+                pendingHealthHistoryPermissionRequestId = null,
             )
         }
     }
@@ -2718,7 +2766,6 @@ class AppSession(
                 launchConsentRecovery = current.launchConsentRecovery?.copy(
                     phase = LaunchConsentRecoveryPhase.Pausing,
                     message = "Pausing health sync before loading consent.",
-                    canDismiss = false,
                     canAccept = false,
                 ) ?: LaunchConsentRecoveryUiState(
                     phase = LaunchConsentRecoveryPhase.Pausing,
@@ -2752,7 +2799,6 @@ class AppSession(
                 launchConsentRecovery = current.launchConsentRecovery?.copy(
                     phase = LaunchConsentRecoveryPhase.Loading,
                     message = "Loading the latest consent documents.",
-                    canDismiss = true,
                     canAccept = false,
                 ),
             )
@@ -2812,8 +2858,6 @@ class AppSession(
                     phase = LaunchConsentRecoveryPhase.Saving,
                     status = latest,
                     message = "Saving consent.",
-                    showSheet = true,
-                    canDismiss = false,
                     canAccept = false,
                 ),
             )
@@ -2889,8 +2933,6 @@ class AppSession(
                         phase = LaunchConsentRecoveryPhase.Saving,
                         status = latest,
                         message = "Saving consent.",
-                        showSheet = true,
-                        canDismiss = false,
                         canAccept = false,
                     ),
                 )
@@ -2909,18 +2951,7 @@ class AppSession(
             pendingLaunchConsentRecovery = null
             pending.followUp
         }
-        _state.update { current ->
-            current.copy(
-                launchConsentRecovery = current.launchConsentRecovery?.copy(
-                    phase = LaunchConsentRecoveryPhase.Finishing,
-                    status = latest,
-                    message = "Finishing setup.",
-                    showSheet = true,
-                    canDismiss = false,
-                    canAccept = false,
-                ),
-            )
-        }
+        _state.update { current -> current.copy(launchConsentRecovery = null) }
         return followUp
     }
 
@@ -3123,6 +3154,13 @@ class AppSession(
         val requestId = nextHealthPermissionRequestId++
         _state.update { current ->
             current.copy(pendingHealthPermissionRequestId = requestId)
+        }
+    }
+
+    private fun requestHealthHistoryPermissionLaunch() {
+        val requestId = nextHealthHistoryPermissionRequestId++
+        _state.update { current ->
+            current.copy(pendingHealthHistoryPermissionRequestId = requestId)
         }
     }
 
@@ -3632,6 +3670,7 @@ class AppSession(
                 isAddressBookBusy = false,
                 launchConsentRecovery = null,
                 pendingHealthPermissionRequestId = null,
+                pendingHealthHistoryPermissionRequestId = null,
                 pendingAddressBookPermissionRequestId = null,
             )
         }
@@ -3652,6 +3691,7 @@ class AppSession(
         val epoch: Int,
         val memberKey: String,
         val requestedAt: Instant,
+        val awaitingHistoryPermission: Boolean = false,
     )
 
     private data class PendingAddressBookPermissionFlow(

@@ -415,7 +415,7 @@ private fun OtpInput(
             keyboardActions = KeyboardActions(onDone = { onComplete() }),
             cursorBrush = SolidColor(Color.Transparent),
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.Transparent),
-            decorationBox = {},
+            decorationBox = { innerTextField -> innerTextField() },
         )
     }
 }

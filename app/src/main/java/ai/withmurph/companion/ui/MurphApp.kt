@@ -234,9 +234,7 @@ private fun ReadyApp(
 
     state.launchConsentRecovery?.takeIf { it.showSheet }?.let { recovery ->
         ModalBottomSheet(
-            onDismissRequest = {
-                if (recovery.canDismiss) actions.onDismissLaunchConsent()
-            },
+            onDismissRequest = actions.onDismissLaunchConsent,
             modifier = Modifier.padding(top = 48.dp).fillMaxHeight(),
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = MurphColors.Cream,
@@ -379,7 +377,6 @@ private fun LaunchConsentRecoveryContent(
                     LaunchConsentRecoveryPhase.LoadFailed -> "Consent couldn't load"
                     LaunchConsentRecoveryPhase.Required -> "Review Murph consent"
                     LaunchConsentRecoveryPhase.Saving -> "Saving consent"
-                    LaunchConsentRecoveryPhase.Finishing -> "Finishing"
                 },
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontSize = 28.sp,
@@ -401,8 +398,7 @@ private fun LaunchConsentRecoveryContent(
         if (
             recovery.phase == LaunchConsentRecoveryPhase.Pausing ||
             recovery.phase == LaunchConsentRecoveryPhase.Loading ||
-            recovery.phase == LaunchConsentRecoveryPhase.Saving ||
-            recovery.phase == LaunchConsentRecoveryPhase.Finishing
+            recovery.phase == LaunchConsentRecoveryPhase.Saving
         ) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -455,8 +451,7 @@ private fun LaunchConsentRecoveryContent(
             }
             LaunchConsentRecoveryPhase.Pausing,
             LaunchConsentRecoveryPhase.Loading,
-            LaunchConsentRecoveryPhase.Saving,
-            LaunchConsentRecoveryPhase.Finishing -> Unit
+            LaunchConsentRecoveryPhase.Saving -> Unit
         }
     }
 }

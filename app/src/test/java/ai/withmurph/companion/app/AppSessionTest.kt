@@ -444,8 +444,49 @@ class AppSessionTest {
             fixture.api.intents,
         )
         assertEquals(1, fixture.health.connectCalls)
-        assertTrue(fixture.localState.healthAccessRequestedAt != null)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.session.state.value.isConnectingHealth)
         assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+
+        finishHealthHistoryPermission(fixture)
+
+        assertTrue(fixture.localState.healthAccessRequestedAt != null)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+    }
+
+    @Test
+    fun consentSheetDismissalDuringAcceptanceKeepsRecoveryReachable() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        assertFalse(fixture.session.prepareHealthConnection())
+        fixture.api.statusError = null
+        val acceptanceEntered = CompletableDeferred<Unit>()
+        val acceptanceGate = CompletableDeferred<Unit>()
+        fixture.api.launchConsentAcceptHandler = { _, _, _ ->
+            acceptanceEntered.complete(Unit)
+            acceptanceGate.await()
+            launchConsentStatus(granted = true)
+        }
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        acceptanceEntered.await()
+        assertEquals(
+            LaunchConsentRecoveryPhase.Saving,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        fixture.session.dismissLaunchConsentRecovery()
+
+        assertFalse(fixture.session.state.value.launchConsentRecovery?.showSheet ?: true)
+        fixture.session.showLaunchConsentRecovery()
+        assertTrue(fixture.session.state.value.launchConsentRecovery?.showSheet == true)
+        fixture.session.dismissLaunchConsentRecovery()
+        acceptanceGate.complete(Unit)
+        acceptance.await()
+
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.session.state.value.pendingHealthPermissionRequestId != null)
     }
 
     @Test
@@ -726,8 +767,9 @@ class AppSessionTest {
         assertEquals(1, fixture.health.identifyCalls)
         assertEquals(1, fixture.health.configureCalls)
         assertEquals(1, fixture.health.connectCalls)
-        assertTrue(fixture.localState.healthAccessRequestedAt != null)
-        assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.session.state.value.isConnectingHealth)
+        assertTrue(fixture.session.state.value.pendingHealthHistoryPermissionRequestId != null)
         assertEquals(
             listOf(
                 "status",
@@ -739,6 +781,57 @@ class AppSessionTest {
             ),
             fixture.events,
         )
+
+        finishHealthHistoryPermission(fixture)
+
+        assertTrue(fixture.localState.healthAccessRequestedAt != null)
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+        assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun duplicateBasePermissionCompletionCannotRestartConnectedSetup() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val historyRequestId =
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId
+
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+        assertEquals(
+            historyRequestId,
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+
+        finishHealthHistoryPermission(fixture)
+
+        assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun processRestartBeforeHistoryPermissionRollsBackIncompleteSetup() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        assertTrue(fixture.health.signedIn)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        val signOutCalls = fixture.health.signOutCalls
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+        assertEquals(0, fixture.health.syncCalls)
     }
 
     @Test
@@ -1140,6 +1233,7 @@ class AppSessionTest {
         assertEquals(ConnectionIntent.Connect, fixture.api.intents.last())
         assertEquals(tokenCount + 1, fixture.api.intents.size)
         assertEquals(1, fixture.health.connectCalls)
+        finishHealthHistoryPermission(fixture)
         assertFalse(fixture.session.state.value.isConnectingHealth)
     }
 
@@ -3122,8 +3216,7 @@ class AppSessionTest {
         assertTrue(fixture.session.prepareHealthConnection())
         assertTrue(fixture.session.completeHealthPermissionFlow(true))
         fixture.health.syncError = IllegalStateException("vendor sync failed")
-
-        fixture.session.syncNow()
+        finishHealthHistoryPermission(fixture)
 
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
@@ -3430,6 +3523,10 @@ class AppSessionTest {
         connectGate.complete(Unit)
         assertTrue(completion.await())
 
+        assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.session.state.value.isConnectingHealth)
+        finishHealthHistoryPermission(fixture)
+
         assertEquals(InstantValue(now.toEpochMilli()), fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
@@ -3596,6 +3693,16 @@ class AppSessionTest {
         fixture.session.start()
         fixture.events.clear()
         return fixture
+    }
+
+    private suspend fun finishHealthHistoryPermission(fixture: Fixture) {
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        assertFalse(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        assertFalse(fixture.session.completeHealthHistoryPermissionFlow())
     }
 
     private fun offlineRestoredFixture(): Fixture {

@@ -13,7 +13,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
@@ -41,7 +40,9 @@ class MainActivity : ComponentActivity() {
         val historyPermissionLauncher = registerForActivityResult(
             graph.health.extendedPermissionContract(),
         ) {
-            graph.applicationScope.launch { graph.session.syncNow() }
+            graph.applicationScope.launch {
+                graph.session.completeHealthHistoryPermissionFlow()
+            }
         }
 
         val contactsPermissionLauncher = registerForActivityResult(
@@ -64,15 +65,7 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) {
                     false
                 }
-                val connected = graph.session.completeHealthPermissionFlow(completed)
-                if (connected) {
-                    val historyPermissions = graph.health.supportedHistoryPermissions()
-                    if (historyPermissions.isNotEmpty() && canLaunchExternalFlow()) {
-                        historyPermissionLauncher.launch(historyPermissions)
-                    } else {
-                        graph.session.syncNow()
-                    }
-                }
+                graph.session.completeHealthPermissionFlow(completed)
             }
         }
 
@@ -93,6 +86,28 @@ class MainActivity : ComponentActivity() {
                             graph.session.reportHealthConnectLaunchFailure(
                                 "Health Connect permissions couldn't be opened. Try again.",
                             )
+                        }
+                    }
+                }
+            }
+            LaunchedEffect(appState.pendingHealthHistoryPermissionRequestId) {
+                val requestId = appState.pendingHealthHistoryPermissionRequestId
+                    ?: return@LaunchedEffect
+                lifecycle.withResumed {
+                    if (graph.session.consumeHealthHistoryPermissionLaunchRequest(requestId)) {
+                        val historyPermissions = graph.health.supportedHistoryPermissions()
+                        if (historyPermissions.isEmpty()) {
+                            graph.applicationScope.launch {
+                                graph.session.completeHealthHistoryPermissionFlow()
+                            }
+                        } else {
+                            try {
+                                historyPermissionLauncher.launch(historyPermissions)
+                            } catch (_: Exception) {
+                                graph.applicationScope.launch {
+                                    graph.session.completeHealthHistoryPermissionFlow()
+                                }
+                            }
                         }
                     }
                 }
@@ -317,11 +332,6 @@ class MainActivity : ComponentActivity() {
         graph.session.reportHealthConnectLaunchFailure(message)
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
-
-    private fun canLaunchExternalFlow(): Boolean =
-        !isFinishing &&
-            !isDestroyed &&
-            lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
 
     private fun setLoginSnapshotProtection(enabled: Boolean) {
         if (enabled) {
