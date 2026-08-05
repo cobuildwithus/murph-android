@@ -119,7 +119,10 @@ interface LocalState {
     val installationId: String
     var memberKey: String?
     var healthAccessRequestedAt: InstantValue?
+    var healthReceiptBaselineAt: InstantValue?
     var lastKnownDataReceivedAt: InstantValue?
+    var lastKnownStatusObservedAt: InstantValue?
+    var healthReconnectRequired: Boolean
     val signOutPending: Boolean
     val addressBookRevision: Int?
         get() = null

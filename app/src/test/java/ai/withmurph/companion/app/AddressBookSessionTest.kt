@@ -40,6 +40,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AddressBookSessionTest {
@@ -1018,7 +1019,7 @@ class AddressBookSessionTest {
 
         override suspend fun fetchSyncStatus(
             sourceProviderSlug: String,
-        ): CompanionSyncStatus = CompanionSyncStatus(null, emptyMap())
+        ): CompanionSyncStatus = CompanionSyncStatus(null, Instant.EPOCH, emptyMap())
 
         override suspend fun fetchInitialOnboarding(memberKey: String) = InitialOnboarding(
             status = InitialOnboardingStatus.Completed,
@@ -1110,7 +1111,10 @@ class AddressBookSessionTest {
         override val installationId = "installation-id"
         override var memberKey: String? = null
         override var healthAccessRequestedAt: InstantValue? = null
+        override var healthReceiptBaselineAt: InstantValue? = null
         override var lastKnownDataReceivedAt: InstantValue? = null
+        override var lastKnownStatusObservedAt: InstantValue? = null
+        override var healthReconnectRequired = false
         override var signOutPending = false
             private set
         var revision: Int? = null
@@ -1183,14 +1187,20 @@ class AddressBookSessionTest {
 
         override fun revokeHealthSetupAuthorization(): Boolean {
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
             return true
         }
 
         override fun beginSignOut(): Boolean {
             signOutPending = true
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
             clearAddressBookMetadata()
             return true
         }
@@ -1204,7 +1214,10 @@ class AddressBookSessionTest {
         override fun clearMemberScopedState() {
             memberKey = null
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
             clearAddressBookMetadata()
         }
 

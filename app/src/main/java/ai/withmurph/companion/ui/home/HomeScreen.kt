@@ -110,6 +110,8 @@ private fun SetupContent(
                     MurphPrimaryButton(
                         text = if (state.isConnectingHealth) {
                             "Connecting…"
+                        } else if (state.healthReconnectRequired) {
+                            "Reconnect Health Connect"
                         } else {
                             "Connect Health Connect"
                         },
@@ -200,13 +202,19 @@ private fun SyncStatusContent(
             icon = MurphIconKind.CheckCircle
             tint = MurphColors.Sage
             title = "Synced"
-            detail = relativeSentence(sync.lastDataReceivedAt)
+            detail = relativeSentence(
+                sync.lastDataReceivedAt,
+                state.healthStatusObservedAt ?: sync.lastDataReceivedAt,
+            )
         }
         is HealthSyncState.Delayed -> {
             icon = MurphIconKind.Clock
             tint = MurphColors.Amber
             title = "Sync is on its way"
-            detail = "Sync can take up to a day. Last data ${relativeTime(sync.lastDataReceivedAt)}."
+            detail = "Sync can take up to a day. Last data ${relativeTime(
+                sync.lastDataReceivedAt,
+                state.healthStatusObservedAt ?: sync.lastDataReceivedAt,
+            )}."
         }
         is HealthSyncState.NeedsAttention -> {
             icon = MurphIconKind.Gear
@@ -259,7 +267,10 @@ private fun SyncStatusContent(
             }
             if (sync.lastDataReceivedAt != null) {
                 Text(
-                    text = "Last data received ${relativeTime(sync.lastDataReceivedAt)}.",
+                    text = "Last data received ${relativeTime(
+                        sync.lastDataReceivedAt,
+                        state.healthStatusObservedAt ?: sync.lastDataReceivedAt,
+                    )}.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MurphColors.SlateMuted,
                     textAlign = TextAlign.Center,
@@ -328,13 +339,13 @@ private fun GuidanceRow(number: String, text: String) {
     }
 }
 
-private fun relativeSentence(date: Instant): String {
-    val relative = relativeTime(date)
+private fun relativeSentence(date: Instant, observedAt: Instant): String {
+    val relative = relativeTime(date, observedAt)
     return relative.replaceFirstChar(Char::uppercaseChar) + "."
 }
 
-private fun relativeTime(date: Instant, now: Instant = Instant.now()): String {
-    val age = Duration.between(date, now).coerceAtLeast(Duration.ZERO)
+private fun relativeTime(date: Instant, observedAt: Instant): String {
+    val age = Duration.between(date, observedAt).coerceAtLeast(Duration.ZERO)
     return when {
         age < Duration.ofMinutes(1) -> "just now"
         age < Duration.ofHours(1) -> {

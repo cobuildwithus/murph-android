@@ -36,10 +36,28 @@ class SharedPreferencesLocalState internal constructor(
             preferences.writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, value)
         }
 
+    override var healthReceiptBaselineAt: InstantValue?
+        get() = preferences.readInstant(KEY_HEALTH_RECEIPT_BASELINE_AT)
+        set(value) {
+            preferences.writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, value)
+        }
+
     override var lastKnownDataReceivedAt: InstantValue?
         get() = preferences.readInstant(KEY_LAST_DATA_RECEIVED_AT)
         set(value) {
             preferences.writeInstant(KEY_LAST_DATA_RECEIVED_AT, value)
+        }
+
+    override var lastKnownStatusObservedAt: InstantValue?
+        get() = preferences.readInstant(KEY_LAST_STATUS_OBSERVED_AT)
+        set(value) {
+            preferences.writeInstant(KEY_LAST_STATUS_OBSERVED_AT, value)
+        }
+
+    override var healthReconnectRequired: Boolean
+        get() = preferences.getBoolean(KEY_HEALTH_RECONNECT_REQUIRED, false)
+        set(value) {
+            preferences.edit().putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, value).apply()
         }
 
     override val signOutPending: Boolean
@@ -129,13 +147,25 @@ class SharedPreferencesLocalState internal constructor(
     @SuppressLint("ApplySharedPref")
     override fun revokeHealthSetupAuthorization(): Boolean {
         val requestedAt = healthAccessRequestedAt
+        val receiptBaselineAt = healthReceiptBaselineAt
         val receivedAt = lastKnownDataReceivedAt
+        val statusObservedAt = lastKnownStatusObservedAt
+        val reconnectRequired = healthReconnectRequired
         val committed = preferences.edit()
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .commit()
         if (!committed) {
-            restoreAuthorizationSnapshot(requestedAt, receivedAt)
+            restoreAuthorizationSnapshot(
+                requestedAt,
+                receiptBaselineAt,
+                receivedAt,
+                statusObservedAt,
+                reconnectRequired,
+            )
         }
         return committed
     }
@@ -143,20 +173,29 @@ class SharedPreferencesLocalState internal constructor(
     @SuppressLint("ApplySharedPref")
     override fun beginSignOut(): Boolean {
         val requestedAt = healthAccessRequestedAt
+        val receiptBaselineAt = healthReceiptBaselineAt
         val receivedAt = lastKnownDataReceivedAt
+        val statusObservedAt = lastKnownStatusObservedAt
+        val reconnectRequired = healthReconnectRequired
         val wasSignOutPending = signOutPending
         val addressBookSnapshot = readAddressBookSnapshot()
         // One durable boundary records the request and revokes member-scoped restoration.
         val committed = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .removeAddressBookMetadata()
             .commit()
         if (!committed) {
             restoreAuthorizationSnapshot(
                 requestedAt,
+                receiptBaselineAt,
                 receivedAt,
+                statusObservedAt,
+                reconnectRequired,
                 wasSignOutPending,
                 addressBookSnapshot,
             )
@@ -169,7 +208,10 @@ class SharedPreferencesLocalState internal constructor(
         val committed = preferences.edit()
             .remove(KEY_MEMBER_KEY)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .remove(KEY_SIGN_OUT_PENDING)
             .removeAddressBookMetadata()
             .commit()
@@ -185,7 +227,10 @@ class SharedPreferencesLocalState internal constructor(
         preferences.edit()
             .remove(KEY_MEMBER_KEY)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .removeAddressBookMetadata()
             .apply()
     }
@@ -202,13 +247,19 @@ class SharedPreferencesLocalState internal constructor(
     @SuppressLint("ApplySharedPref")
     private fun restoreAuthorizationSnapshot(
         requestedAt: InstantValue?,
+        receiptBaselineAt: InstantValue?,
         receivedAt: InstantValue?,
+        statusObservedAt: InstantValue?,
+        reconnectRequired: Boolean,
         pendingSignOut: Boolean? = null,
         addressBookSnapshot: AddressBookSnapshot? = null,
     ) {
         preferences.edit().apply {
             writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
+            writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, receiptBaselineAt)
             writeInstant(KEY_LAST_DATA_RECEIVED_AT, receivedAt)
+            writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
+            putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, reconnectRequired)
             if (pendingSignOut != null) {
                 if (pendingSignOut) {
                     putBoolean(KEY_SIGN_OUT_PENDING, true)
@@ -290,7 +341,10 @@ class SharedPreferencesLocalState internal constructor(
         const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_MEMBER_KEY = "member_key"
         const val KEY_HEALTH_ACCESS_REQUESTED_AT = "health_access_requested_at"
+        const val KEY_HEALTH_RECEIPT_BASELINE_AT = "health_receipt_baseline_at"
         const val KEY_LAST_DATA_RECEIVED_AT = "last_data_received_at"
+        const val KEY_LAST_STATUS_OBSERVED_AT = "last_status_observed_at"
+        const val KEY_HEALTH_RECONNECT_REQUIRED = "health_reconnect_required"
         const val KEY_SIGN_OUT_PENDING = "sign_out_pending"
         const val KEY_ADDRESS_BOOK_REVISION = "address_book_revision"
         const val KEY_ADDRESS_BOOK_REPLACEMENT_BASE_REVISION =

@@ -59,6 +59,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -234,6 +237,7 @@ private fun DestinationStage(
                 MurphTextField(
                     value = state.destination,
                     onValueChange = onDestinationChanged,
+                    label = "Phone number",
                     placeholder = "555 555 0100",
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Phone,
@@ -248,6 +252,7 @@ private fun DestinationStage(
             MurphTextField(
                 value = state.destination,
                 onValueChange = onDestinationChanged,
+                label = "Email address",
                 placeholder = "you@example.com",
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Email,
@@ -369,11 +374,10 @@ private fun OtpInput(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
-            .clickable { focusRequester.requestFocus() },
+            .height(56.dp),
     ) {
         Row(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().clearAndSetSemantics { },
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             repeat(6) { index ->
@@ -406,6 +410,7 @@ private fun OtpInput(
             onValueChange = { onValueChange(it.filter(Char::isDigit).take(6)) },
             modifier = Modifier
                 .fillMaxSize()
+                .semantics { contentDescription = "6-digit verification code" }
                 .focusRequester(focusRequester)
                 .onFocusChanged { focused = it.isFocused },
             keyboardOptions = KeyboardOptions(
@@ -490,6 +495,7 @@ private fun CountryPicker(
             MurphTextField(
                 value = query,
                 onValueChange = { query = it },
+                label = "Search countries",
                 placeholder = "Search countries",
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Text,

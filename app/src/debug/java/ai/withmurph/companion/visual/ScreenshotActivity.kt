@@ -64,6 +64,7 @@ private enum class ScreenshotScenario {
     Email,
     Otp,
     Setup,
+    ReconnectRequired,
     Awaiting,
     Synced,
     Delayed,
@@ -82,6 +83,10 @@ private enum class ScreenshotScenario {
     fun appState(now: Instant): AppUiState = when (this) {
         Login, Email, Otp -> AppUiState(phase = AppPhase.NeedsLogin)
         Setup -> ready(HealthSyncState.NotConnected)
+        ReconnectRequired -> ready(HealthSyncState.NotConnected).copy(
+            healthReconnectRequired = true,
+            healthMessage = "Health Connect needs to reconnect before syncing can resume.",
+        )
         Awaiting -> ready(HealthSyncState.AwaitingFirstData)
         Synced -> ready(HealthSyncState.Synced(now))
         Delayed -> ready(HealthSyncState.Delayed(now.minus(Duration.ofHours(48))))
@@ -137,6 +142,7 @@ private enum class ScreenshotScenario {
         Email -> LoginUiState(method = LoginMethod.Email)
         Login,
         Setup,
+        ReconnectRequired,
         Awaiting,
         Synced,
         Delayed,

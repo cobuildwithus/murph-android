@@ -11,7 +11,7 @@ class HealthSyncStateTest {
     fun notRequestedIsNotConnected() {
         assertEquals(
             HealthSyncState.NotConnected,
-            HealthSyncState.derive(requestedAt = null, status = null, now = now),
+            HealthSyncState.derive(requestedAt = null, status = null),
         )
     }
 
@@ -21,8 +21,7 @@ class HealthSyncStateTest {
             HealthSyncState.AwaitingFirstData,
             HealthSyncState.derive(
                 requestedAt = now.minusSeconds(71 * 3_600),
-                status = null,
-                now = now,
+                status = CompanionSyncStatus(null, now, emptyMap()),
             ),
         )
     }
@@ -33,8 +32,7 @@ class HealthSyncStateTest {
             HealthSyncState.NeedsAttention(lastDataReceivedAt = null),
             HealthSyncState.derive(
                 requestedAt = now.minusSeconds(72 * 3_600),
-                status = null,
-                now = now,
+                status = CompanionSyncStatus(null, now, emptyMap()),
             ),
         )
     }
@@ -46,33 +44,7 @@ class HealthSyncStateTest {
             HealthSyncState.Synced(received),
             HealthSyncState.derive(
                 requestedAt = now.minusSeconds(3_600),
-                status = CompanionSyncStatus(received, emptyMap()),
-                now = now,
-            ),
-        )
-    }
-
-    @Test
-    fun receiptBeforeCurrentSetupWaitsForCurrentData() {
-        assertEquals(
-            HealthSyncState.AwaitingFirstData,
-            HealthSyncState.derive(
-                requestedAt = now.minusSeconds(60),
-                status = CompanionSyncStatus(now.minusSeconds(61), emptyMap()),
-                now = now,
-            ),
-        )
-    }
-
-    @Test
-    fun receiptAtCurrentSetupBoundaryIsSynced() {
-        val requestedAt = now.minusSeconds(60)
-        assertEquals(
-            HealthSyncState.Synced(requestedAt),
-            HealthSyncState.derive(
-                requestedAt = requestedAt,
-                status = CompanionSyncStatus(requestedAt, emptyMap()),
-                now = now,
+                status = CompanionSyncStatus(received, now, emptyMap()),
             ),
         )
     }
@@ -87,16 +59,14 @@ class HealthSyncStateTest {
             HealthSyncState.Delayed(delayed),
             HealthSyncState.derive(
                 requestedAt = requestedAt,
-                status = CompanionSyncStatus(delayed, emptyMap()),
-                now = now,
+                status = CompanionSyncStatus(delayed, now, emptyMap()),
             ),
         )
         assertEquals(
             HealthSyncState.NeedsAttention(attention),
             HealthSyncState.derive(
                 requestedAt = requestedAt,
-                status = CompanionSyncStatus(attention, emptyMap()),
-                now = now,
+                status = CompanionSyncStatus(attention, now, emptyMap()),
             ),
         )
     }
@@ -109,29 +79,27 @@ class HealthSyncStateTest {
             HealthSyncState.Delayed(delayed),
             HealthSyncState.derive(
                 requestedAt = now.minusSeconds(4 * 24 * 3_600),
-                status = CompanionSyncStatus(delayed, emptyMap()),
-                now = now,
+                status = CompanionSyncStatus(delayed, now, emptyMap()),
             ),
         )
         assertEquals(
             HealthSyncState.NeedsAttention(attention),
             HealthSyncState.derive(
                 requestedAt = now.minusSeconds(4 * 24 * 3_600),
-                status = CompanionSyncStatus(attention, emptyMap()),
-                now = now,
+                status = CompanionSyncStatus(attention, now, emptyMap()),
             ),
         )
     }
 
     @Test
-    fun futureClockSkewIsFresh() {
-        val future = Instant.parse("2026-07-25T12:10:00Z")
+    fun serverObservationTimeOwnsFreshnessInsteadOfDeviceTime() {
+        val received = Instant.parse("2026-07-25T12:10:00Z")
+        val serverObservedAt = Instant.parse("2026-07-27T12:10:00Z")
         assertEquals(
-            HealthSyncState.Synced(future),
+            HealthSyncState.Delayed(received),
             HealthSyncState.derive(
                 requestedAt = now.minusSeconds(3_600),
-                status = CompanionSyncStatus(future, emptyMap()),
-                now = now,
+                status = CompanionSyncStatus(received, serverObservedAt, emptyMap()),
             ),
         )
     }

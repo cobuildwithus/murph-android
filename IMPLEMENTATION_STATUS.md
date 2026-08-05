@@ -4,7 +4,7 @@
 
 - Complete Gradle project metadata, dependency catalog, manifest, theme, resources, and native package layout.
 - Privy initialization, restored auth-state handling, one neutral phone/email OTP flow for new and returning members, identity-token bearer auth, and logout boundary.
-- Canonical missing-account admission through the existing member-fenced sign-in-token transaction, with the returned Junction token discarded until explicit Health Connect permission, system-time-zone projection, exact account-conflict teardown, and no parallel app-owned signup endpoint.
+- Canonical missing-account admission through the existing member-fenced sign-in-token transaction with lifecycle intent omitted, the returned Junction token discarded until explicit Health Connect permission, system-time-zone projection, exact account-conflict teardown, and no parallel app-owned signup endpoint.
 - Server-owned `murph.companion.initial-onboarding.v1` setup for contact card, main and supporting personas, voice preview, tone, first-writer Welcome, contact handoff, stale-completion handling, foreground removal-only reconciliation, and exact consent-interrupted continuation.
 - Native signed-in launch-consent recovery through the companion legal-consent endpoint, with strict unambiguous `murph.hosted-consent-status.v1` parsing, same-origin HTTPS document links, at-most-two sequential missing-scope acceptance bodies containing every canonical document and exact version in each scope, consistently dismissible presentation backed by a reopenable recovery owner, monotonic-progress enforcement, canonical `CONSENT_DOCUMENT_VERSIONS_STALE` reload handling, partial-success retention, and no persisted consent truth.
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
@@ -12,7 +12,8 @@
 - Current-member and backend-consent preflight before health uploads, plus account-switch, reinstall, incomplete-setup, stale-session, native launch-consent recovery, and fail-closed sign-out safeguards. Sign-out atomically records a durable tombstone and invalidates setup authorization before waiting on startup or touching either SDK; process reconstruction finishes Junction-first, Privy-second teardown before restoration.
 - Offline-to-online restoration revalidates backend membership and consent before setup, including sessions with no prior Health Connect marker.
 - Fault-injected preferences coverage proving failed durable revocation and sign-out commits restore their process-visible authorization snapshot.
-- Current-setup backend-receipt sync-state derivation with 36-hour and 72-hour thresholds, including rejection of receipts predating the setup boundary and an actionable no-receipt state after 72 hours.
+- Current-setup backend-receipt sync-state derivation with 36-hour and 72-hour thresholds in the server status clock domain, including a strict pre-connect receipt baseline, an actionable no-receipt state after 72 hours, and no device-wall-clock authority over sync truth.
+- Typed stopped/disconnected Junction recovery matching iOS: omitted/passive token requests never reactivate server state, the exact reconnect requirement survives process recreation, and only the visible **Reconnect Health Connect** action may continue to a `connect` request.
 - Offline-safe local permission reconciliation so complete revocation overrides cached backend status and exposes reconnect without starting network or SDK health work.
 - Optional address-book familiar-name projection with an explicit Settings
   consent surface, one bounded Android Contacts read, strict international
@@ -26,7 +27,7 @@
 - Compose login, first-run setup, status, WHOOP guidance, consent, settings, and
   failure screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
-  setup, waiting, synced, delayed, attention, consent required, consent load
+  setup, explicit reconnect, waiting, synced, delayed, attention, consent required, consent load
   failure, all first-run onboarding stages, and failure states.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.

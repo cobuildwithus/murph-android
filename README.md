@@ -81,7 +81,7 @@ identifier is blank or the production backend URL is not absolute HTTPS.
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
 values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
-`attention`, `consentRequired`, `consentLoadFailure`, `onboardingContact`,
+`attention`, `reconnectRequired`, `consentRequired`, `consentLoadFailure`, `onboardingContact`,
 `onboardingPersona`, `onboardingSupporting`, `onboardingVoice`,
 `onboardingTone`, `onboardingWelcome`, `friendlyNames`, and `failure`.
 
@@ -149,7 +149,8 @@ message.
 
 - One neutral OTP flow serves new and returning members. After Privy verifies
   the destination, the app checks canonical membership. A missing account is
-  admitted through the existing member-fenced sign-in-token transaction; no
+  admitted through the existing member-fenced sign-in-token transaction with
+  no connection intent; no
   Junction token is retained or identified until the member explicitly grants
   Health Connect access.
 - Every member-bound bootstrap, token, status, consent, onboarding, contact,
@@ -175,6 +176,11 @@ message.
   across Activity recreation. It records completed setup and starts the first
   sync only after that prompt resolves or is unavailable.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
+- If omitted or passive `resume` receives
+  `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and
+  shows **Reconnect Health Connect**. Ordinary refresh remains read-only; only
+  that visible action can reach a `connectionIntent: "connect"` request after
+  the Health Connect permission flow.
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a
   fresh `connect` transaction can begin.

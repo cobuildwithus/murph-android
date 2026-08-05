@@ -74,7 +74,7 @@ class HttpCompanionApi(
             put("platform", request.platform.wireValue)
             put("appInstallationId", request.appInstallationId)
             put("appVersion", request.appVersion)
-            put("connectionIntent", request.connectionIntent.wireValue)
+            request.connectionIntent?.let { put("connectionIntent", it.wireValue) }
             put("sdkVersions", sdkVersionsJson)
             put("timeZone", request.timeZone)
         }
@@ -114,6 +114,8 @@ class HttpCompanionApi(
             authenticate = authenticate,
         )
         val lastReceivedAt = response.optNullableString("lastDataReceivedAt")?.parseInstant()
+        val observedAt = response.optString("observedAt").takeIf(String::isNotBlank)?.parseInstant()
+            ?: throw CompanionApiException.InvalidResponse
         val resourcesObject = response.optJSONObject("resources") ?: JSONObject()
         val resources = buildMap {
             resourcesObject.keys().forEach { key ->
@@ -126,7 +128,7 @@ class HttpCompanionApi(
                 )
             }
         }
-        return CompanionSyncStatus(lastReceivedAt, resources)
+        return CompanionSyncStatus(lastReceivedAt, observedAt, resources)
     }
 
     override suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding =

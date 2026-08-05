@@ -204,6 +204,7 @@ fun MurphCard(
 fun MurphTextField(
     value: String,
     onValueChange: (String) -> Unit,
+    label: String,
     placeholder: String,
     keyboardOptions: KeyboardOptions,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
@@ -218,6 +219,7 @@ fun MurphTextField(
         onValueChange = onValueChange,
         modifier = modifier
             .height(56.dp)
+            .semantics { contentDescription = label }
             .clip(shape)
             .drawWithContent {
                 val radius = 22.dp.toPx()

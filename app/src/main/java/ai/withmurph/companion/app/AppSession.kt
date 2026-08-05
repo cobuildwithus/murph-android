@@ -51,7 +51,6 @@ class AppSession(
     private val contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
     private val localState: LocalState,
     private val config: AppConfig,
-    private val now: () -> Instant = Instant::now,
     private val newMutationId: () -> String = { UUID.randomUUID().toString() },
 ) {
     private val startMutex = Mutex()
@@ -998,17 +997,16 @@ class AppSession(
                 HealthConnectAvailability.Available -> {
                     val validatedEpoch = sessionEpoch
                     val receiptBeforePreflight = localState.lastKnownDataReceivedAt
-                    if (
+                    val observationBeforePreflight = localState.lastKnownStatusObservedAt
+                    val preflightStatus =
                         fetchValidatedHealthStatus(
                             validatedEpoch,
                             LaunchConsentFollowUp.PrepareHealthPermission,
-                        ) == null
-                    ) {
-                        return false
-                    }
+                        ) ?: return false
                     if (validatedEpoch != sessionEpoch) return false
                     currentAuthOwnershipLoss(memberKey)?.let { authState ->
                         localState.lastKnownDataReceivedAt = receiptBeforePreflight
+                        localState.lastKnownStatusObservedAt = observationBeforePreflight
                         publishPermissionAwareHealthState(
                             status = cachedHealthStatus(),
                             message = _state.value.healthMessage,
@@ -1070,7 +1068,8 @@ class AppSession(
                     pendingHealthConnection = PendingHealthConnection(
                         epoch = preparationEpoch,
                         memberKey = memberKey,
-                        requestedAt = now(),
+                        requestedAt = preflightStatus.observedAt,
+                        receiptBaselineAt = preflightStatus.lastDataReceivedAt,
                     )
                     _state.update { it.copy(isConnectingHealth = true, healthMessage = null) }
                     true
@@ -1152,7 +1151,10 @@ class AppSession(
                 if (
                     fetchValidatedHealthStatus(
                         epoch,
-                        LaunchConsentFollowUp.CompleteHealthPermission(pending.requestedAt),
+                        LaunchConsentFollowUp.CompleteHealthPermission(
+                            pending.requestedAt,
+                            pending.receiptBaselineAt,
+                        ),
                     ) == null
                 ) {
                     pendingHealthConnection = null
@@ -1182,6 +1184,7 @@ class AppSession(
                             memberKey = pending.memberKey,
                             followUp = LaunchConsentFollowUp.CompleteHealthPermission(
                                 pending.requestedAt,
+                                pending.receiptBaselineAt,
                             ),
                             healthLockHeld = true,
                         )
@@ -1264,12 +1267,21 @@ class AppSession(
             }
             localState.healthAccessRequestedAt =
                 InstantValue(pending.requestedAt.toEpochMilli())
+            localState.healthReceiptBaselineAt = pending.receiptBaselineAt?.let {
+                InstantValue(it.toEpochMilli())
+            }
+            localState.lastKnownDataReceivedAt = null
+            localState.lastKnownStatusObservedAt =
+                InstantValue(pending.requestedAt.toEpochMilli())
+            localState.healthReconnectRequired = false
             pendingHealthConnection = null
             _state.update { current ->
                 current.copy(
                     isConnectingHealth = false,
                     pendingHealthHistoryPermissionRequestId = null,
                     healthSync = HealthSyncState.AwaitingFirstData,
+                    healthStatusObservedAt = pending.requestedAt,
+                    healthReconnectRequired = false,
                     grantedResourceCount = health.grantedResourceCount(),
                     healthMessage = null,
                 )
@@ -1570,6 +1582,9 @@ class AppSession(
     private suspend fun enforceHealthSetupAuthorization(): Boolean {
         if (!health.isSignedIn() || healthWasRequested()) return true
         if (!resetHealthSdkAtTrustBoundary()) return false
+        if (localState.healthReconnectRequired && localState.memberKey != null) {
+            return true
+        }
         currentMemberKey = null
         localState.clearMemberScopedState()
         return true
@@ -1631,6 +1646,7 @@ class AppSession(
                     }
                     return
                 }
+                localState.healthReconnectRequired = true
                 if (!resetHealthSdkAtTrustBoundary()) return
                 epoch = sessionEpoch
             } catch (error: CompanionApiException.Unauthorized) {
@@ -1686,6 +1702,7 @@ class AppSession(
         }
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
+        val reconnectRequired = localState.healthReconnectRequired
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
@@ -1696,8 +1713,10 @@ class AppSession(
                 } else {
                     deriveCachedHealthState()
                 },
+                healthReconnectRequired = reconnectRequired,
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = when {
+                    reconnectRequired -> HEALTH_RECONNECT_REQUIRED_MESSAGE
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
                     authState.verifiedOnline -> null
                     else -> "You're offline. Murph will verify the session and resume sync when the connection returns."
@@ -1799,11 +1818,13 @@ class AppSession(
                 } else {
                     deriveCachedHealthState()
                 },
+                healthReconnectRequired = localState.healthReconnectRequired,
                 grantedResourceCount = grantedResourceCount,
-                healthMessage = if (needsPermissionRecovery) {
-                    HEALTH_PERMISSION_RECOVERY_MESSAGE
-                } else {
-                    "You're offline. Saved sync status is shown until Murph reconnects."
+                healthMessage = when {
+                    localState.healthReconnectRequired ->
+                        "$HEALTH_RECONNECT_REQUIRED_MESSAGE Connect when you're back online."
+                    needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
+                    else -> "You're offline. Saved sync status is shown until Murph reconnects."
                 },
                 addressBookSharing = AddressBookSharingState.Unavailable,
                 isAddressBookBusy = false,
@@ -1932,8 +1953,12 @@ class AppSession(
         if (response.environment != config.environment.wireValue) {
             throw CompanionApiException.InvalidResponse
         }
+        localState.healthReconnectRequired = false
         _state.update { current ->
-            current.copy(backendEnvironment = response.environment)
+            current.copy(
+                backendEnvironment = response.environment,
+                healthReconnectRequired = false,
+            )
         }
         currentAuthOwnershipLoss(memberKey)?.let { return it }
         health.identify(memberKey = memberKey) {
@@ -2124,10 +2149,11 @@ class AppSession(
             return null
         }
         if (epoch != sessionEpoch) return null
-        val requestedAt = healthRequestedAt()
+        val receiptBaselineAt = healthReceiptBaselineAt()
         val qualifyingReceipt = status.lastDataReceivedAt?.takeIf { receivedAt ->
-            requestedAt != null && !receivedAt.isBefore(requestedAt)
+            receiptBaselineAt == null || receivedAt.isAfter(receiptBaselineAt)
         }
+        localState.lastKnownStatusObservedAt = InstantValue(status.observedAt.toEpochMilli())
         localState.lastKnownDataReceivedAt = qualifyingReceipt?.let {
             InstantValue(it.toEpochMilli())
         }
@@ -2166,9 +2192,9 @@ class AppSession(
                     HealthSyncState.derive(
                         requestedAt = requestedAt,
                         status = status,
-                        now = now(),
                     )
                 },
+                healthStatusObservedAt = status?.observedAt,
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = if (needsPermissionRecovery) {
                     HEALTH_PERMISSION_RECOVERY_MESSAGE
@@ -2425,13 +2451,19 @@ class AppSession(
         return try {
             val response = api.createJunctionSignInToken(
                 memberKey = memberKey,
-                request = signInTokenRequest(ConnectionIntent.Resume),
+                request = signInTokenRequest(intent = null),
             )
             if (epoch != sessionEpoch) return false
             if (response.environment != config.environment.wireValue) {
                 throw CompanionApiException.InvalidResponse
             }
-            _state.update { it.copy(backendEnvironment = response.environment) }
+            localState.healthReconnectRequired = false
+            _state.update {
+                it.copy(
+                    backendEnvironment = response.environment,
+                    healthReconnectRequired = false,
+                )
+            }
             currentAuthOwnershipLoss(memberKey)?.let { observed ->
                 reconcileObservedAuthState(memberKey, observed)
                 return false
@@ -2444,7 +2476,12 @@ class AppSession(
             // The server performs canonical member admission before resolving
             // Junction lifecycle. This exact response means access is active but
             // there is no established Health connection to resume.
-            epoch == sessionEpoch && memberKey == currentMemberKey
+            if (epoch == sessionEpoch && memberKey == currentMemberKey) {
+                localState.healthReconnectRequired = true
+                true
+            } else {
+                false
+            }
         } catch (_: CompanionApiException.ConsentRequired) {
             if (epoch != sessionEpoch) return false
             beginLaunchConsentRecovery(
@@ -3065,7 +3102,10 @@ class AppSession(
                 is LaunchConsentFollowUp.AutomaticAddressBookDeletion ->
                     resumeAutomaticAddressBookDeletion(followUp.mutation)
                 is LaunchConsentFollowUp.CompleteHealthPermission ->
-                    resumeHealthPermissionAfterConsent(followUp.requestedAt)
+                    resumeHealthPermissionAfterConsent(
+                        followUp.requestedAt,
+                        followUp.receiptBaselineAt,
+                    )
                 is LaunchConsentFollowUp.AddressBookReplacement -> {
                     val memberKey = currentMemberKey ?: return
                     val restored = followUp.pending.copy(
@@ -3092,13 +3132,17 @@ class AppSession(
         }
     }
 
-    private suspend fun resumeHealthPermissionAfterConsent(requestedAt: Instant) {
+    private suspend fun resumeHealthPermissionAfterConsent(
+        requestedAt: Instant,
+        receiptBaselineAt: Instant?,
+    ) {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
         pendingHealthConnection = PendingHealthConnection(
             epoch = epoch,
             memberKey = memberKey,
             requestedAt = requestedAt,
+            receiptBaselineAt = receiptBaselineAt,
         )
         _state.update {
             it.copy(
@@ -3611,19 +3655,27 @@ class AppSession(
         return HealthSyncState.derive(
             requestedAt = healthRequestedAt(),
             status = cachedHealthStatus(),
-            now = now(),
         )
     }
 
-    private fun cachedHealthStatus(): CompanionSyncStatus? =
-        localState.lastKnownDataReceivedAt?.epochMilliseconds
+    private fun cachedHealthStatus(): CompanionSyncStatus? {
+        val observedAt = localState.lastKnownStatusObservedAt?.epochMilliseconds
             ?.let(Instant::ofEpochMilli)
-            ?.let { CompanionSyncStatus(it, emptyMap()) }
+            ?: return null
+        val receiptBaselineAt = healthReceiptBaselineAt()
+        val receivedAt = localState.lastKnownDataReceivedAt?.epochMilliseconds
+            ?.let(Instant::ofEpochMilli)
+            ?.takeIf { receiptBaselineAt == null || it.isAfter(receiptBaselineAt) }
+        return CompanionSyncStatus(receivedAt, observedAt, emptyMap())
+    }
 
     private fun healthRequestedAt(): Instant? =
         localState.healthAccessRequestedAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
 
     private fun healthWasRequested(): Boolean = healthRequestedAt() != null
+
+    private fun healthReceiptBaselineAt(): Instant? =
+        localState.healthReceiptBaselineAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
 
     private fun ownsPendingHealthConnection(memberKey: String? = currentMemberKey): Boolean {
         val pending = pendingHealthConnection ?: return false
@@ -3691,6 +3743,7 @@ class AppSession(
         val epoch: Int,
         val memberKey: String,
         val requestedAt: Instant,
+        val receiptBaselineAt: Instant?,
         val awaitingHistoryPermission: Boolean = false,
     )
 
@@ -3724,7 +3777,10 @@ class AppSession(
         data class AutomaticAddressBookDeletion(
             val mutation: AddressBookMutation,
         ) : LaunchConsentFollowUp
-        data class CompleteHealthPermission(val requestedAt: Instant) : LaunchConsentFollowUp
+        data class CompleteHealthPermission(
+            val requestedAt: Instant,
+            val receiptBaselineAt: Instant?,
+        ) : LaunchConsentFollowUp
         data class AddressBookReplacement(
             val pending: PendingAddressBookPermissionFlow,
         ) : LaunchConsentFollowUp
@@ -3742,9 +3798,11 @@ class AppSession(
             "Murph needs your latest launch consent. Review it in the app, then try again."
         const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
             "Health Connect access is off. Reconnect and choose at least one category."
+        const val HEALTH_RECONNECT_REQUIRED_MESSAGE =
+            "Health Connect needs to reconnect before syncing can resume."
     }
 
-    private fun signInTokenRequest(intent: ConnectionIntent): SignInTokenRequest =
+    private fun signInTokenRequest(intent: ConnectionIntent?): SignInTokenRequest =
         SignInTokenRequest(
             appInstallationId = localState.installationId,
             appVersion = config.appVersion,

@@ -77,14 +77,14 @@ class AppSessionTest {
         fixture.session.start()
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
-        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(listOf<ConnectionIntent?>(null), fixture.api.intents)
         assertEquals(0, fixture.health.identifyCalls)
         assertEquals(0, fixture.health.connectCalls)
         assertEquals(ZoneId.systemDefault().id, fixture.api.signInRequests.single().timeZone)
     }
 
     @Test
-    fun freshAdmissionTreatsReconnectRequiredAsActiveWithoutIdentifyingHealth() = runTest {
+    fun freshAdmissionReconnectRequirementWaitsForExplicitAction() = runTest {
         val fixture = fixture()
         fixture.api.statusError = CompanionApiException.NoAccount
         fixture.api.signInError = CompanionApiException.ReconnectRequired
@@ -92,8 +92,27 @@ class AppSessionTest {
         fixture.session.start()
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
-        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(listOf<ConnectionIntent?>(null), fixture.api.intents)
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
+        assertEquals(
+            "Health Connect needs to reconnect before syncing can resume.",
+            fixture.session.state.value.healthMessage,
+        )
         assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.connectCalls)
+
+        fixture.api.statusError = null
+        fixture.api.signInError = null
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertEquals(listOf<ConnectionIntent?>(null), fixture.api.intents)
+
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        assertEquals(listOf(null, ConnectionIntent.Connect), fixture.api.intents)
+        assertFalse(fixture.localState.healthReconnectRequired)
+        assertFalse(fixture.session.state.value.healthReconnectRequired)
+        assertEquals(1, fixture.health.identifyCalls)
+        assertEquals(1, fixture.health.connectCalls)
     }
 
     @Test
@@ -113,7 +132,8 @@ class AppSessionTest {
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertEquals(null, fixture.session.state.value.launchConsentRecovery)
-        assertEquals(listOf(ConnectionIntent.Resume, ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(listOf<ConnectionIntent?>(null, null), fixture.api.intents)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
         assertEquals(0, fixture.health.identifyCalls)
     }
 
@@ -860,6 +880,7 @@ class AppSessionTest {
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.api.status = CompanionSyncStatus(
             lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
             resources = mapOf(
                 "sleep" to CompanionSyncStatus.ResourceStatus(now.minusSeconds(600)),
             ),
@@ -882,6 +903,7 @@ class AppSessionTest {
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.api.status = CompanionSyncStatus(
             lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
             resources = mapOf(
                 "sleep" to CompanionSyncStatus.ResourceStatus(now.minusSeconds(600)),
             ),
@@ -912,6 +934,7 @@ class AppSessionTest {
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.api.status = CompanionSyncStatus(
             lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
             resources = emptyMap(),
         )
         fixture.session.start()
@@ -967,6 +990,7 @@ class AppSessionTest {
         fixture.health.signedIn = true
         fixture.api.status = CompanionSyncStatus(
             lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
             resources = emptyMap(),
         )
         fixture.session.start()
@@ -1422,6 +1446,26 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
+        assertEquals(
+            "Health Connect needs to reconnect before syncing can resume.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        fixture.session.retry()
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
+
+        fixture.api.signInError = null
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        assertEquals(
+            listOf(ConnectionIntent.Resume, ConnectionIntent.Connect),
+            fixture.api.intents,
+        )
+        assertFalse(fixture.session.state.value.healthReconnectRequired)
     }
 
     @Test
@@ -1459,13 +1503,12 @@ class AppSessionTest {
             assertEquals(0, replacementHealth.configureCalls)
             assertEquals(0, replacementHealth.syncCalls)
             assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+            assertTrue(replacement.state.value.healthReconnectRequired)
+            assertTrue(fixture.localState.healthReconnectRequired)
             assertEquals(null, fixture.localState.healthAccessRequestedAt)
             assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
-            if (authUnavailable) {
-                assertTrue(replacement.state.value.phase is AppPhase.Failed)
-            } else {
-                assertEquals(AppPhase.Ready, replacement.state.value.phase)
-            }
+            assertEquals(AppPhase.Ready, replacement.state.value.phase)
+            assertEquals(!authUnavailable, replacement.state.value.authVerifiedOnline)
 
             originalStart.cancelAndJoin()
         }
@@ -1525,6 +1568,7 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
         assertEquals(syncCalls, fixture.health.syncCalls)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertFalse(fixture.session.state.value.isConnectingHealth)
@@ -2402,6 +2446,7 @@ class AppSessionTest {
         fixture.localState.healthAccessRequestedAt = InstantValue(now.minusSeconds(3_600).toEpochMilli())
         fixture.localState.lastKnownDataReceivedAt =
             InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.localState.lastKnownStatusObservedAt = InstantValue(now.toEpochMilli())
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.health.signedIn = true
 
@@ -2426,7 +2471,7 @@ class AppSessionTest {
             InstantValue(now.minusSeconds(3_600).toEpochMilli())
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.health.signedIn = true
-        fixture.api.status = CompanionSyncStatus(now.minusSeconds(600), emptyMap())
+        fixture.api.status = CompanionSyncStatus(now.minusSeconds(600), now, emptyMap())
         fixture.session.start()
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
         fixture.health.grantedCount = 0
@@ -2461,6 +2506,7 @@ class AppSessionTest {
             InstantValue(now.minusSeconds(3_600).toEpochMilli())
         fixture.localState.lastKnownDataReceivedAt =
             InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.localState.lastKnownStatusObservedAt = InstantValue(now.toEpochMilli())
         fixture.health.signedIn = true
         fixture.health.grantedCount = 0
 
@@ -2490,7 +2536,7 @@ class AppSessionTest {
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertEquals(listOf("health_connect"), fixture.api.statusSources)
-        assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+        assertEquals(listOf<ConnectionIntent?>(null), fixture.api.intents)
         assertEquals(0, fixture.health.identifyCalls)
         assertEquals(0, fixture.health.connectCalls)
     }
@@ -2605,6 +2651,7 @@ class AppSessionTest {
         assertEquals(0, fixture.health.configureCalls)
         assertEquals(0, fixture.health.syncCalls)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
     }
 
     @Test
@@ -2999,10 +3046,11 @@ class AppSessionTest {
             InstantValue(now.minusSeconds(3_600).toEpochMilli())
         fixture.localState.lastKnownDataReceivedAt =
             InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.localState.lastKnownStatusObservedAt = InstantValue(now.toEpochMilli())
         fixture.health.signedIn = true
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.health.actualGrantedCount = fixture.health.totalResourceCount
-        fixture.api.status = CompanionSyncStatus(now.minusSeconds(600), emptyMap())
+        fixture.api.status = CompanionSyncStatus(now.minusSeconds(600), now, emptyMap())
         fixture.session.start()
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertFalse(fixture.session.state.value.authVerifiedOnline)
@@ -3070,6 +3118,7 @@ class AppSessionTest {
             fixture.health.grantedCount = fixture.health.totalResourceCount
             fixture.api.status = CompanionSyncStatus(
                 lastDataReceivedAt = now.minusSeconds(600),
+                observedAt = now,
                 resources = emptyMap(),
             )
             fixture.session.start()
@@ -3112,6 +3161,7 @@ class AppSessionTest {
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.api.status = CompanionSyncStatus(
             lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
             resources = emptyMap(),
         )
         fixture.session.start()
@@ -3211,7 +3261,7 @@ class AppSessionTest {
         val now = Instant.parse("2026-07-25T18:00:00Z")
         val oldReceipt = now.minusSeconds(600)
         val fixture = fixture(now = now)
-        fixture.api.status = CompanionSyncStatus(oldReceipt, emptyMap())
+        fixture.api.status = CompanionSyncStatus(oldReceipt, now, emptyMap())
         fixture.session.start()
         assertTrue(fixture.session.prepareHealthConnection())
         assertTrue(fixture.session.completeHealthPermissionFlow(true))
@@ -3220,12 +3270,27 @@ class AppSessionTest {
 
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(
+            InstantValue(oldReceipt.toEpochMilli()),
+            fixture.localState.healthReceiptBaselineAt,
+        )
 
-        fixture.api.status = CompanionSyncStatus(now, emptyMap())
+        val advancedReceipt = oldReceipt.plusSeconds(60)
+        fixture.api.status = CompanionSyncStatus(
+            advancedReceipt,
+            now.plusSeconds(60),
+            emptyMap(),
+        )
         fixture.session.syncNow()
 
-        assertEquals(HealthSyncState.Synced(now), fixture.session.state.value.healthSync)
-        assertEquals(InstantValue(now.toEpochMilli()), fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(
+            HealthSyncState.Synced(advancedReceipt),
+            fixture.session.state.value.healthSync,
+        )
+        assertEquals(
+            InstantValue(advancedReceipt.toEpochMilli()),
+            fixture.localState.lastKnownDataReceivedAt,
+        )
 
         fixture.localState.lastKnownDataReceivedAt = InstantValue(oldReceipt.toEpochMilli())
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
@@ -3642,23 +3707,21 @@ class AppSessionTest {
             state = AuthSessionState.SignedIn(memberKey, verifiedOnline = true),
             events = events,
         )
-        val api = FakeApi(events) { auth.state }
+        val api = FakeApi(events, now) { auth.state }
         val health = FakeHealth(events)
         val localState = FakeLocalState()
-        val session = createSession(auth, api, health, localState, now)
+        val session = createSession(auth, api, health, localState)
         return Fixture(session, auth, api, health, localState, events)
     }
 
     private fun recreatedSession(
         fixture: Fixture,
         health: FakeHealth = fixture.health,
-        now: Instant = Instant.parse("2026-07-25T18:00:00Z"),
     ): AppSession = createSession(
         auth = fixture.auth,
         api = fixture.api,
         health = health,
         localState = fixture.localState,
-        now = now,
     )
 
     private fun createSession(
@@ -3666,7 +3729,6 @@ class AppSessionTest {
         api: FakeApi,
         health: FakeHealth,
         localState: FakeLocalState,
-        now: Instant,
     ) = AppSession(
         auth = auth,
         api = api,
@@ -3681,7 +3743,6 @@ class AppSessionTest {
             junctionSdkVersion = "5.0.2",
             privySdkVersion = "0.12.0",
         ),
-        now = { now },
     )
 
     private suspend fun completedHealthFixture(): Fixture {
@@ -3762,13 +3823,18 @@ class AppSessionTest {
 
     private class FakeApi(
         private val events: MutableList<String>,
+        observedAt: Instant,
         private val currentAuthState: () -> AuthSessionState,
     ) : CompanionApi {
-        val intents = mutableListOf<ConnectionIntent>()
+        val intents = mutableListOf<ConnectionIntent?>()
         val signInRequests = mutableListOf<SignInTokenRequest>()
         val tokenAuthMemberKeys = mutableListOf<String?>()
         val statusSources = mutableListOf<String>()
-        var status = CompanionSyncStatus(lastDataReceivedAt = null, resources = emptyMap())
+        var status = CompanionSyncStatus(
+            lastDataReceivedAt = null,
+            observedAt = observedAt,
+            resources = emptyMap(),
+        )
         var signInError: Throwable? = null
         var statusError: Throwable? = null
         var statusGate: CompletableDeferred<Unit>? = null
@@ -3810,7 +3876,7 @@ class AppSessionTest {
             intents += request.connectionIntent
             tokenAuthMemberKeys +=
                 (currentAuthState() as? AuthSessionState.SignedIn)?.memberKey
-            events += "token-${request.connectionIntent.wireValue}"
+            events += "token-${request.connectionIntent?.wireValue ?: "omitted"}"
             maximumSignInCalls?.let { maximum ->
                 assertTrue(
                     "Unexpected extra Junction sign-in token request.",
@@ -4006,7 +4072,10 @@ class AppSessionTest {
         override val installationId = "installation-id"
         override var memberKey: String? = null
         override var healthAccessRequestedAt: InstantValue? = null
+        override var healthReceiptBaselineAt: InstantValue? = null
         override var lastKnownDataReceivedAt: InstantValue? = null
+        override var lastKnownStatusObservedAt: InstantValue? = null
+        override var healthReconnectRequired = false
         override var signOutPending = false
             private set
         var revokeHealthAuthorizationSucceeds = true
@@ -4016,7 +4085,10 @@ class AppSessionTest {
         override fun revokeHealthSetupAuthorization(): Boolean {
             if (!revokeHealthAuthorizationSucceeds) return false
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
             return true
         }
 
@@ -4024,7 +4096,10 @@ class AppSessionTest {
             if (!beginSignOutSucceeds) return false
             signOutPending = true
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
             return true
         }
 
@@ -4038,7 +4113,10 @@ class AppSessionTest {
         override fun clearMemberScopedState() {
             memberKey = null
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
         }
     }
 

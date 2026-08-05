@@ -5,6 +5,7 @@ import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.LaunchConsentStatus
+import java.time.Instant
 
 sealed interface AppPhase {
     data object Launching : AppPhase
@@ -22,6 +23,8 @@ data class AppUiState(
     val phase: AppPhase = AppPhase.Launching,
     val healthAvailability: HealthConnectAvailability = HealthConnectAvailability.TemporarilyUnavailable,
     val healthSync: HealthSyncState = HealthSyncState.NotConnected,
+    val healthStatusObservedAt: Instant? = null,
+    val healthReconnectRequired: Boolean = false,
     val isConnectingHealth: Boolean = false,
     val isSyncingHealth: Boolean = false,
     val healthMessage: String? = null,

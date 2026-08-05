@@ -40,7 +40,7 @@ data class SignInTokenRequest(
     val platform: CompanionPlatform = CompanionPlatform.Android,
     val appInstallationId: String,
     val appVersion: String,
-    val connectionIntent: ConnectionIntent,
+    val connectionIntent: ConnectionIntent?,
     val sdkVersions: Map<String, String>,
     val timeZone: String,
 )
@@ -149,6 +149,7 @@ data class InitialOnboardingContactCardHandoff(
 
 data class CompanionSyncStatus(
     val lastDataReceivedAt: Instant?,
+    val observedAt: Instant,
     val resources: Map<String, ResourceStatus>,
 ) {
     data class ResourceStatus(val lastReceivedAt: Instant?)
@@ -284,25 +285,22 @@ sealed interface HealthSyncState {
         fun derive(
             requestedAt: Instant?,
             status: CompanionSyncStatus?,
-            now: Instant,
             delayedAfter: Duration = Duration.ofHours(36),
             attentionAfter: Duration = Duration.ofHours(72),
         ): HealthSyncState {
             if (requestedAt == null) return NotConnected
-            // A receipt from an older setup is not evidence for this connection.
-            // Equality qualifies; Murph deliberately applies no clock-skew allowance.
-            val receivedAt = status?.lastDataReceivedAt?.takeUnless {
-                it.isBefore(requestedAt)
-            }
+            val observedAt = status?.observedAt ?: requestedAt
+            val receivedAt = status?.lastDataReceivedAt
             if (receivedAt == null) {
-                val setupAge = Duration.between(requestedAt, now).coerceAtLeast(Duration.ZERO)
+                val setupAge =
+                    Duration.between(requestedAt, observedAt).coerceAtLeast(Duration.ZERO)
                 return if (setupAge >= attentionAfter) {
                     NeedsAttention(lastDataReceivedAt = null)
                 } else {
                     AwaitingFirstData
                 }
             }
-            val age = Duration.between(receivedAt, now).coerceAtLeast(Duration.ZERO)
+            val age = Duration.between(receivedAt, observedAt).coerceAtLeast(Duration.ZERO)
             return when {
                 age >= attentionAfter -> NeedsAttention(receivedAt)
                 age >= delayedAfter -> Delayed(receivedAt)
