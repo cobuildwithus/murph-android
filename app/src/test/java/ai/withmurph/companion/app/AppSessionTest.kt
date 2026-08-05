@@ -137,6 +137,27 @@ class AppSessionTest {
     }
 
     @Test
+    fun successfulReadmissionCannotClearPersistedReconnectAuthority() = runTest {
+        val fixture = fixture()
+        fixture.localState.healthReconnectRequired = true
+        fixture.api.statusError = CompanionApiException.NoAccount
+
+        fixture.session.start()
+
+        assertEquals(listOf<ConnectionIntent?>(null), fixture.api.intents)
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertTrue(fixture.session.state.value.healthReconnectRequired)
+        fixture.api.statusError = null
+        assertTrue(fixture.session.prepareHealthConnection())
+        fixture.health.configureError = IllegalStateException("configure failed")
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+        assertTrue(fixture.localState.healthReconnectRequired)
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+        assertTrue(replacement.state.value.healthReconnectRequired)
+    }
+
+    @Test
     fun freshAdmissionRecoversConsentThenRetriesCanonicalSignup() = runTest {
         val fixture = fixture()
         fixture.api.statusError = CompanionApiException.NoAccount
@@ -3517,7 +3538,7 @@ class AppSessionTest {
         )
 
         fixture.api.statusHandler = null
-        val advancedReceipt = finalPreConnectReceipt.plusSeconds(60)
+        val advancedReceipt = finalPreConnectObservation.plusSeconds(60)
         fixture.api.status = CompanionSyncStatus(
             advancedReceipt,
             finalPreConnectObservation.plusSeconds(60),
@@ -3541,6 +3562,58 @@ class AppSessionTest {
         replacement.start()
 
         assertEquals(HealthSyncState.AwaitingFirstData, replacement.state.value.healthSync)
+    }
+
+    @Test
+    fun setupObservationIsTheStrictReceiptFloorWhenBaselineIsEmpty() = runTest {
+        val initialObservation = Instant.parse("2026-07-25T18:00:00Z")
+        val setupBoundary = initialObservation.plusSeconds(60)
+        val fixture = fixture(now = initialObservation)
+        fixture.session.start()
+        fixture.api.statusHandler = { call ->
+            when (call) {
+                2 -> CompanionSyncStatus(null, initialObservation, emptyMap())
+                3 -> CompanionSyncStatus(null, setupBoundary, emptyMap())
+                else -> CompanionSyncStatus(
+                    setupBoundary,
+                    setupBoundary.plusSeconds(60),
+                    emptyMap(),
+                )
+            }
+        }
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        fixture.health.syncError = IllegalStateException("vendor sync failed")
+        finishHealthHistoryPermission(fixture)
+
+        assertEquals(null, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(
+            InstantValue(setupBoundary.toEpochMilli()),
+            fixture.localState.healthAccessRequestedAt,
+        )
+        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(setupBoundary.toEpochMilli())
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+        assertEquals(HealthSyncState.AwaitingFirstData, replacement.state.value.healthSync)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.api.statusHandler = null
+        val qualifyingReceipt = setupBoundary.plusSeconds(1)
+        fixture.api.status = CompanionSyncStatus(
+            qualifyingReceipt,
+            setupBoundary.plusSeconds(120),
+            emptyMap(),
+        )
+        fixture.health.syncError = null
+        replacement.retry()
+        assertEquals(
+            HealthSyncState.Synced(qualifyingReceipt),
+            replacement.state.value.healthSync,
+        )
     }
 
     private suspend fun assertPermissionRecoveryFailureRollsBack(configureFails: Boolean) {

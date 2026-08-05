@@ -2181,9 +2181,9 @@ class AppSession(
             return null
         }
         if (epoch != sessionEpoch) return null
-        val receiptBaselineAt = healthReceiptBaselineAt()
+        val receiptFloorAt = healthReceiptFloorAt()
         val qualifyingReceipt = status.lastDataReceivedAt?.takeIf { receivedAt ->
-            receiptBaselineAt == null || receivedAt.isAfter(receiptBaselineAt)
+            receiptFloorAt == null || receivedAt.isAfter(receiptFloorAt)
         }
         localState.lastKnownStatusObservedAt = InstantValue(status.observedAt.toEpochMilli())
         localState.lastKnownDataReceivedAt = qualifyingReceipt?.let {
@@ -2493,11 +2493,9 @@ class AppSession(
             if (response.environment != config.environment.wireValue) {
                 throw CompanionApiException.InvalidResponse
             }
-            localState.healthReconnectRequired = false
             _state.update {
                 it.copy(
                     backendEnvironment = response.environment,
-                    healthReconnectRequired = false,
                 )
             }
             currentAuthOwnershipLoss(memberKey)?.let { observed ->
@@ -3711,10 +3709,10 @@ class AppSession(
         val observedAt = localState.lastKnownStatusObservedAt?.epochMilliseconds
             ?.let(Instant::ofEpochMilli)
             ?: return null
-        val receiptBaselineAt = healthReceiptBaselineAt()
+        val receiptFloorAt = healthReceiptFloorAt()
         val receivedAt = localState.lastKnownDataReceivedAt?.epochMilliseconds
             ?.let(Instant::ofEpochMilli)
-            ?.takeIf { receiptBaselineAt == null || it.isAfter(receiptBaselineAt) }
+            ?.takeIf { receiptFloorAt == null || it.isAfter(receiptFloorAt) }
         return CompanionSyncStatus(receivedAt, observedAt, emptyMap())
     }
 
@@ -3725,6 +3723,16 @@ class AppSession(
 
     private fun healthReceiptBaselineAt(): Instant? =
         localState.healthReceiptBaselineAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
+
+    private fun healthReceiptFloorAt(): Instant? {
+        val requestedAt = healthRequestedAt()
+        val receiptBaselineAt = healthReceiptBaselineAt()
+        return when {
+            requestedAt == null -> receiptBaselineAt
+            receiptBaselineAt == null -> requestedAt
+            else -> maxOf(requestedAt, receiptBaselineAt)
+        }
+    }
 
     private fun ownsPendingHealthConnection(memberKey: String? = currentMemberKey): Boolean {
         val pending = pendingHealthConnection ?: return false

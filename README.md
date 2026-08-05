@@ -215,9 +215,10 @@ message.
 - If that status cannot be refreshed, Android labels the cached projection
   **Last checked online** and never presents its frozen relative time or sync
   classification as a current result.
-- A source-scoped receipt must be strictly newer than the final pre-connect
-  baseline; an older or equal Health Connect receipt cannot prove the fresh
-  connection worked.
+- A source-scoped receipt must be strictly newer than both the final
+  pre-connect receipt baseline and that response's server observation time;
+  an older or equal Health Connect receipt cannot prove the fresh connection
+  worked, including when the pre-connect response had no receipt.
 - Complete local permission revocation renders Not connected even while online
   account verification is temporarily unavailable.
 - Login destinations and OTP digits are protected from Android task snapshots,
