@@ -60,6 +60,7 @@ class AppSession(
     private val initialOnboardingMutex = Mutex()
     private var hasCompletedStartup = false
     private var needsForegroundRefresh = false
+    private var foregroundGeneration = 0
     private var sessionEpoch = 0
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
@@ -1334,7 +1335,9 @@ class AppSession(
         }
     }
 
-    suspend fun syncNow() {
+    suspend fun syncNow() = syncNow(foregroundGeneration = null)
+
+    private suspend fun syncNow(foregroundGeneration: Int?) {
         if (hasActiveLaunchConsentRecovery()) return
         if (
             _state.value.phase != AppPhase.Ready ||
@@ -1356,6 +1359,10 @@ class AppSession(
             return
         }
         val needsHealthReconciliation = healthMutex.withLock {
+            if (
+                foregroundGeneration != null &&
+                !ownsForegroundRefresh(foregroundGeneration)
+            ) return@withLock false
             val epoch = sessionEpoch
             syncAndRefresh(epoch)
         }
@@ -1363,6 +1370,7 @@ class AppSession(
     }
 
     suspend fun didBecomeActive() {
+        val generation = foregroundGeneration
         if (hasActiveLaunchConsentRecovery()) {
             if (!needsForegroundRefresh) return
             needsForegroundRefresh = false
@@ -1380,12 +1388,14 @@ class AppSession(
         }
         needsForegroundRefresh = false
         val authAllowsSync = reconcileForegroundAuth()
+        if (!ownsForegroundRefresh(generation)) return
         if (
             authAllowsSync &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.initialOnboarding != null
         ) {
             refreshInitialOnboardingAfterForeground()
+            if (!ownsForegroundRefresh(generation)) return
         }
         if (
             (authAllowsSync || ownsPendingHealthConnection()) &&
@@ -1393,6 +1403,7 @@ class AppSession(
             _state.value.authVerifiedOnline
         ) {
             reconcileAddressBookForeground(showBusy = false)
+            if (!ownsForegroundRefresh(generation)) return
         }
         if (ownsPendingHealthConnection()) {
             return
@@ -1407,6 +1418,7 @@ class AppSession(
         } catch (_: Exception) {
             // Availability and backend receipt status remain independently useful.
         }
+        if (!ownsForegroundRefresh(generation)) return
         val availability = health.availability()
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
@@ -1430,12 +1442,13 @@ class AppSession(
             )
         }
         if (
+            ownsForegroundRefresh(generation) &&
             authAllowsSync &&
             _state.value.phase == AppPhase.Ready &&
             healthWasRequested() &&
             grantedResourceCount > 0
         ) {
-            syncNow()
+            syncNow(generation)
         }
     }
 
@@ -1578,8 +1591,12 @@ class AppSession(
     }
 
     fun didEnterBackground() {
+        foregroundGeneration += 1
         needsForegroundRefresh = true
     }
+
+    private fun ownsForegroundRefresh(generation: Int): Boolean =
+        generation == foregroundGeneration
 
     suspend fun signOut() = withContext(NonCancellable) {
         if (!localState.beginSignOut()) {

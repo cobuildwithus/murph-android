@@ -924,6 +924,61 @@ class AppSessionTest {
     }
 
     @Test
+    fun staleForegroundRefreshCannotQueueASecondFirstSync() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        val staleRefreshGate = CompletableDeferred<Unit>()
+        fixture.health.refreshGate = staleRefreshGate
+        fixture.health.refreshGateOnCall = 1
+
+        fixture.session.didEnterBackground()
+        val staleForeground = async { fixture.session.didBecomeActive() }
+        fixture.health.refreshEntered.await()
+
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        fixture.session.didEnterBackground()
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+
+        fixture.session.didBecomeActive()
+        assertEquals(1, fixture.health.syncCalls)
+
+        staleRefreshGate.complete(Unit)
+        staleForeground.await()
+
+        assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun staleForegroundWaitingForHealthOwnerCannotSync() = runTest {
+        val fixture = completedHealthFixture()
+        val syncCallsBefore = fixture.health.syncCalls
+        val statusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = statusGate
+        val activeSync = async { fixture.session.syncNow() }
+        fixture.api.statusGateEntered.await()
+
+        fixture.session.didEnterBackground()
+        val staleForeground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        fixture.session.didEnterBackground()
+        val currentForeground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        statusGate.complete(Unit)
+        activeSync.await()
+        staleForeground.await()
+        currentForeground.await()
+
+        assertEquals(syncCallsBefore + 2, fixture.health.syncCalls)
+    }
+
+    @Test
     fun failedFinalPreConnectStatusRefreshKeepsJunctionUntouchedAndStatusStale() = runTest {
         val fixture = fixture()
         fixture.session.start()
@@ -4350,6 +4405,9 @@ class AppSessionTest {
         val connectEntered = CompletableDeferred<Unit>()
         var syncGate: CompletableDeferred<Unit>? = null
         val syncEntered = CompletableDeferred<Unit>()
+        var refreshGate: CompletableDeferred<Unit>? = null
+        var refreshGateOnCall: Int? = null
+        val refreshEntered = CompletableDeferred<Unit>()
         var requireCurrentProcessSetupBeforeSync = false
         private var identifiedInCurrentProcess = false
         private var configuredInCurrentProcess = false
@@ -4389,6 +4447,10 @@ class AppSessionTest {
 
         override suspend fun refreshPermissionState() {
             refreshCalls += 1
+            if (refreshCalls == refreshGateOnCall) {
+                refreshEntered.complete(Unit)
+                refreshGate?.await()
+            }
             actualGrantedCount?.let { grantedCount = it }
         }
 
