@@ -1281,6 +1281,7 @@ class AppSession(
                     pendingHealthHistoryPermissionRequestId = null,
                     healthSync = HealthSyncState.AwaitingFirstData,
                     healthStatusObservedAt = pending.requestedAt,
+                    healthStatusIsStale = false,
                     healthReconnectRequired = false,
                     grantedResourceCount = health.grantedResourceCount(),
                     healthMessage = null,
@@ -1516,7 +1517,12 @@ class AppSession(
                 false
             }
             AuthSessionState.TemporarilyUnavailable -> {
-                _state.update { it.copy(authVerifiedOnline = false) }
+                _state.update {
+                    it.copy(
+                        authVerifiedOnline = false,
+                        healthStatusIsStale = healthWasRequested(),
+                    )
+                }
                 publishLaunchConsentLoadFailure(
                     pending,
                     "Murph couldn't verify your session. Check your connection and try again.",
@@ -1533,7 +1539,12 @@ class AppSession(
                     reconcile(force = true)
                     false
                 } else if (!authState.verifiedOnline) {
-                    _state.update { it.copy(authVerifiedOnline = false) }
+                    _state.update {
+                        it.copy(
+                            authVerifiedOnline = false,
+                            healthStatusIsStale = healthWasRequested(),
+                        )
+                    }
                     publishLaunchConsentLoadFailure(
                         pending,
                         "Murph couldn't verify your session. Check your connection and try again.",
@@ -1713,6 +1724,7 @@ class AppSession(
                 } else {
                     deriveCachedHealthState()
                 },
+                healthStatusIsStale = !authState.verifiedOnline && healthWasRequested(),
                 healthReconnectRequired = reconnectRequired,
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = when {
@@ -1818,6 +1830,7 @@ class AppSession(
                 } else {
                     deriveCachedHealthState()
                 },
+                healthStatusIsStale = healthWasRequested(),
                 healthReconnectRequired = localState.healthReconnectRequired,
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = when {
@@ -1861,6 +1874,7 @@ class AppSession(
                 _state.update { current ->
                     current.copy(
                         authVerifiedOnline = false,
+                        healthStatusIsStale = healthWasRequested(),
                         healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
                         addressBookSharing = AddressBookSharingState.Unavailable,
                         isAddressBookBusy = false,
@@ -1890,6 +1904,7 @@ class AppSession(
                     _state.update { current ->
                         current.copy(
                             authVerifiedOnline = false,
+                            healthStatusIsStale = healthWasRequested(),
                             healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
                             addressBookSharing = AddressBookSharingState.Unavailable,
                             isAddressBookBusy = false,
@@ -2144,6 +2159,7 @@ class AppSession(
             publishPermissionAwareHealthState(
                 status = cachedHealthStatus(),
                 message = "Murph couldn't verify your account. Saved status is still shown.",
+                healthStatusIsStale = true,
                 clearSyncing = true,
             )
             return null
@@ -2160,6 +2176,7 @@ class AppSession(
         publishPermissionAwareHealthState(
             status = status.copy(lastDataReceivedAt = qualifyingReceipt),
             message = null,
+            healthStatusIsStale = false,
         )
         return status
     }
@@ -2169,6 +2186,7 @@ class AppSession(
             status = cachedHealthStatus(),
             message = message,
             authVerifiedOnline = false,
+            healthStatusIsStale = true,
             clearSyncing = true,
         )
     }
@@ -2177,6 +2195,7 @@ class AppSession(
         status: CompanionSyncStatus?,
         message: String?,
         authVerifiedOnline: Boolean? = null,
+        healthStatusIsStale: Boolean? = null,
         clearSyncing: Boolean = false,
     ) {
         val requestedAt = healthRequestedAt()
@@ -2195,6 +2214,7 @@ class AppSession(
                     )
                 },
                 healthStatusObservedAt = status?.observedAt,
+                healthStatusIsStale = healthStatusIsStale ?: current.healthStatusIsStale,
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = if (needsPermissionRecovery) {
                     HEALTH_PERMISSION_RECOVERY_MESSAGE
@@ -2603,7 +2623,12 @@ class AppSession(
                 memberKey == localState.memberKey &&
                 !localState.signOutPending
         if (ownsMember) return null
-        _state.update { current -> current.copy(authVerifiedOnline = false) }
+        _state.update { current ->
+            current.copy(
+                authVerifiedOnline = false,
+                healthStatusIsStale = healthWasRequested(),
+            )
+        }
         return authState
     }
 

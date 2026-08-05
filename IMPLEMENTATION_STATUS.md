@@ -12,7 +12,7 @@
 - Current-member and backend-consent preflight before health uploads, plus account-switch, reinstall, incomplete-setup, stale-session, native launch-consent recovery, and fail-closed sign-out safeguards. Sign-out atomically records a durable tombstone and invalidates setup authorization before waiting on startup or touching either SDK; process reconstruction finishes Junction-first, Privy-second teardown before restoration.
 - Offline-to-online restoration revalidates backend membership and consent before setup, including sessions with no prior Health Connect marker.
 - Fault-injected preferences coverage proving failed durable revocation and sign-out commits restore their process-visible authorization snapshot.
-- Current-setup backend-receipt sync-state derivation with 36-hour and 72-hour thresholds in the server status clock domain, including a strict pre-connect receipt baseline, an actionable no-receipt state after 72 hours, and no device-wall-clock authority over sync truth.
+- Current-setup backend-receipt sync-state derivation with 36-hour and 72-hour thresholds in the server status clock domain, including a strict pre-connect receipt baseline, an actionable no-receipt state after 72 hours, no device-wall-clock authority over sync truth, and an explicit **Last checked online** presentation whenever only a cached snapshot is available.
 - Typed stopped/disconnected Junction recovery matching iOS: omitted/passive token requests never reactivate server state, the exact reconnect requirement survives process recreation, and only the visible **Reconnect Health Connect** action may continue to a `connect` request.
 - Offline-safe local permission reconciliation so complete revocation overrides cached backend status and exposes reconnect without starting network or SDK health work.
 - Optional address-book familiar-name projection with an explicit Settings
@@ -27,7 +27,7 @@
 - Compose login, first-run setup, status, WHOOP guidance, consent, settings, and
   failure screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
-  setup, explicit reconnect, waiting, synced, delayed, attention, consent required, consent load
+  setup, explicit reconnect, waiting, synced, saved-status, delayed, attention, consent required, consent load
   failure, all first-run onboarding stages, and failure states.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.

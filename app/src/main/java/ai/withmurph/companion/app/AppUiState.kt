@@ -24,6 +24,7 @@ data class AppUiState(
     val healthAvailability: HealthConnectAvailability = HealthConnectAvailability.TemporarilyUnavailable,
     val healthSync: HealthSyncState = HealthSyncState.NotConnected,
     val healthStatusObservedAt: Instant? = null,
+    val healthStatusIsStale: Boolean = false,
     val healthReconnectRequired: Boolean = false,
     val isConnectingHealth: Boolean = false,
     val isSyncingHealth: Boolean = false,

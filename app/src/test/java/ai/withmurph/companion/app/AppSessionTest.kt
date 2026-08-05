@@ -891,6 +891,7 @@ class AppSessionTest {
         assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
         assertEquals(listOf("health_connect", "health_connect"), fixture.api.statusSources)
         assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertFalse(fixture.session.state.value.healthStatusIsStale)
         assertEquals(1, fixture.health.syncCalls)
     }
 
@@ -2457,9 +2458,45 @@ class AppSessionTest {
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertFalse(fixture.session.state.value.authVerifiedOnline)
         assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
         assertEquals(fixture.health.totalResourceCount, fixture.session.state.value.grantedResourceCount)
         assertEquals(0, fixture.health.syncCalls)
         assertTrue(fixture.api.statusSources.isEmpty())
+    }
+
+    @Test
+    fun failedStatusRefreshMarksCachedSnapshotStaleUntilSuccessfulCheck() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
+            resources = emptyMap(),
+        )
+        fixture.session.start()
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertFalse(fixture.session.state.value.healthStatusIsStale)
+
+        fixture.api.statusError = CompanionApiException.Network
+        fixture.session.syncNow()
+
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            "Murph couldn't verify your account. Saved status is still shown.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        fixture.api.statusError = null
+        fixture.session.syncNow()
+
+        assertFalse(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(null, fixture.session.state.value.healthMessage)
     }
 
     @Test

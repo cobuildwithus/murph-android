@@ -207,6 +207,9 @@ message.
 - Returning from a consent document or account-control page reloads consent and
   rechecks the Privy member/account boundary before any paused action resumes.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
+- If that status cannot be refreshed, Android labels the cached projection
+  **Last checked online** and never presents its frozen relative time or sync
+  classification as a current result.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online

@@ -67,6 +67,7 @@ private enum class ScreenshotScenario {
     ReconnectRequired,
     Awaiting,
     Synced,
+    SavedStatus,
     Delayed,
     Attention,
     ConsentRequired,
@@ -89,6 +90,12 @@ private enum class ScreenshotScenario {
         )
         Awaiting -> ready(HealthSyncState.AwaitingFirstData)
         Synced -> ready(HealthSyncState.Synced(now))
+        SavedStatus -> ready(HealthSyncState.Synced(now.minus(Duration.ofMinutes(5)))).copy(
+            healthStatusObservedAt = now,
+            healthStatusIsStale = true,
+            authVerifiedOnline = false,
+            healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
+        )
         Delayed -> ready(HealthSyncState.Delayed(now.minus(Duration.ofHours(48))))
         Attention -> ready(
             HealthSyncState.NeedsAttention(now.minus(Duration.ofHours(96))),
@@ -145,6 +152,7 @@ private enum class ScreenshotScenario {
         ReconnectRequired,
         Awaiting,
         Synced,
+        SavedStatus,
         Delayed,
         Attention,
         ConsentRequired,

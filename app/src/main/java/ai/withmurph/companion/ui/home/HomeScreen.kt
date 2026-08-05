@@ -190,7 +190,12 @@ private fun SyncStatusContent(
     val title: String
     val detail: String
 
-    when (sync) {
+    if (state.healthStatusIsStale) {
+        icon = MurphIconKind.Clock
+        tint = MurphColors.SlateMuted
+        title = "Last checked online"
+        detail = "This is saved status from the last successful check, not a live sync result."
+    } else when (sync) {
         HealthSyncState.NotConnected -> return
         HealthSyncState.AwaitingFirstData -> {
             icon = MurphIconKind.Refresh
@@ -254,7 +259,7 @@ private fun SyncStatusContent(
             )
         }
 
-        if (sync is HealthSyncState.NeedsAttention) {
+        if (sync is HealthSyncState.NeedsAttention && !state.healthStatusIsStale) {
             MurphCard {
                 GuidanceRow(
                     number = "1",
@@ -279,7 +284,11 @@ private fun SyncStatusContent(
         }
 
         MurphOutlineButton(
-            text = if (state.isSyncingHealth) "Checking…" else "Check for new data",
+            text = when {
+                state.isSyncingHealth -> "Checking…"
+                state.healthStatusIsStale -> "Check again"
+                else -> "Check for new data"
+            },
             onClick = onSyncNow,
             enabled = !state.isSyncingHealth,
         )
