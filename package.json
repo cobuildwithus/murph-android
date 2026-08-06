@@ -8,6 +8,8 @@
   },
   "scripts": {
     "review:gpt": "cobuild-review-gpt --config scripts/review-gpt.config.sh",
+    "review:pr": "bash scripts/review-pr.sh",
+    "review:validate": "bash scripts/validate-review-gpt-response.sh",
     "review:verify": "bash scripts/verify-review-workflow.sh"
   },
   "devDependencies": {

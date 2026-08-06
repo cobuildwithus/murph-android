@@ -158,3 +158,7 @@ review_gpt_register_dir_preset "android-review" "android-deep-review.md" \
   "Production Android review for reachable bugs, trust-boundary failures, lifecycle errors, and material simplification." \
   "deep-review" \
   "completion"
+
+review_gpt_register_dir_preset "android-pr-review" "android-deep-review.md" \
+  "Exact-pushed-head Android PR review with repository, base/head, body, prompt, and response attestation." \
+  "pr-review"
