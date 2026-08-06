@@ -43,7 +43,7 @@ Requirements:
 - Gradle 8.11.1
 - Android Gradle Plugin 8.10.1 (pinned)
 - Kotlin 2.1.20+
-- Node.js 24.14.1
+- Node.js 24.14.1 for repository verification and review tooling
 
 The standard Gradle wrapper is checked in. Verify the pinned version with:
 
