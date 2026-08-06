@@ -1490,6 +1490,36 @@ class AppSessionTest {
     }
 
     @Test
+    fun terminalConnectTokenFailuresCloseMemberBeforeProviderWork() = runTest {
+        val rejections = listOf(
+            CompanionApiException.Unauthorized,
+            CompanionApiException.NoAccount,
+            CompanionApiException.AccessRequired,
+            CompanionApiException.MemberSuspended,
+            CompanionApiException.AdmissionSupportRequired,
+        )
+
+        rejections.forEach { rejection ->
+            val fixture = fixture()
+            fixture.session.start()
+            fixture.api.signInError = rejection
+
+            assertTrue(fixture.session.prepareHealthConnection())
+            assertFalse(fixture.session.completeHealthPermissionFlow(true))
+
+            val failure = fixture.session.state.value.phase as AppPhase.Failed
+            assertFalse(failure.canRetry)
+            assertEquals("Try a different sign-in", failure.signOutLabel)
+            assertNull(fixture.localState.memberKey)
+            assertFalse(fixture.health.signedIn)
+            assertEquals(1, fixture.health.signOutCalls)
+            assertEquals(0, fixture.health.configureCalls)
+            assertEquals(0, fixture.health.connectCalls)
+            assertEquals(0, fixture.health.syncCalls)
+        }
+    }
+
+    @Test
     fun historyCompletionBeforeForegroundRefreshRunsTheFirstSyncOnce() = runTest {
         val fixture = fixture()
         fixture.session.start()

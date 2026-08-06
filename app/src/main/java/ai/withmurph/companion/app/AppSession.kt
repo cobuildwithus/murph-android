@@ -888,16 +888,35 @@ class AppSession(
                             )
                         }
                         return@withLock false
-                    } catch (_: CompanionApiException.Unauthorized) {
-                        publishAddressBookMessage(
-                            pending.memberKey,
-                            pending.epoch,
-                            "Your session needs a refresh before sharing contacts. Try again.",
-                        )
-                        return@withLock false
                     } catch (_: CompanionApiException.AccountConflict) {
                         if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
                             publishAccountConflictFailure()
+                        }
+                        return@withLock false
+                    } catch (error: CompanionApiException) {
+                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
+                            when (error) {
+                                CompanionApiException.Unauthorized ->
+                                    publishTerminalMemberBoundaryFailure(
+                                        message = "Your session needs a refresh. Sign in again.",
+                                        signOutLabel = "Sign in again",
+                                    )
+                                CompanionApiException.NoAccount ->
+                                    publishTerminalMemberBoundaryFailure(
+                                        "This sign-in isn't linked to an active Murph account.",
+                                    )
+                                CompanionApiException.AccessRequired ->
+                                    publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+                                CompanionApiException.MemberSuspended ->
+                                    publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+                                CompanionApiException.AdmissionSupportRequired ->
+                                    publishTerminalMemberBoundaryFailure(admissionSupportMessage())
+                                else -> publishAddressBookMessage(
+                                    pending.memberKey,
+                                    pending.epoch,
+                                    "Murph couldn't finish the address-book update. Tap Retry to use the saved mutation safely.",
+                                )
+                            }
                         }
                         return@withLock false
                     } catch (_: Exception) {
@@ -1579,6 +1598,40 @@ class AppSession(
                 pendingHealthConnection = null
                 if (epoch == sessionEpoch) {
                     publishAccountConflictFailureWhileHealthLocked()
+                }
+                false
+            } catch (error: CompanionApiException) {
+                pendingHealthConnection = null
+                if (epoch == sessionEpoch) {
+                    when (error) {
+                        CompanionApiException.Unauthorized ->
+                            failTerminalMemberBoundaryWhileHealthLocked(
+                                "Your session needs a refresh. Sign in again.",
+                            )
+                        CompanionApiException.NoAccount ->
+                            failTerminalMemberBoundaryWhileHealthLocked(
+                                "This sign-in isn't linked to an active Murph account.",
+                            )
+                        CompanionApiException.AccessRequired ->
+                            failTerminalMemberBoundaryWhileHealthLocked(accessRequiredMessage())
+                        CompanionApiException.MemberSuspended ->
+                            failTerminalMemberBoundaryWhileHealthLocked(memberSuspendedMessage())
+                        CompanionApiException.AdmissionSupportRequired ->
+                            failTerminalMemberBoundaryWhileHealthLocked(admissionSupportMessage())
+                        else -> {
+                            val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
+                            _state.update { current ->
+                                current.copy(
+                                    isConnectingHealth = false,
+                                    healthMessage = if (rollbackSucceeded) {
+                                        connectionErrorMessage(error)
+                                    } else {
+                                        "Murph couldn't safely reset health sync. Keep the app open and sign out."
+                                    },
+                                )
+                            }
+                        }
+                    }
                 }
                 false
             } catch (error: Exception) {

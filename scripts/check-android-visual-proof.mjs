@@ -16,10 +16,29 @@ const SHIPPED_SOURCE_PATH = /^app\/src\/(?:main|release)\//u;
 const VISIBLE_RESOURCE_PATH =
   /^app\/src\/(?:main|release)\/res\/(?:anim|animator|color|drawable|font|interpolator|layout|menu|mipmap|navigation|transition|values)(?:-[^/]+)?\//u;
 const EXPLICIT_VISIBLE_OWNER_PATH =
-  /^app\/src\/(?:main|release)\/java\/ai\/withmurph\/companion\/(?:MainActivity\.kt|app\/(?:AppSession|AppUiState)\.kt|ui\/.*\.kt)$/u;
+  /^app\/src\/(?:main|release)\/java\/ai\/withmurph\/companion\/(?:MainActivity\.kt|(?:app|auth|ui)\/.*\.kt)$/u;
 const VISIBLE_MANIFEST_PATH =
   /^app\/src\/(?:main|release)\/AndroidManifest\.xml$/u;
 const SAFE_ANCILLARY_CHUNKS = new Set(["sBIT", "sRGB"]);
+const PROTECTED_GATE_PATHS = new Set([
+  ".github/workflows/android-ci.yml",
+  ".github/workflows/android-visual-proof.yml",
+  ".github/workflows/review-tooling.yml",
+  "AGENTS.md",
+  "docs/review-workflow.md",
+  "package.json",
+  "pnpm-lock.yaml",
+  "scripts/chatgpt-review-presets/android-deep-review.md",
+  "scripts/package-review-context.sh",
+  "scripts/repo-tools.config.sh",
+  "scripts/review-gpt-contract.mjs",
+  "scripts/review-gpt-contract.test.mjs",
+  "scripts/review-gpt.config.sh",
+  "scripts/review-pr.sh",
+  "scripts/validate-review-gpt-response.sh",
+  "scripts/verify-review-workflow.sh",
+  "scripts/verify.sh",
+]);
 
 export function parseNameStatus(raw) {
   const fields = raw.split("\0");
@@ -65,14 +84,8 @@ function isUserVisiblePath(path, contents) {
 }
 
 function isProtectedGatePath(path) {
-  return path === ".github/workflows/android-visual-proof.yml"
-    || path === ".github/workflows/android-ci.yml"
-    || path === ".github/workflows/review-tooling.yml"
-    || path === "scripts/verify.sh"
-    || path === "scripts/verify-review-workflow.sh"
-    || path === "scripts/package-audit-context.sh"
-    || path.startsWith("scripts/check-android-visual-proof")
-    || path.startsWith("scripts/review-gpt");
+  return PROTECTED_GATE_PATHS.has(path)
+    || path.startsWith("scripts/check-android-visual-proof");
 }
 
 export function changedProtectedPaths(records) {
@@ -150,6 +163,8 @@ export function readPngDimensions(path, bytes) {
   let sawIdat = false;
   let sawIend = false;
   let idatEnded = false;
+  let sawSbit = false;
+  let sawSrgb = false;
   let width = 0;
 
   while (offset < bytes.length) {
@@ -201,6 +216,30 @@ export function readPngDimensions(path, bytes) {
     ) {
       throw new Error(`${path} contains an unknown critical PNG chunk.`);
     }
+    if (type === "sRGB") {
+      if (
+        sawSrgb
+        || sawPlte
+        || sawIdat
+        || length !== 1
+        || bytes[dataStart] > 3
+      ) {
+        throw new Error(`${path} has an invalid PNG sRGB chunk.`);
+      }
+      sawSrgb = true;
+    }
+    if (type === "sBIT") {
+      const significantBits = bytes.subarray(dataStart, crcOffset);
+      if (
+        sawSbit
+        || sawPlte
+        || sawIdat
+        || !validSignificantBits(significantBits, colorType, bitDepth)
+      ) {
+        throw new Error(`${path} has an invalid PNG sBIT chunk.`);
+      }
+      sawSbit = true;
+    }
     if (type === "PLTE") {
       if (sawPlte || sawIdat || length === 0 || length % 3 !== 0) {
         throw new Error(`${path} has an invalid PNG palette.`);
@@ -246,6 +285,20 @@ export function readPngDimensions(path, bytes) {
     width,
   });
   return { height, pixelDigest, width };
+}
+
+function validSignificantBits(values, colorType, bitDepth) {
+  const requirements = new Map([
+    [0, { length: 1, maximum: bitDepth }],
+    [2, { length: 3, maximum: bitDepth }],
+    [3, { length: 3, maximum: 8 }],
+    [4, { length: 2, maximum: bitDepth }],
+    [6, { length: 4, maximum: bitDepth }],
+  ]);
+  const requirement = requirements.get(colorType);
+  return requirement !== undefined
+    && values.length === requirement.length
+    && [...values].every((value) => value >= 1 && value <= requirement.maximum);
 }
 
 function validateDecodedPixels({
@@ -345,12 +398,111 @@ function validateDecodedPixels({
       pixels[pixelOffset + column] = (filtered + predictor) & 0xFF;
     }
   }
+  const renderedPixels = canonicalRgbaPixels({
+    bitDepth,
+    colorType,
+    height,
+    paletteBytes,
+    paletteEntries,
+    path,
+    pixels,
+    rowBytes: Number(rowBytes),
+    width,
+  });
   return createHash("sha256")
-    .update(Buffer.from([bitDepth, colorType]))
     .update(pngDimensionBytes(width, height))
-    .update(paletteBytes)
-    .update(pixels)
+    .update(renderedPixels)
     .digest("hex");
+}
+
+function canonicalRgbaPixels({
+  bitDepth,
+  colorType,
+  height,
+  paletteBytes,
+  paletteEntries,
+  path,
+  pixels,
+  rowBytes,
+  width,
+}) {
+  const renderedByteCount = BigInt(width) * BigInt(height) * 4n;
+  if (renderedByteCount > BigInt(MAX_DECODED_BYTES)) {
+    throw new Error(`${path} expands beyond the PNG evidence limit.`);
+  }
+  if (colorType === 6 && bitDepth === 8) {
+    return pixels;
+  }
+  const rendered = Buffer.alloc(Number(renderedByteCount));
+  const channelCount = pngChannelCount(colorType);
+  for (let row = 0; row < height; row += 1) {
+    const encodedRow = pixels.subarray(row * rowBytes, (row + 1) * rowBytes);
+    for (let column = 0; column < width; column += 1) {
+      const target = (row * width + column) * 4;
+      const sample = (channel) => readPngSample(
+        encodedRow,
+        column * channelCount + channel,
+        bitDepth,
+      );
+      const scaled = (channel) => scalePngSample(sample(channel), bitDepth);
+      switch (colorType) {
+        case 0: {
+          const gray = scaled(0);
+          rendered.set([gray, gray, gray, 255], target);
+          break;
+        }
+        case 2:
+          rendered.set([scaled(0), scaled(1), scaled(2), 255], target);
+          break;
+        case 3: {
+          const paletteIndex = sample(0);
+          if (paletteIndex >= paletteEntries) {
+            throw new Error(`${path} contains a PNG palette index out of range.`);
+          }
+          const paletteOffset = paletteIndex * 3;
+          rendered.set([
+            paletteBytes[paletteOffset],
+            paletteBytes[paletteOffset + 1],
+            paletteBytes[paletteOffset + 2],
+            255,
+          ], target);
+          break;
+        }
+        case 4: {
+          const gray = scaled(0);
+          rendered.set([gray, gray, gray, scaled(1)], target);
+          break;
+        }
+        case 6:
+          rendered.set([scaled(0), scaled(1), scaled(2), scaled(3)], target);
+          break;
+        default:
+          throw new Error(`${path} uses an unsupported PNG pixel format.`);
+      }
+    }
+  }
+  return rendered;
+}
+
+function pngChannelCount(colorType) {
+  return new Map([[0, 1], [2, 3], [3, 1], [4, 2], [6, 4]]).get(colorType);
+}
+
+function readPngSample(row, sampleIndex, bitDepth) {
+  const bitOffset = sampleIndex * bitDepth;
+  const byteOffset = Math.floor(bitOffset / 8);
+  if (bitDepth === 16) {
+    return row.readUInt16BE(byteOffset);
+  }
+  if (bitDepth === 8) {
+    return row[byteOffset];
+  }
+  const shift = 8 - bitDepth - (bitOffset % 8);
+  return (row[byteOffset] >>> shift) & (2 ** bitDepth - 1);
+}
+
+function scalePngSample(value, bitDepth) {
+  return Math.round((value * 255) / (2 ** bitDepth - 1));
 }
 
 function pngDimensionBytes(width, height) {
@@ -412,7 +564,7 @@ export function validateScreenshotBlobs(entries) {
   return errors;
 }
 
-export function validateScreenshotFreshness({
+export function validateScreenshotReuse({
   basePixelDigests,
   headPixelDigests,
   records,
@@ -570,22 +722,29 @@ export async function renderMarkdown({ body, repository, token }) {
 export function validateLivePullRequest({
   archivedEvent,
   base,
+  baseRepository,
   head,
+  headRepository,
   livePullRequest,
-  repository,
 }) {
   const errors = [];
   const archived = archivedEvent.pull_request;
   if (!archived || archived.base?.sha !== base || archived.head?.sha !== head) {
     errors.push("The archived workflow event does not match the candidate base and head.");
   }
-  if (archived?.head?.repo?.full_name !== repository) {
-    errors.push("The archived workflow event does not match the candidate repository.");
+  if (archived?.base?.repo?.full_name !== baseRepository) {
+    errors.push("The archived workflow event does not match the base repository.");
+  }
+  if (archived?.head?.repo?.full_name !== headRepository) {
+    errors.push("The archived workflow event does not match the head repository.");
   }
   if (livePullRequest.base?.sha !== base || livePullRequest.head?.sha !== head) {
     errors.push("The live pull request no longer matches the candidate base and head.");
   }
-  if (livePullRequest.head?.repo?.full_name !== repository) {
+  if (livePullRequest.base?.repo?.full_name !== baseRepository) {
+    errors.push("The live pull request base repository no longer matches the candidate.");
+  }
+  if (livePullRequest.head?.repo?.full_name !== headRepository) {
     errors.push("The live pull request head repository no longer matches the candidate.");
   }
   if ((archived?.body ?? "") !== (livePullRequest.body ?? "")) {
@@ -715,14 +874,15 @@ function screenshotPixelDigests(revision) {
 
 export async function main(environment = process.env) {
   const base = environment.GITHUB_BASE_SHA;
+  const baseRepository = environment.GITHUB_REPOSITORY;
   const eventPath = environment.GITHUB_EVENT_PATH;
   const head = environment.GITHUB_HEAD_SHA;
-  const repository = environment.GITHUB_REPOSITORY;
+  const headRepository = environment.GITHUB_HEAD_REPOSITORY;
   const token = environment.GITHUB_TOKEN;
-  if (!base || !eventPath || !head || !repository || !token) {
+  if (!base || !baseRepository || !eventPath || !head || !headRepository || !token) {
     throw new Error(
       "GITHUB_BASE_SHA, GITHUB_EVENT_PATH, GITHUB_HEAD_SHA, "
-      + "GITHUB_REPOSITORY, and GITHUB_TOKEN are required.",
+      + "GITHUB_HEAD_REPOSITORY, GITHUB_REPOSITORY, and GITHUB_TOKEN are required.",
     );
   }
 
@@ -757,7 +917,7 @@ export async function main(environment = process.env) {
       entry.path,
       readPngDimensions(entry.path, entry.bytes).pixelDigest,
     ]));
-    errors.push(...validateScreenshotFreshness({
+    errors.push(...validateScreenshotReuse({
       basePixelDigests: screenshotPixelDigests(comparisonBase),
       headPixelDigests,
       records,
@@ -765,23 +925,28 @@ export async function main(environment = process.env) {
   }
 
   const event = JSON.parse(readFileSync(eventPath, "utf8"));
-  const livePullRequest = await fetchLivePullRequest({ event, repository, token });
+  const livePullRequest = await fetchLivePullRequest({
+    event,
+    repository: baseRepository,
+    token,
+  });
   errors.push(...validateLivePullRequest({
     archivedEvent: event,
     base,
+    baseRepository,
     head,
+    headRepository,
     livePullRequest,
-    repository,
   }));
   const renderedHtml = await renderMarkdown({
     body: livePullRequest.body ?? "",
-    repository,
+    repository: baseRepository,
     token,
   });
   errors.push(...validateRenderedProof({
     head,
     renderedHtml,
-    repository,
+    repository: headRepository,
     screenshotPaths,
   }));
 
@@ -789,8 +954,9 @@ export async function main(environment = process.env) {
     throw new Error(errors.map((error) => `- ${error}`).join("\n"));
   }
   console.log(
-    `Verified ${screenshotPaths.length} exact-head screenshot(s) `
-    + `for ${uiPaths.length} changed UI path(s).`,
+    `Validated ${screenshotPaths.length} exact-head screenshot file(s) `
+    + `for ${uiPaths.length} evidence-relevant path(s). `
+    + "Capture provenance remains manual review evidence.",
   );
 }
 

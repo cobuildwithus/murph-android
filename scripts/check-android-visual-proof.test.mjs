@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { deflateSync } from "node:zlib";
 
 import {
   changedUiPathsAtRevisions,
@@ -12,10 +13,11 @@ import {
   isVisibleResourcePath,
   parseNameStatus,
   readGitBlobEntry,
+  readPngDimensions,
   validateRenderedProof,
   validateLivePullRequest,
   validateScreenshotBlobs,
-  validateScreenshotFreshness,
+  validateScreenshotReuse,
 } from "./check-android-visual-proof.mjs";
 
 function validatePng(path, bytes, mode = "100644") {
@@ -43,6 +45,21 @@ function pngChunk(type, data) {
   return chunk;
 }
 
+function makePng({ ancillaryChunks = [], colorType, pixelBytes }) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = colorType;
+  return Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", header),
+    ...ancillaryChunks,
+    pngChunk("IDAT", deflateSync(Buffer.concat([Buffer.from([0]), pixelBytes]))),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 test("detects changed Compose sources and visible Android resources", () => {
   const records = parseNameStatus(
     "M\0app/src/main/java/example/Root.kt\0"
@@ -54,6 +71,8 @@ test("detects changed Compose sources and visible Android resources", () => {
     + "A\0app/src/release/res/values/strings.xml\0"
     + "M\0app/src/main/java/ai/withmurph/companion/app/AppSession.kt\0"
     + "M\0app/src/main/java/ai/withmurph/companion/app/AppUiState.kt\0"
+    + "M\0app/src/main/java/ai/withmurph/companion/auth/LoginCoordinator.kt\0"
+    + "M\0app/src/main/java/ai/withmurph/companion/auth/CountryDialCode.kt\0"
     + "M\0app/src/main/AndroidManifest.xml\0"
     + "M\0app/build.gradle.kts\0"
     + "M\0app/src/main/res/xml/data_extraction_rules.xml\0",
@@ -75,6 +94,8 @@ test("detects changed Compose sources and visible Android resources", () => {
     "app/src/main/AndroidManifest.xml",
     "app/src/main/java/ai/withmurph/companion/app/AppSession.kt",
     "app/src/main/java/ai/withmurph/companion/app/AppUiState.kt",
+    "app/src/main/java/ai/withmurph/companion/auth/CountryDialCode.kt",
+    "app/src/main/java/ai/withmurph/companion/auth/LoginCoordinator.kt",
     "app/src/main/java/example/Removed.kt",
     "app/src/main/java/example/Root.kt",
     "app/src/main/res/drawable-night/logo.xml",
@@ -93,6 +114,18 @@ test("recognizes non-Compose owners of shipped Android copy and presentation", (
   assert.equal(
     isExplicitVisibleOwnerPath(
       "app/src/release/java/ai/withmurph/companion/ui/ReleaseScreen.kt",
+    ),
+    true,
+  );
+  assert.equal(
+    isExplicitVisibleOwnerPath(
+      "app/src/main/java/ai/withmurph/companion/auth/LoginCoordinator.kt",
+    ),
+    true,
+  );
+  assert.equal(
+    isExplicitVisibleOwnerPath(
+      "app/src/main/java/ai/withmurph/companion/auth/CountryDialCode.kt",
     ),
     true,
   );
@@ -166,6 +199,19 @@ test("identifies visual-proof control-plane changes", () => {
   const records = parseNameStatus(
     "M\0.github/workflows/android-visual-proof.yml\0"
     + "M\0.github/workflows/android-ci.yml\0"
+    + "M\0AGENTS.md\0"
+    + "M\0docs/review-workflow.md\0"
+    + "M\0package.json\0"
+    + "M\0pnpm-lock.yaml\0"
+    + "M\0scripts/chatgpt-review-presets/android-deep-review.md\0"
+    + "M\0scripts/package-review-context.sh\0"
+    + "M\0scripts/repo-tools.config.sh\0"
+    + "M\0scripts/review-gpt-contract.mjs\0"
+    + "M\0scripts/review-gpt-contract.test.mjs\0"
+    + "M\0scripts/review-gpt.config.sh\0"
+    + "M\0scripts/review-pr.sh\0"
+    + "M\0scripts/validate-review-gpt-response.sh\0"
+    + "M\0scripts/verify-review-workflow.sh\0"
     + "M\0scripts/verify.sh\0"
     + "R100\0scripts/check-android-visual-proof.mjs\0scripts/retired.mjs\0"
     + "M\0README.md\0",
@@ -173,7 +219,20 @@ test("identifies visual-proof control-plane changes", () => {
   assert.deepEqual(changedProtectedPaths(records), [
     ".github/workflows/android-ci.yml",
     ".github/workflows/android-visual-proof.yml",
+    "AGENTS.md",
+    "docs/review-workflow.md",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/chatgpt-review-presets/android-deep-review.md",
     "scripts/check-android-visual-proof.mjs",
+    "scripts/package-review-context.sh",
+    "scripts/repo-tools.config.sh",
+    "scripts/review-gpt-contract.mjs",
+    "scripts/review-gpt-contract.test.mjs",
+    "scripts/review-gpt.config.sh",
+    "scripts/review-pr.sh",
+    "scripts/validate-review-gpt-response.sh",
+    "scripts/verify-review-workflow.sh",
     "scripts/verify.sh",
   ]);
 });
@@ -184,7 +243,7 @@ test("rejects a rerun whose live pull request changed after the archived event",
   const repository = "example/murph-android";
   const archivedEvent = {
     pull_request: {
-      base: { sha: base },
+      base: { repo: { full_name: repository }, sha: base },
       body: "current proof",
       head: { repo: { full_name: repository }, sha: head },
       number: 7,
@@ -194,13 +253,14 @@ test("rejects a rerun whose live pull request changed after the archived event",
   assert.deepEqual(validateLivePullRequest({
     archivedEvent,
     base,
+    baseRepository: repository,
     head,
+    headRepository: repository,
     livePullRequest: {
-      base: { sha: base },
+      base: { repo: { full_name: repository }, sha: base },
       body: "proof removed after the run",
       head: { repo: { full_name: repository }, sha: head },
     },
-    repository,
   }), ["The live pull request body changed after this workflow event was created."]);
 });
 
@@ -209,7 +269,7 @@ test("accepts a live pull request bound to the archived candidate", () => {
   const head = "d".repeat(40);
   const repository = "example/murph-android";
   const pullRequest = {
-    base: { sha: base },
+    base: { repo: { full_name: repository }, sha: base },
     body: "exact proof",
     head: { repo: { full_name: repository }, sha: head },
     number: 8,
@@ -217,9 +277,47 @@ test("accepts a live pull request bound to the archived candidate", () => {
   assert.deepEqual(validateLivePullRequest({
     archivedEvent: { pull_request: pullRequest },
     base,
+    baseRepository: repository,
     head,
+    headRepository: repository,
     livePullRequest: pullRequest,
-    repository,
+  }), []);
+});
+
+test("accepts a fork head while binding the canonical base repository", () => {
+  const base = "e".repeat(40);
+  const head = "f".repeat(40);
+  const baseRepository = "example/murph-android";
+  const headRepository = "contributor/murph-android";
+  const pullRequest = {
+    base: { repo: { full_name: baseRepository }, sha: base },
+    body: "fork proof",
+    head: { repo: { full_name: headRepository }, sha: head },
+    number: 9,
+  };
+
+  assert.deepEqual(validateLivePullRequest({
+    archivedEvent: { pull_request: pullRequest },
+    base,
+    baseRepository,
+    head,
+    headRepository,
+    livePullRequest: pullRequest,
+  }), []);
+  const path = "app-store-assets/review-evidence/fork/ready.png";
+  assert.deepEqual(validateRenderedProof({
+    head,
+    renderedHtml: [
+      "<h2>Android visual proof</h2>",
+      "<ul>",
+      `<li>Evidence head: <code>${head}</code></li>`,
+      "<li>States covered: fork state</li>",
+      `<li>Screenshots:<img src=\"https://raw.githubusercontent.com/${headRepository}/${head}/${path}\"></li>`,
+      "<li>Physical-device gaps: None</li>",
+      "</ul>",
+    ].join(""),
+    repository: headRepository,
+    screenshotPaths: [path],
   }), []);
 });
 
@@ -234,7 +332,7 @@ test("requires changed screenshots under the durable evidence directory", () => 
   ]);
 });
 
-test("rejects copied, renamed, and metadata-only screenshot evidence", () => {
+test("rejects Git copies, renames, and unchanged rendered pixels", () => {
   const original = "app-store-assets/review-evidence/old/ready.png";
   const added = "app-store-assets/review-evidence/new/copied.png";
   const modified = "app-store-assets/review-evidence/new/modified.png";
@@ -242,7 +340,7 @@ test("rejects copied, renamed, and metadata-only screenshot evidence", () => {
   const records = parseNameStatus(
     `A\0${added}\0M\0${modified}\0R100\0${original}\0${renamed}\0`,
   );
-  assert.deepEqual(validateScreenshotFreshness({
+  assert.deepEqual(validateScreenshotReuse({
     basePixelDigests: new Map([
       [original, "same-pixels"],
       [modified, "metadata-only"],
@@ -260,9 +358,9 @@ test("rejects copied, renamed, and metadata-only screenshot evidence", () => {
   ]);
 });
 
-test("accepts newly captured screenshot pixels", () => {
+test("accepts a candidate raster distinct from comparison-base evidence", () => {
   const path = "app-store-assets/review-evidence/new/ready.png";
-  assert.deepEqual(validateScreenshotFreshness({
+  assert.deepEqual(validateScreenshotReuse({
     basePixelDigests: new Map([["old.png", "old-pixels"]]),
     headPixelDigests: new Map([[path, "new-pixels"]]),
     records: parseNameStatus(`A\0${path}\0`),
@@ -400,6 +498,56 @@ test("rejects textual and device metadata in screenshot PNGs", () => {
   assert.deepEqual(validatePng(path, bytes), [
     `${path} contains unsupported PNG metadata (tEXt).`,
   ]);
+});
+
+test("validates safe ancillary chunks by payload, multiplicity, and order", () => {
+  const path = "safe-ancillary.png";
+  const hiddenPayload = makePng({
+    ancillaryChunks: [pngChunk("sRGB", Buffer.alloc(128, 7))],
+    colorType: 6,
+    pixelBytes: Buffer.from([10, 20, 30, 255]),
+  });
+  assert.deepEqual(validatePng(path, hiddenPayload), [
+    `${path} has an invalid PNG sRGB chunk.`,
+  ]);
+
+  const duplicate = makePng({
+    ancillaryChunks: [
+      pngChunk("sBIT", Buffer.from([8, 8, 8, 8])),
+      pngChunk("sBIT", Buffer.from([8, 8, 8, 8])),
+    ],
+    colorType: 6,
+    pixelBytes: Buffer.from([10, 20, 30, 255]),
+  });
+  assert.deepEqual(validatePng(path, duplicate), [
+    `${path} has an invalid PNG sBIT chunk.`,
+  ]);
+
+  const canonical = makePng({
+    ancillaryChunks: [
+      pngChunk("sRGB", Buffer.from([0])),
+      pngChunk("sBIT", Buffer.from([8, 8, 8, 8])),
+    ],
+    colorType: 6,
+    pixelBytes: Buffer.from([10, 20, 30, 255]),
+  });
+  assert.equal(readPngDimensions(path, canonical).width, 1);
+});
+
+test("hashes equivalent RGB and opaque RGBA rasters identically", () => {
+  const rgb = makePng({
+    colorType: 2,
+    pixelBytes: Buffer.from([12, 34, 56]),
+  });
+  const rgba = makePng({
+    colorType: 6,
+    pixelBytes: Buffer.from([12, 34, 56, 255]),
+  });
+
+  assert.equal(
+    readPngDimensions("rgb.png", rgb).pixelDigest,
+    readPngDimensions("rgba.png", rgba).pixelDigest,
+  );
 });
 
 test("rejects non-ASCII PNG chunk bytes", () => {

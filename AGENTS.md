@@ -8,7 +8,8 @@
 - Do not add Room, Hilt, Retrofit, analytics, or a cross-platform framework without a current requirement that the existing boundaries cannot satisfy.
 - Keep all requested Junction resources centralized in `JunctionHealthSyncService` and all corresponding permissions visible in `AndroidManifest.xml`.
 - Treat sign-out and member switching as trust boundaries; local Junction teardown must happen first.
-- Every PR that changes shipped Compose UI or visible Android resources must
+- Every PR that changes shipped UI/state/copy owners (`MainActivity`, `app/`,
+  `auth/`, or `ui/`) or visible Android resources must
   include current emulator screenshots
   of each materially changed state in the PR body. Capture them from the exact
   pushed head, keep durable copies under
@@ -16,7 +17,9 @@
   head. If a state cannot be rendered in the Android Emulator, name the
   physical-device gap instead of substituting a mockup. The
   `Android Visual Proof / verify` check validates the exact-head evidence
-  contract for changed Compose surfaces and visible app assets.
+  linkage, PNG privacy/structure, and comparison-base reuse constraints. It
+  does not generate captures or prove scenario provenance; the independent
+  reviewer must confirm that the manually captured state matches the change.
 - Capture durable evidence from debug-only synthetic fixtures, inspect every
   image before commit, and never use a real account, health value, contact, or
   other private member state.
