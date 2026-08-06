@@ -179,9 +179,11 @@ internal enum class ScreenshotScenario {
         )
         Failure -> AppUiState(
             phase = AppPhase.Failed(
-                message = "Murph couldn't finish signing in. Check your connection and try again.",
-                canRetry = true,
+                message =
+                    "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support.",
+                canRetry = false,
                 canSignOut = true,
+                signOutLabel = "Try a different sign-in",
             ),
         )
     }

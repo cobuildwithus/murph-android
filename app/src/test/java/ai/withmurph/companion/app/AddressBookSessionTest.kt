@@ -1381,6 +1381,8 @@ class AddressBookSessionTest {
             disabledStatus(request.mutation.baseRevision + 1).also { statuses[memberKey] = it }
         }
 
+        override suspend fun admitCompanion(memberKey: String, timeZone: String) = Unit
+
         override suspend fun createJunctionSignInToken(
             request: SignInTokenRequest,
         ): SignInTokenResponse = SignInTokenResponse("token", "sandbox")

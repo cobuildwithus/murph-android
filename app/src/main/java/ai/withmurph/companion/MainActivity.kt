@@ -95,20 +95,17 @@ class MainActivity : ComponentActivity() {
                     ?: return@LaunchedEffect
                 lifecycle.withResumed {
                     if (graph.session.consumeHealthHistoryPermissionLaunchRequest(requestId)) {
-                        val historyPermissions = graph.health.supportedHistoryPermissions()
-                        if (historyPermissions.isEmpty()) {
-                            graph.applicationScope.launch {
-                                graph.session.completeHealthHistoryPermissionFlow()
-                            }
-                        } else {
-                            try {
-                                historyPermissionLauncher.launch(historyPermissions)
-                            } catch (_: Exception) {
+                        launchHealthHistoryPermissionsOrComplete(
+                            supportedPermissions = graph.health::supportedHistoryPermissions,
+                            launchPermissions = { permissions ->
+                                historyPermissionLauncher.launch(permissions)
+                            },
+                            complete = {
                                 graph.applicationScope.launch {
                                     graph.session.completeHealthHistoryPermissionFlow()
                                 }
-                            }
-                        }
+                            },
+                        )
                     }
                 }
             }
@@ -367,4 +364,23 @@ class MainActivity : ComponentActivity() {
         return action == "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" ||
             action == "android.intent.action.VIEW_PERMISSION_USAGE"
     }
+}
+
+internal fun launchHealthHistoryPermissionsOrComplete(
+    supportedPermissions: () -> Set<String>,
+    launchPermissions: (Set<String>) -> Unit,
+    complete: () -> Unit,
+) {
+    val needsCompletion = try {
+        val permissions = supportedPermissions()
+        if (permissions.isEmpty()) {
+            true
+        } else {
+            launchPermissions(permissions)
+            false
+        }
+    } catch (_: Exception) {
+        true
+    }
+    if (needsCompletion) complete()
 }

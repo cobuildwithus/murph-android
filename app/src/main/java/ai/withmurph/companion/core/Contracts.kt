@@ -1,6 +1,7 @@
 package ai.withmurph.companion.core
 
 import android.content.Intent
+import kotlinx.coroutines.CancellationException
 
 interface AuthProvider {
     suspend fun currentState(): AuthSessionState
@@ -9,30 +10,48 @@ interface AuthProvider {
     suspend fun identityToken(): String
 
     suspend fun identityTokenForMember(memberKey: String): String {
-        val before = currentState()
+        val before = observedStateForTokenCapture()
         if (
             before !is AuthSessionState.SignedIn ||
             !before.verifiedOnline ||
             before.memberKey != memberKey
         ) {
-            throw IllegalStateException("Privy member changed before token capture")
+            throw CompanionApiException.LocalAuthUnavailable(before)
         }
-        val token = identityToken()
-        val after = currentState()
+        val token = try {
+            identityToken()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            throw CompanionApiException.LocalAuthUnavailable(
+                observedStateForTokenCapture(),
+            )
+        }
+        val after = observedStateForTokenCapture()
         if (
             after !is AuthSessionState.SignedIn ||
             !after.verifiedOnline ||
             after.memberKey != memberKey
         ) {
-            throw IllegalStateException("Privy member changed during token capture")
+            throw CompanionApiException.LocalAuthUnavailable(after)
         }
         return token
+    }
+
+    private suspend fun observedStateForTokenCapture(): AuthSessionState = try {
+        currentState()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        AuthSessionState.TemporarilyUnavailable
     }
 
     suspend fun signOut()
 }
 
 interface CompanionApi {
+    suspend fun admitCompanion(memberKey: String, timeZone: String)
+
     suspend fun createJunctionSignInToken(request: SignInTokenRequest): SignInTokenResponse
     suspend fun createJunctionSignInToken(
         memberKey: String,

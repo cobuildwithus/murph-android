@@ -4,6 +4,7 @@ import ai.withmurph.companion.core.AddressBookDeletionRequest
 import ai.withmurph.companion.core.AddressBookReplacementRequest
 import ai.withmurph.companion.core.AddressBookServerStatus
 import ai.withmurph.companion.core.AddressBookWriteCapability
+import ai.withmurph.companion.core.AuthSessionState
 import ai.withmurph.companion.core.CompanionApi
 import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
@@ -49,6 +50,19 @@ class HttpCompanionApi(
     private val baseUri = URI(baseUrl.trimEnd('/')).also { uri ->
         require(uri.scheme == "https") { "Murph backend URL must use HTTPS" }
         require(uri.host != null) { "Murph backend URL must have a host" }
+    }
+
+    override suspend fun admitCompanion(memberKey: String, timeZone: String) {
+        val response = requestJson(
+            method = "POST",
+            path = COMPANION_ADMISSION_PATH,
+            body = JSONObject(mapOf("timeZone" to timeZone)),
+            authenticate = { identityTokenForMember(memberKey) },
+        )
+        CompanionAdmissionApiContract.validateResponse(
+            keys = response.keys().asSequence().toSet(),
+            ok = response.opt("ok"),
+        )
     }
 
     override suspend fun createJunctionSignInToken(
@@ -243,8 +257,12 @@ class HttpCompanionApi(
             authenticate()
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            throw error
         } catch (_: Exception) {
-            throw CompanionApiException.Unauthorized
+            throw CompanionApiException.LocalAuthUnavailable(
+                observedState = AuthSessionState.TemporarilyUnavailable,
+            )
         }
 
         val connection = (baseUri.resolve(path).toURL().openConnection() as HttpURLConnection).apply {
@@ -303,12 +321,21 @@ class HttpCompanionApi(
     }
 
     private companion object {
+        const val COMPANION_ADMISSION_PATH = "/api/device-sync/companion/admission"
         const val ADDRESS_BOOK_PATH = "/api/device-sync/companion/address-book"
         const val INITIAL_ONBOARDING_PATH = "/api/device-sync/companion/initial-onboarding"
         const val INITIAL_ONBOARDING_CONTACT_CARD_PATH =
             "/api/device-sync/companion/initial-onboarding/contact-card"
         const val LAUNCH_CONSENT_PATH = "/api/device-sync/companion/legal-consent"
         const val MAX_RESPONSE_CHARS = 128 * 1024
+    }
+}
+
+internal object CompanionAdmissionApiContract {
+    fun validateResponse(keys: Set<String>, ok: Any?) {
+        if (keys != setOf("ok") || ok != true) {
+            throw CompanionApiException.InvalidResponse
+        }
     }
 }
 
@@ -1005,6 +1032,8 @@ internal fun mapCompanionApiErrorCode(
     401 -> CompanionApiException.Unauthorized
     403 -> when (errorCode) {
         "HOSTED_CONSENT_REQUIRED" -> CompanionApiException.ConsentRequired
+        "HOSTED_ACCESS_REQUIRED" -> CompanionApiException.AccessRequired
+        "HOSTED_MEMBER_SUSPENDED" -> CompanionApiException.MemberSuspended
         "HOSTED_MEMBER_NOT_FOUND" -> CompanionApiException.NoAccount
         else -> CompanionApiException.Server(status)
     }
@@ -1016,7 +1045,14 @@ internal fun mapCompanionApiErrorCode(
             CompanionApiException.ReconnectRequired
         errorCode == STALE_CONSENT_DOCUMENT_CODE ->
             CompanionApiException.StaleConsentDocuments
+        errorCode == "COMPANION_ADMISSION_SUPPORT_REQUIRED" ->
+            CompanionApiException.AdmissionSupportRequired
         else -> CompanionApiException.Server(status)
+    }
+    503 -> if (errorCode == "COMPANION_ADMISSION_RETRYABLE") {
+        CompanionApiException.AdmissionRetryable
+    } else {
+        CompanionApiException.Server(status)
     }
     else -> CompanionApiException.Server(status)
 }

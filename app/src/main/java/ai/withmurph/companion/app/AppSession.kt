@@ -97,7 +97,12 @@ class AppSession(
 
     suspend fun refreshAddressBookSharing() {
         if (hasActiveLaunchConsentRecovery()) return
-        reconcileAddressBookForeground(showBusy = true)
+        var authoritativeLocalAuth: AuthSessionState? = null
+        reconcileAddressBookForeground(
+            showBusy = true,
+            onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+        )
+        authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
     }
 
     fun showLaunchConsentRecovery() {
@@ -124,14 +129,22 @@ class AppSession(
     suspend fun retryLaunchConsentRecovery() {
         val pending = pendingLaunchConsentRecovery ?: return
         if (!revalidateLaunchConsentMember(pending)) return
+        var authoritativeLocalAuth: AuthSessionState? = null
         val continuation = launchConsentMutex.withLock {
             if (!ownsLaunchConsentRecovery(pending)) return@withLock null
             if (pending.accepted) {
                 beginAcceptedConsentContinuation(pending)
             } else {
-                loadLaunchConsentStatus(pending, healthLockHeld = false)
+                loadLaunchConsentStatus(
+                    pending,
+                    healthLockHeld = false,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
                 null
             }
+        }
+        authoritativeLocalAuth?.let {
+            handleAuthoritativeLocalAuthObservation(it, healthAlreadySignedOut = true)
         }
         continuation?.let { resumeLaunchConsentFollowUp(it) }
     }
@@ -139,12 +152,21 @@ class AppSession(
     suspend fun acceptLaunchConsent() {
         val pending = pendingLaunchConsentRecovery ?: return
         if (!revalidateLaunchConsentMember(pending)) return
+        var authoritativeLocalAuth: AuthSessionState? = null
         val continuation = launchConsentMutex.withLock {
             if (!ownsLaunchConsentRecovery(pending)) return@withLock null
             val status = _state.value.launchConsentRecovery?.status
                 ?: return@withLock null
-            acceptLaunchConsentLocked(pending, status)
-        } ?: return
+            acceptLaunchConsentLocked(
+                pending,
+                status,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+        }
+        authoritativeLocalAuth?.let {
+            handleAuthoritativeLocalAuthObservation(it, healthAlreadySignedOut = true)
+        }
+        continuation ?: return
         resumeLaunchConsentFollowUp(continuation)
     }
 
@@ -279,6 +301,7 @@ class AppSession(
     ) {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
+        var authoritativeLocalAuth: AuthSessionState? = null
         initialOnboardingMutex.withLock {
             val current = _state.value
             if (
@@ -320,6 +343,17 @@ class AppSession(
                 }
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    return@withLock
+                }
+                if (isAuthoritativeLocalAuthObservation(error.observedState)) {
+                    authoritativeLocalAuth = error.observedState
+                } else {
+                    publishInitialOnboardingFailure(
+                        "We couldn't save your setup yet. Your choices are still here. Try again.",
+                    )
+                }
             } catch (_: CompanionApiException.ConsentRequired) {
                 val followUp = LaunchConsentFollowUp.CompleteInitialOnboarding(request)
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
@@ -332,6 +366,7 @@ class AppSession(
                     memberKey = memberKey,
                     followUp = followUp,
                     healthLockHeld = false,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
             } catch (_: CompanionApiException.AccountConflict) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
@@ -361,6 +396,7 @@ class AppSession(
                 releaseInitialOnboardingBusy(generation)
             }
         }
+        authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
     }
 
     private suspend fun prepareInitialOnboardingContactCard(
@@ -369,6 +405,7 @@ class AppSession(
     ) {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
+        var authoritativeLocalAuth: AuthSessionState? = null
         initialOnboardingMutex.withLock {
             val current = _state.value
             if (
@@ -403,6 +440,17 @@ class AppSession(
                 }
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    return@withLock
+                }
+                if (isAuthoritativeLocalAuthObservation(error.observedState)) {
+                    authoritativeLocalAuth = error.observedState
+                } else {
+                    publishInitialOnboardingFailure(
+                        "We couldn't open the contact card. Check your connection and try again.",
+                    )
+                }
             } catch (_: CompanionApiException.ConsentRequired) {
                 val followUp =
                     LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(avatarId)
@@ -416,6 +464,7 @@ class AppSession(
                     memberKey = memberKey,
                     followUp = followUp,
                     healthLockHeld = false,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
             } catch (_: CompanionApiException.AccountConflict) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
@@ -445,6 +494,7 @@ class AppSession(
                 releaseInitialOnboardingBusy(generation)
             }
         }
+        authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
     }
 
     fun consumeHealthPermissionLaunchRequest(requestId: Int): Boolean {
@@ -558,6 +608,7 @@ class AppSession(
         var prepared = false
         var ownerMemberKey: String? = null
         var ownerEpoch: Int? = null
+        var authoritativeLocalAuth: AuthSessionState? = null
         try {
             if (pendingAddressBookPermissionFlow != null) return false
             if (
@@ -589,6 +640,7 @@ class AppSession(
                 consentFollowUp = LaunchConsentFollowUp.PrepareAddressBookPermission(
                     completesInitialSetup,
                 ),
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             ) ?: return false
             if (!ownsAddressBookWork(memberKey, epoch)) return false
             if (status.writeCapability != AddressBookWriteCapability.Enabled) {
@@ -662,7 +714,15 @@ class AppSession(
             ) {
                 _state.update { it.copy(isAddressBookBusy = false) }
             }
-            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+            val observedBeforeDrain = authoritativeLocalAuth
+            authoritativeLocalAuth = null
+            observedBeforeDrain?.let { handleAuthoritativeLocalAuthObservation(it) }
+            drainAddressBookReconcile(
+                ownerMemberKey,
+                ownerEpoch,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+            authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
         }
     }
 
@@ -681,7 +741,10 @@ class AppSession(
                     }
                     if (!permissionGranted || !contacts.hasPermission()) {
                         publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
-                        deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                        deleteOwnedAddressBookAfterPermissionLossLocked(
+                            pending,
+                            onAuthoritativeLocalAuth = { authStateToReconcile = it },
+                        )
                         return@withLock false
                     }
                     currentAuthOwnershipLoss(pending.memberKey)?.let { authState ->
@@ -720,7 +783,10 @@ class AppSession(
                     } catch (_: Exception) {
                         if (!contacts.hasPermission()) {
                             publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
-                            deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                            deleteOwnedAddressBookAfterPermissionLossLocked(
+                                pending,
+                                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+                            )
                         } else {
                             publishAddressBookMessage(
                                 pending.memberKey,
@@ -736,7 +802,10 @@ class AppSession(
                     ) {
                         if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
                             publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
-                            deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                            deleteOwnedAddressBookAfterPermissionLossLocked(
+                                pending,
+                                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+                            )
                         }
                         return@withLock false
                     }
@@ -750,7 +819,10 @@ class AppSession(
                     ) {
                         if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
                             publishAddressBookPermissionDenied(pending.memberKey, pending.epoch)
-                            deleteOwnedAddressBookAfterPermissionLossLocked(pending)
+                            deleteOwnedAddressBookAfterPermissionLossLocked(
+                                pending,
+                                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+                            )
                         }
                         return@withLock false
                     }
@@ -768,6 +840,7 @@ class AppSession(
                                 memberKey = pending.memberKey,
                                 epoch = pending.epoch,
                                 consentFollowUp = LaunchConsentFollowUp.ReconcileAddressBook,
+                                onAuthoritativeLocalAuth = { authStateToReconcile = it },
                             )
                             publishAddressBookMessage(
                                 pending.memberKey,
@@ -783,6 +856,21 @@ class AppSession(
                                 memberKey = pending.memberKey,
                                 followUp = LaunchConsentFollowUp.AddressBookReplacement(pending),
                                 healthLockHeld = false,
+                                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+                            )
+                        }
+                        return@withLock false
+                    } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                        if (
+                            ownsAddressBookWork(pending.memberKey, pending.epoch) &&
+                            isAuthoritativeLocalAuthObservation(error.observedState)
+                        ) {
+                            authStateToReconcile = error.observedState
+                        } else {
+                            publishAddressBookMessage(
+                                pending.memberKey,
+                                pending.epoch,
+                                "Murph couldn't finish the address-book update. Tap Retry to use the saved mutation safely.",
                             )
                         }
                         return@withLock false
@@ -818,6 +906,7 @@ class AppSession(
                             memberKey = pending.memberKey,
                             epoch = pending.epoch,
                             consentFollowUp = LaunchConsentFollowUp.ReconcileAddressBook,
+                            onAuthoritativeLocalAuth = { authStateToReconcile = it },
                         )
                         publishAddressBookMessage(
                             pending.memberKey,
@@ -835,6 +924,7 @@ class AppSession(
                         deleteOwnedAddressBookAfterPermissionLossLocked(
                             pending = pending,
                             exactRevision = status.revision,
+                            onAuthoritativeLocalAuth = { authStateToReconcile = it },
                         )
                         return@withLock false
                     }
@@ -874,9 +964,16 @@ class AppSession(
                 }
             }
         } finally {
-            drainAddressBookReconcile(pending.memberKey, pending.epoch)
+            val observedBeforeDrain = authStateToReconcile
+            authStateToReconcile = null
+            observedBeforeDrain?.let { handleAuthoritativeLocalAuthObservation(it) }
+            drainAddressBookReconcile(
+                pending.memberKey,
+                pending.epoch,
+                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+            )
         }
-        authStateToReconcile?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
+        authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
         return completed
     }
 
@@ -918,6 +1015,7 @@ class AppSession(
         var ownerMemberKey: String? = null
         var ownerEpoch: Int? = null
         var markedBusy = false
+        var authoritativeLocalAuth: AuthSessionState? = null
         try {
             if (pendingAddressBookPermissionFlow != null) return
             val memberKey = currentMemberKey ?: return
@@ -939,6 +1037,7 @@ class AppSession(
                 memberKey = memberKey,
                 epoch = epoch,
                 consentFollowUp = LaunchConsentFollowUp.StopAddressBookSharing,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             ) ?: return
             if (!ownsAddressBookWork(memberKey, epoch)) return
             if (!status.enabled) {
@@ -1012,6 +1111,7 @@ class AppSession(
                         memberKey = memberKey,
                         epoch = epoch,
                         consentFollowUp = LaunchConsentFollowUp.StopAddressBookSharing,
+                        onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                     ) ?: return
                     if (!status.enabled) return
                     if (attempt == 1) {
@@ -1037,7 +1137,22 @@ class AppSession(
                         memberKey = memberKey,
                         followUp = LaunchConsentFollowUp.StopAddressBookSharing,
                         healthLockHeld = false,
+                        onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                     )
+                    return
+                } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                    if (
+                        ownsAddressBookWork(memberKey, epoch) &&
+                        isAuthoritativeLocalAuthObservation(error.observedState)
+                    ) {
+                        authoritativeLocalAuth = error.observedState
+                    } else {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't delete the shared names yet. It will keep the exact deletion retry marker.",
+                        )
+                    }
                     return
                 } catch (_: CompanionApiException.Unauthorized) {
                     publishAddressBookMessage(
@@ -1069,7 +1184,15 @@ class AppSession(
             ) {
                 _state.update { it.copy(isAddressBookBusy = false) }
             }
-            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+            val observedBeforeDrain = authoritativeLocalAuth
+            authoritativeLocalAuth = null
+            observedBeforeDrain?.let { handleAuthoritativeLocalAuthObservation(it) }
+            drainAddressBookReconcile(
+                ownerMemberKey,
+                ownerEpoch,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+            authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
         }
     }
 
@@ -1200,6 +1323,7 @@ class AppSession(
                         fetchValidatedHealthStatus(
                             validatedEpoch,
                             LaunchConsentFollowUp.PrepareHealthPermission,
+                            onAuthoritativeLocalAuth = { authStateToReconcile = it },
                         ) ?: return false
                     if (validatedEpoch != sessionEpoch) return false
                     currentAuthOwnershipLoss(memberKey)?.let { authState ->
@@ -1314,7 +1438,7 @@ class AppSession(
                 }
             }
         }
-        authStateToReconcile?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
+        authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
         if (prepared) requestHealthPermissionLaunch()
         return prepared
     }
@@ -1352,6 +1476,7 @@ class AppSession(
                         pending.requestedAt,
                         pending.receiptBaselineAt,
                     ),
+                    onAuthoritativeLocalAuth = { authStateToReconcile = it },
                 )
                 if (finalPreConnectStatus == null) {
                     pendingHealthConnection = null
@@ -1379,6 +1504,12 @@ class AppSession(
                         authStateToReconcile = authState
                         return@withLock abortPendingHealthConnection(epoch)
                     }
+                } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                    if (isAuthoritativeLocalAuthObservation(error.observedState)) {
+                        authStateToReconcile = error.observedState
+                        return@withLock abortPendingHealthConnection(epoch)
+                    }
+                    throw error
                 } catch (error: CompanionApiException.ConsentRequired) {
                     if (epoch == sessionEpoch) {
                         beginLaunchConsentRecovery(
@@ -1389,6 +1520,7 @@ class AppSession(
                                 refreshedPending.receiptBaselineAt,
                             ),
                             healthLockHeld = true,
+                            onAuthoritativeLocalAuth = { authStateToReconcile = it },
                         )
                     }
                     pendingHealthConnection = null
@@ -1453,7 +1585,7 @@ class AppSession(
                 false
             }
         }
-        authStateToReconcile?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
+        authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
         return completed
     }
 
@@ -1547,6 +1679,7 @@ class AppSession(
     private suspend fun syncNow(
         foregroundClaim: ForegroundRefreshClaim?,
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+        onAuthoritativeLocalAuth: ((AuthSessionState) -> Unit)? = null,
     ) {
         if (!allowsLaunchConsentWork(acceptedConsentOwner)) return
         if (
@@ -1568,13 +1701,26 @@ class AppSession(
             )
             return
         }
+        var authoritativeLocalAuth: AuthSessionState? = null
         val needsHealthReconciliation = healthMutex.withLock {
             if (
                 foregroundClaim != null &&
                 !ownsForegroundRefresh(foregroundClaim)
             ) return@withLock false
             val epoch = sessionEpoch
-            syncAndRefresh(epoch, foregroundClaim)
+            syncAndRefresh(
+                epoch,
+                foregroundClaim,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+        }
+        authoritativeLocalAuth?.let {
+            if (onAuthoritativeLocalAuth != null) {
+                onAuthoritativeLocalAuth(it)
+            } else {
+                handleAuthoritativeLocalAuthObservation(it)
+            }
+            return
         }
         if (needsHealthReconciliation) {
             reconcile(force = true, foregroundClaim, acceptedConsentOwner)
@@ -1591,6 +1737,7 @@ class AppSession(
     }
 
     private suspend fun runForegroundRefresh(foregroundClaim: ForegroundRefreshClaim) {
+        var authoritativeLocalAuth: AuthSessionState? = null
         foregroundMutex.withLock {
             if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             val consentRecovery = pendingLaunchConsentRecovery
@@ -1603,7 +1750,9 @@ class AppSession(
             if (hasActiveLaunchConsentRecovery()) {
                 if (!needsForegroundRefresh) return@withLock
                 needsForegroundRefresh = false
-                refreshActiveLaunchConsentAfterForeground()
+                refreshActiveLaunchConsentAfterForeground {
+                    authoritativeLocalAuth = it
+                }
                 return@withLock
             }
             val consumesForegroundRefresh = needsForegroundRefresh
@@ -1622,7 +1771,8 @@ class AppSession(
                 _state.value.phase == AppPhase.Ready &&
                 _state.value.initialOnboarding != null
             ) {
-                refreshInitialOnboardingAfterForeground()
+                authoritativeLocalAuth = refreshInitialOnboardingAfterForeground()
+                if (authoritativeLocalAuth != null) return@withLock
                 if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             }
             if (
@@ -1636,7 +1786,11 @@ class AppSession(
                 _state.value.phase == AppPhase.Ready &&
                 _state.value.authVerifiedOnline
             ) {
-                reconcileAddressBookForeground(showBusy = false)
+                reconcileAddressBookForeground(
+                    showBusy = false,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
+                if (authoritativeLocalAuth != null) return@withLock
                 if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             }
             if (_state.value.phase != AppPhase.Ready) return@withLock
@@ -1678,15 +1832,19 @@ class AppSession(
                 healthWasRequested() &&
                 grantedResourceCount > 0
             ) {
-                syncNow(foregroundClaim)
+                syncNow(
+                    foregroundClaim,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
             }
         }
+        authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
     }
 
-    private suspend fun refreshInitialOnboardingAfterForeground() {
-        if (!initialOnboardingMutex.tryLock()) return
+    private suspend fun refreshInitialOnboardingAfterForeground(): AuthSessionState? {
+        if (!initialOnboardingMutex.tryLock()) return null
         try {
-            val memberKey = currentMemberKey ?: return
+            val memberKey = currentMemberKey ?: return null
             val epoch = sessionEpoch
             val generation = initialOnboardingGeneration
             val current = _state.value
@@ -1696,26 +1854,33 @@ class AppSession(
                 current.isInitialOnboardingSaving ||
                 current.initialOnboardingCompletedNow ||
                 current.launchConsentRecovery != null
-            ) return
+            ) return null
             val response = try {
                 api.fetchInitialOnboarding(memberKey)
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                return error.observedState.takeIf {
+                    ownsInitialOnboardingRefresh(memberKey, epoch, generation) &&
+                        isAuthoritativeLocalAuthObservation(it)
+                }
             } catch (_: CompanionApiException.ConsentRequired) {
+                var authoritativeLocalAuth: AuthSessionState? = null
                 if (ownsInitialOnboardingRefresh(memberKey, epoch, generation)) {
                     beginLaunchConsentRecovery(
                         expectedEpoch = epoch,
                         memberKey = memberKey,
                         followUp = LaunchConsentFollowUp.Reconcile,
                         healthLockHeld = false,
+                        onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                     )
                 }
-                return
+                return authoritativeLocalAuth
             } catch (_: CompanionApiException.AccountConflict) {
                 if (ownsInitialOnboardingRefresh(memberKey, epoch, generation)) {
                     publishAccountConflictFailure()
                 }
-                return
+                return null
             } catch (error: CompanionApiException) {
                 if (
                     ownsInitialOnboardingRefresh(memberKey, epoch, generation) &&
@@ -1726,16 +1891,17 @@ class AppSession(
                         "Your Murph session changed. Try a different sign-in.",
                     )
                 }
-                return
+                return null
             } catch (_: Exception) {
-                return
+                return null
             }
-            if (!ownsInitialOnboardingRefresh(memberKey, epoch, generation)) return
+            if (!ownsInitialOnboardingRefresh(memberKey, epoch, generation)) return null
             if (response.status == InitialOnboardingStatus.Completed) {
                 clearInitialOnboardingState()
             }
             // Pending refreshes are removal-only: never replace the mounted
             // projection or its unsaved draft.
+            return null
         } finally {
             initialOnboardingMutex.unlock()
         }
@@ -1750,12 +1916,18 @@ class AppSession(
         !_state.value.isInitialOnboardingSaving &&
         !_state.value.initialOnboardingCompletedNow
 
-    private suspend fun refreshActiveLaunchConsentAfterForeground() {
+    private suspend fun refreshActiveLaunchConsentAfterForeground(
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+    ) {
         val pending = pendingLaunchConsentRecovery ?: return
         if (!revalidateLaunchConsentMember(pending)) return
         launchConsentMutex.withLock {
             if (ownsLaunchConsentRecovery(pending)) {
-                loadLaunchConsentStatus(pending, healthLockHeld = false)
+                loadLaunchConsentStatus(
+                    pending,
+                    healthLockHeld = false,
+                    onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
+                )
             }
         }
     }
@@ -1933,6 +2105,10 @@ class AppSession(
                 }
                 if (!resetHealthSdkAtTrustBoundary(acceptedConsentOwner)) return
                 epoch = sessionEpoch
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                if (epoch != sessionEpoch) return
+                reconcileObservedAuthState(authState.memberKey, error.observedState)
+                return
             } catch (error: CompanionApiException.Unauthorized) {
                 if (epoch != sessionEpoch) return
                 publishAuthoritativeResumeFailure(
@@ -1953,12 +2129,17 @@ class AppSession(
                 return
             } catch (error: CompanionApiException.ConsentRequired) {
                 if (epoch != sessionEpoch) return
+                var authoritativeLocalAuth: AuthSessionState? = null
                 beginLaunchConsentRecovery(
                     expectedEpoch = epoch,
                     memberKey = authState.memberKey,
                     followUp = LaunchConsentFollowUp.Reconcile,
                     healthLockHeld = false,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
+                authoritativeLocalAuth?.let {
+                    reconcileObservedAuthState(authState.memberKey, it)
+                }
                 return
             } catch (error: CancellationException) {
                 throw error
@@ -2041,15 +2222,34 @@ class AppSession(
             authState.verifiedOnline &&
             ownsAddressBookWork(authState.memberKey, epoch)
         ) {
-            reconcileAddressBookForeground(showBusy = false)
+            var authoritativeLocalAuth: AuthSessionState? = null
+            reconcileAddressBookForeground(
+                showBusy = false,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+            authoritativeLocalAuth?.let {
+                reconcileObservedAuthState(authState.memberKey, it)
+                return
+            }
         }
         if (
             healthWasRequested() &&
             authState.verifiedOnline &&
             grantedResourceCount > 0
         ) {
+            var authoritativeLocalAuth: AuthSessionState? = null
             val needsHealthReconciliation =
-                healthMutex.withLock { syncAndRefresh(epoch, foregroundClaim) }
+                healthMutex.withLock {
+                    syncAndRefresh(
+                        epoch,
+                        foregroundClaim,
+                        onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                    )
+                }
+            authoritativeLocalAuth?.let {
+                reconcileObservedAuthState(authState.memberKey, it)
+                return
+            }
             if (needsHealthReconciliation) {
                 if (
                     !ownsVerifiedHealthWork(epoch, foregroundClaim) ||
@@ -2090,7 +2290,12 @@ class AppSession(
         } else {
             invalidateSessionEpoch()
         }
+        finishSignedOut()
+    }
+
+    private fun finishSignedOut() {
         currentMemberKey = null
+        clearInitialOnboardingState()
         localState.clearMemberScopedState()
         _state.value = AppUiState(
             phase = AppPhase.NeedsLogin,
@@ -2098,6 +2303,52 @@ class AppSession(
             totalResourceCount = health.totalResourceCount,
         )
     }
+
+    private fun finishChangedMemberAuthTransition() {
+        currentMemberKey = null
+        clearInitialOnboardingState()
+        localState.clearMemberScopedState()
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = "Your signed-in account changed. Try again to continue.",
+                    canRetry = true,
+                    canSignOut = true,
+                ),
+            )
+        }
+    }
+
+    private suspend fun handleAuthoritativeLocalAuthObservation(
+        observed: AuthSessionState,
+        healthAlreadySignedOut: Boolean = false,
+    ): Boolean {
+        if (!isAuthoritativeLocalAuthObservation(observed)) return false
+        val resetSucceeded = if (healthAlreadySignedOut) {
+            invalidateSessionEpoch()
+            true
+        } else {
+            resetHealthSdkAtTrustBoundary()
+        }
+        if (!resetSucceeded) return true
+        if (observed == AuthSessionState.SignedOut) {
+            finishSignedOut()
+        } else {
+            finishChangedMemberAuthTransition()
+        }
+        return true
+    }
+
+    private fun isAuthoritativeLocalAuthObservation(
+        observed: AuthSessionState,
+    ): Boolean = observed == AuthSessionState.SignedOut ||
+        (
+            observed is AuthSessionState.SignedIn &&
+                (
+                    observed.memberKey != currentMemberKey ||
+                        observed.memberKey != localState.memberKey
+                    )
+            )
 
     private fun restoreOfflineIfPossible() {
         val memberKey = localState.memberKey
@@ -2284,6 +2535,7 @@ class AppSession(
     private suspend fun syncAndRefresh(
         epoch: Int,
         foregroundClaim: ForegroundRefreshClaim? = null,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ): Boolean {
         if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
         if (
@@ -2297,6 +2549,7 @@ class AppSession(
                 fetchValidatedHealthStatus(
                     epoch,
                     LaunchConsentFollowUp.SyncHealth,
+                    onAuthoritativeLocalAuth,
                 ) == null
             ) return false
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
@@ -2324,7 +2577,11 @@ class AppSession(
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
             if (!health.isSignedIn()) return true
             if (
-                fetchValidatedHealthStatus(epoch, LaunchConsentFollowUp.SyncHealth) == null
+                fetchValidatedHealthStatus(
+                    epoch,
+                    LaunchConsentFollowUp.SyncHealth,
+                    onAuthoritativeLocalAuth,
+                ) == null
             ) return false
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
             if (!health.isSignedIn()) return true
@@ -2399,6 +2656,7 @@ class AppSession(
     private suspend fun fetchValidatedHealthStatus(
         epoch: Int,
         consentFollowUp: LaunchConsentFollowUp,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ): CompanionSyncStatus? {
         if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return null
         val authState = try {
@@ -2408,45 +2666,7 @@ class AppSession(
         } catch (_: Exception) {
             AuthSessionState.TemporarilyUnavailable
         }
-        when (authState) {
-            AuthSessionState.SignedOut -> {
-                failCurrentSessionWhileHealthLocked(
-                    message = "Your session needs a refresh. Sign in again.",
-                    canRetry = false,
-                )
-                return null
-            }
-            AuthSessionState.TemporarilyUnavailable -> {
-                publishReadOnlyHealthState(
-                    message = "You're offline. Saved sync status is shown until Murph reconnects.",
-                )
-                return null
-            }
-            is AuthSessionState.SignedIn -> {
-                if (
-                    !authState.verifiedOnline ||
-                    authState.memberKey != currentMemberKey ||
-                    authState.memberKey != localState.memberKey
-                ) {
-                    if (
-                        authState.memberKey != currentMemberKey ||
-                        authState.memberKey != localState.memberKey
-                    ) {
-                        failCurrentSessionWhileHealthLocked(
-                            message = "Your signed-in account changed. Try again to continue.",
-                            canRetry = true,
-                        )
-                        currentMemberKey = null
-                        localState.clearMemberScopedState()
-                    } else {
-                        publishReadOnlyHealthState(
-                            message = "You're offline. Saved sync status is shown until Murph reconnects.",
-                        )
-                    }
-                    return null
-                }
-            }
-        }
+        if (!hasVerifiedHealthAuthWhileLocked(authState)) return null
 
         if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return null
         val memberKey = currentMemberKey ?: return null
@@ -2454,6 +2674,13 @@ class AppSession(
             api.fetchSyncStatus(memberKey, HEALTH_CONNECT_SOURCE)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (hasVerifiedHealthAuthWhileLocked(error.observedState)) {
+                publishReadOnlyHealthState(
+                    message = "You're offline. Saved sync status is shown until Murph reconnects.",
+                )
+            }
+            return null
         } catch (error: CompanionApiException.Unauthorized) {
             failCurrentSessionWhileHealthLocked(
                 message = "Your session needs a refresh. Sign in again.",
@@ -2475,6 +2702,7 @@ class AppSession(
                 memberKey = memberKey,
                 followUp = consentFollowUp,
                 healthLockHeld = true,
+                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             )
             return null
         } catch (_: Exception) {
@@ -2501,6 +2729,52 @@ class AppSession(
             healthStatusIsStale = false,
         )
         return status
+    }
+
+    /** Called only while [healthMutex] is held. */
+    private suspend fun hasVerifiedHealthAuthWhileLocked(
+        authState: AuthSessionState,
+    ): Boolean = when (authState) {
+        AuthSessionState.SignedOut -> {
+            if (
+                failCurrentSessionWhileHealthLocked(
+                    message = "Your session needs a refresh. Sign in again.",
+                    canRetry = false,
+                )
+            ) {
+                finishSignedOut()
+            }
+            false
+        }
+        AuthSessionState.TemporarilyUnavailable -> {
+            publishReadOnlyHealthState(
+                message = "You're offline. Saved sync status is shown until Murph reconnects.",
+            )
+            false
+        }
+        is AuthSessionState.SignedIn -> {
+            if (
+                authState.memberKey != currentMemberKey ||
+                authState.memberKey != localState.memberKey
+            ) {
+                if (
+                    failCurrentSessionWhileHealthLocked(
+                        message = "Your signed-in account changed. Try again to continue.",
+                        canRetry = true,
+                    )
+                ) {
+                    finishChangedMemberAuthTransition()
+                }
+                false
+            } else if (!authState.verifiedOnline) {
+                publishReadOnlyHealthState(
+                    message = "You're offline. Saved sync status is shown until Murph reconnects.",
+                )
+                false
+            } else {
+                true
+            }
+        }
     }
 
     private fun publishReadOnlyHealthState(message: String) {
@@ -2551,7 +2825,7 @@ class AppSession(
     private suspend fun failCurrentSessionWhileHealthLocked(
         message: String,
         canRetry: Boolean,
-    ) {
+    ): Boolean {
         invalidateSessionEpoch()
         val resetSucceeded = try {
             health.signOutSdk()
@@ -2576,18 +2850,29 @@ class AppSession(
                 ),
             )
         }
+        return resetSucceeded
     }
 
     private suspend fun verifyBackendMember(epoch: Int): Boolean {
         val memberKey = currentMemberKey ?: return false
+        if (!admitBackendMember(memberKey, epoch)) return false
+        if (epoch != sessionEpoch) return false
         return try {
             api.fetchSyncStatus(memberKey, HEALTH_CONNECT_SOURCE)
             epoch == sessionEpoch
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (epoch != sessionEpoch) return false
+            reconcileObservedAuthState(memberKey, error.observedState)
+            false
         } catch (error: CompanionApiException.NoAccount) {
             if (epoch != sessionEpoch) return false
-            admitBackendMember(memberKey, epoch)
+            publishBackendBootstrapFailure(
+                message = "Murph couldn't verify this account after setup. Contact support.",
+                canRetry = false,
+            )
+            false
         } catch (error: CompanionApiException.AccountConflict) {
             if (epoch != sessionEpoch) return false
             publishAccountConflictFailure()
@@ -2595,12 +2880,15 @@ class AppSession(
         } catch (error: CompanionApiException.ConsentRequired) {
             if (epoch != sessionEpoch) return false
             val memberKey = currentMemberKey ?: return false
+            var authoritativeLocalAuth: AuthSessionState? = null
             beginLaunchConsentRecovery(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.Reconcile,
                 healthLockHeld = false,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             )
+            authoritativeLocalAuth?.let { reconcileObservedAuthState(memberKey, it) }
             false
         } catch (error: CompanionApiException.Unauthorized) {
             if (epoch != sessionEpoch) return false
@@ -2632,14 +2920,21 @@ class AppSession(
             api.fetchInitialOnboarding(memberKey)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (epoch != sessionEpoch) return false
+            reconcileObservedAuthState(memberKey, error.observedState)
+            return false
         } catch (_: CompanionApiException.ConsentRequired) {
             if (epoch != sessionEpoch) return false
+            var authoritativeLocalAuth: AuthSessionState? = null
             beginLaunchConsentRecovery(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.Reconcile,
                 healthLockHeld = false,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             )
+            authoritativeLocalAuth?.let { reconcileObservedAuthState(memberKey, it) }
             return false
         } catch (_: CompanionApiException.AccountConflict) {
             if (epoch != sessionEpoch) return false
@@ -2821,53 +3116,28 @@ class AppSession(
 
     private suspend fun admitBackendMember(memberKey: String, epoch: Int): Boolean {
         return try {
-            val response = api.createJunctionSignInToken(
-                memberKey = memberKey,
-                request = signInTokenRequest(intent = null),
-            )
+            api.admitCompanion(memberKey, ZoneId.systemDefault().id)
             if (epoch != sessionEpoch) return false
-            if (response.environment != config.environment.wireValue) {
-                throw CompanionApiException.InvalidResponse
-            }
-            _state.update {
-                it.copy(
-                    backendEnvironment = response.environment,
-                )
-            }
             currentAuthOwnershipLoss(memberKey)?.let { observed ->
                 reconcileObservedAuthState(memberKey, observed)
                 return false
             }
-            // Admission and Health identity are deliberately separate. A token
-            // returned for an existing connection is discarded until the user
-            // explicitly resumes Health Connect.
             true
-        } catch (_: CompanionApiException.ReconnectRequired) {
-            // The server performs canonical member admission before resolving
-            // Junction lifecycle. This exact response means access is active but
-            // there is no established Health connection to resume.
-            if (epoch == sessionEpoch && memberKey == currentMemberKey) {
-                if (localState.requireHealthReconnect()) {
-                    true
-                } else {
-                    publishBackendBootstrapFailure(
-                        message =
-                            "Murph couldn't safely remember that Health Connect needs to reconnect. Try again.",
-                        canRetry = true,
-                    )
-                    false
-                }
-            } else {
-                false
-            }
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (epoch != sessionEpoch) return false
+            reconcileObservedAuthState(memberKey, error.observedState)
+            false
         } catch (_: CompanionApiException.ConsentRequired) {
             if (epoch != sessionEpoch) return false
+            var authoritativeLocalAuth: AuthSessionState? = null
             beginLaunchConsentRecovery(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.Reconcile,
                 healthLockHeld = false,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             )
+            authoritativeLocalAuth?.let { reconcileObservedAuthState(memberKey, it) }
             false
         } catch (_: CompanionApiException.AccountConflict) {
             if (epoch != sessionEpoch) return false
@@ -2878,6 +3148,40 @@ class AppSession(
             publishBackendBootstrapFailure(
                 message = "Your session needs a refresh. Sign in again.",
                 canRetry = false,
+            )
+            false
+        } catch (_: CompanionApiException.AccessRequired) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message =
+                    "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support.",
+                canRetry = false,
+                signOutLabel = "Try a different sign-in",
+            )
+            false
+        } catch (_: CompanionApiException.MemberSuspended) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message =
+                    "This Murph account is paused. Try a different sign-in or contact Murph support.",
+                canRetry = false,
+                signOutLabel = "Try a different sign-in",
+            )
+            false
+        } catch (_: CompanionApiException.AdmissionRetryable) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message = "Murph account setup is temporarily unavailable. Try again.",
+                canRetry = true,
+            )
+            false
+        } catch (_: CompanionApiException.AdmissionSupportRequired) {
+            if (epoch != sessionEpoch) return false
+            publishBackendBootstrapFailure(
+                message =
+                    "Murph support needs to finish setting up this account. Try a different sign-in or contact support.",
+                canRetry = false,
+                signOutLabel = "Try a different sign-in",
             )
             false
         } catch (error: CancellationException) {
@@ -2935,13 +3239,18 @@ class AppSession(
         }
     }
 
-    private fun publishBackendBootstrapFailure(message: String, canRetry: Boolean) {
+    private fun publishBackendBootstrapFailure(
+        message: String,
+        canRetry: Boolean,
+        signOutLabel: String = "Sign out and start fresh",
+    ) {
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Failed(
                     message = message,
                     canRetry = canRetry,
                     canSignOut = true,
+                    signOutLabel = signOutLabel,
                 ),
             )
         }
@@ -3090,6 +3399,7 @@ class AppSession(
         memberKey: String,
         followUp: LaunchConsentFollowUp,
         healthLockHeld: Boolean,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         if (
             expectedEpoch != sessionEpoch ||
@@ -3152,7 +3462,11 @@ class AppSession(
         }
         launchConsentMutex.withLock {
             if (!ownsLaunchConsentRecovery(pending)) return@withLock
-            loadLaunchConsentStatus(pending, healthLockHeld)
+            loadLaunchConsentStatus(
+                pending,
+                healthLockHeld,
+                onAuthoritativeLocalAuth,
+            )
         }
     }
 
@@ -3206,6 +3520,7 @@ class AppSession(
     private suspend fun loadLaunchConsentStatus(
         pending: PendingLaunchConsentRecovery,
         healthLockHeld: Boolean,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         if (!ownsLaunchConsentRecovery(pending)) return
         _state.update { current ->
@@ -3254,6 +3569,19 @@ class AppSession(
             api.fetchLaunchConsentStatus(pending.memberKey)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (
+                ownsLaunchConsentRecovery(pending) &&
+                isAuthoritativeLocalAuthObservation(error.observedState)
+            ) {
+                onAuthoritativeLocalAuth(error.observedState)
+            } else {
+                publishLaunchConsentLoadFailure(
+                    pending,
+                    "Murph couldn't load the latest consent documents. Check your connection and try again.",
+                )
+            }
+            return
         } catch (_: CompanionApiException.Unauthorized) {
             publishLaunchConsentMemberBoundaryFailure(
                 pending = pending,
@@ -3295,6 +3623,7 @@ class AppSession(
     private suspend fun acceptLaunchConsentLocked(
         pending: PendingLaunchConsentRecovery,
         initialStatus: LaunchConsentStatus,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ): AcceptedLaunchConsentContinuation? {
         if (synchronized(pending) { pending.accepted || pending.continuationInProgress }) {
             return null
@@ -3333,8 +3662,26 @@ class AppSession(
                 api.acceptLaunchConsent(pending.memberKey, request)
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                if (
+                    ownsLaunchConsentRecovery(pending) &&
+                    isAuthoritativeLocalAuthObservation(error.observedState)
+                ) {
+                    onAuthoritativeLocalAuth(error.observedState)
+                } else {
+                    publishLaunchConsentRequired(
+                        pending = pending,
+                        status = latest,
+                        message = "Murph couldn't save consent. Check your connection and try again.",
+                    )
+                }
+                return null
             } catch (_: CompanionApiException.StaleConsentDocuments) {
-                reloadLaunchConsentAfterStaleDocuments(pending, latest)
+                reloadLaunchConsentAfterStaleDocuments(
+                    pending,
+                    latest,
+                    onAuthoritativeLocalAuth,
+                )
                 return null
             } catch (_: CompanionApiException.Unauthorized) {
                 publishLaunchConsentMemberBoundaryFailure(
@@ -3440,11 +3787,27 @@ class AppSession(
     private suspend fun reloadLaunchConsentAfterStaleDocuments(
         pending: PendingLaunchConsentRecovery,
         retainedStatus: LaunchConsentStatus,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         val reloaded = try {
             api.fetchLaunchConsentStatus(pending.memberKey)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (
+                ownsLaunchConsentRecovery(pending) &&
+                isAuthoritativeLocalAuthObservation(error.observedState)
+            ) {
+                onAuthoritativeLocalAuth(error.observedState)
+            } else {
+                publishLaunchConsentRequired(
+                    pending = pending,
+                    status = retainedStatus,
+                    message =
+                        "Consent documents changed, but Murph couldn't reload them. Try again.",
+                )
+            }
+            return
         } catch (_: CompanionApiException.Unauthorized) {
             publishLaunchConsentMemberBoundaryFailure(
                 pending = pending,
@@ -3660,8 +4023,16 @@ class AppSession(
                     acceptedConsentOwner = pending,
                     completesInitialSetup = followUp.completesInitialSetup,
                 )
-            LaunchConsentFollowUp.ReconcileAddressBook ->
-                reconcileAddressBookForeground(showBusy = false)
+            LaunchConsentFollowUp.ReconcileAddressBook -> {
+                var authoritativeLocalAuth: AuthSessionState? = null
+                reconcileAddressBookForeground(
+                    showBusy = false,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
+                authoritativeLocalAuth?.let {
+                    handleAuthoritativeLocalAuthObservation(it)
+                }
+            }
             LaunchConsentFollowUp.StopAddressBookSharing ->
                 stopAddressBookSharing(pending)
             is LaunchConsentFollowUp.AutomaticAddressBookDeletion ->
@@ -3901,7 +4272,10 @@ class AppSession(
         }
     }
 
-    private suspend fun reconcileAddressBookForeground(showBusy: Boolean) {
+    private suspend fun reconcileAddressBookForeground(
+        showBusy: Boolean,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+    ) {
         if (!contacts.isSupported || ownsPendingHealthConnection()) return
         if (!addressBookMutex.tryLock()) {
             enqueueAddressBookReconcile(showBusy)
@@ -3927,6 +4301,7 @@ class AppSession(
                 consentFollowUp = pendingDeletion?.let {
                     LaunchConsentFollowUp.AutomaticAddressBookDeletion(it)
                 } ?: LaunchConsentFollowUp.ReconcileAddressBook,
+                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             ) ?: return
             if (!ownsAddressBookWork(memberKey, epoch) || !status.enabled) return
 
@@ -3947,6 +4322,7 @@ class AppSession(
                     memberKey = memberKey,
                     epoch = epoch,
                     mutation = it,
+                    onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
                 )
                 return
             }
@@ -3981,7 +4357,12 @@ class AppSession(
                 )
                 return
             }
-            performAutomaticAddressBookDeletionLocked(memberKey, epoch, deletion)
+            performAutomaticAddressBookDeletionLocked(
+                memberKey,
+                epoch,
+                deletion,
+                onAuthoritativeLocalAuth,
+            )
         } finally {
             addressBookMutex.unlock()
             if (
@@ -3991,7 +4372,11 @@ class AppSession(
             ) {
                 _state.update { it.copy(isAddressBookBusy = false) }
             }
-            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+            drainAddressBookReconcile(
+                ownerMemberKey,
+                ownerEpoch,
+                onAuthoritativeLocalAuth,
+            )
         }
     }
 
@@ -3999,6 +4384,7 @@ class AppSession(
         memberKey: String,
         epoch: Int,
         mutation: AddressBookMutation,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         try {
             val deleted = api.deleteAddressBook(
@@ -4023,6 +4409,19 @@ class AppSession(
             )
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (
+                ownsAddressBookWork(memberKey, epoch) &&
+                isAuthoritativeLocalAuthObservation(error.observedState)
+            ) {
+                onAuthoritativeLocalAuth(error.observedState)
+            } else {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Contacts access is off. Murph will retry deleting the exact shared revision on the next foreground check.",
+                )
+            }
         } catch (_: CompanionApiException.Conflict) {
             if (!ownsAddressBookWork(memberKey, epoch)) return
             localState.abandonAddressBookDeletion(mutation.mutationId)
@@ -4030,6 +4429,7 @@ class AppSession(
                 memberKey = memberKey,
                 epoch = epoch,
                 consentFollowUp = LaunchConsentFollowUp.ReconcileAddressBook,
+                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             )
             publishAddressBookMessage(
                 memberKey,
@@ -4042,6 +4442,7 @@ class AppSession(
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.AutomaticAddressBookDeletion(mutation),
                 healthLockHeld = false,
+                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             )
         } catch (_: CompanionApiException.Unauthorized) {
             publishAddressBookMessage(
@@ -4067,6 +4468,7 @@ class AppSession(
         addressBookMutex.lock()
         var ownerMemberKey: String? = null
         var ownerEpoch: Int? = null
+        var authoritativeLocalAuth: AuthSessionState? = null
         try {
             val memberKey = currentMemberKey ?: return
             val epoch = sessionEpoch
@@ -4081,13 +4483,26 @@ class AppSession(
             _state.update {
                 it.copy(isAddressBookBusy = true, addressBookMessage = null)
             }
-            performAutomaticAddressBookDeletionLocked(memberKey, epoch, mutation)
+            performAutomaticAddressBookDeletionLocked(
+                memberKey,
+                epoch,
+                mutation,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
         } finally {
             addressBookMutex.unlock()
             if (ownerEpoch == sessionEpoch && ownerMemberKey == currentMemberKey) {
                 _state.update { it.copy(isAddressBookBusy = false) }
             }
-            drainAddressBookReconcile(ownerMemberKey, ownerEpoch)
+            val observedBeforeDrain = authoritativeLocalAuth
+            authoritativeLocalAuth = null
+            observedBeforeDrain?.let { handleAuthoritativeLocalAuthObservation(it) }
+            drainAddressBookReconcile(
+                ownerMemberKey,
+                ownerEpoch,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+            authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
         }
     }
 
@@ -4095,6 +4510,7 @@ class AppSession(
     private suspend fun deleteOwnedAddressBookAfterPermissionLossLocked(
         pending: PendingAddressBookPermissionFlow,
         exactRevision: Int? = pending.ownedRevisionForPermissionLoss,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         if (
             exactRevision == null ||
@@ -4124,6 +4540,7 @@ class AppSession(
             memberKey = pending.memberKey,
             epoch = pending.epoch,
             mutation = deletion,
+            onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
         )
     }
 
@@ -4132,18 +4549,34 @@ class AppSession(
         memberKey: String,
         epoch: Int,
         consentFollowUp: LaunchConsentFollowUp,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ): AddressBookServerStatus? {
         if (!ownsAddressBookWork(memberKey, epoch)) return null
         val status = try {
             api.fetchAddressBookStatus(memberKey)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            if (
+                ownsAddressBookWork(memberKey, epoch) &&
+                isAuthoritativeLocalAuthObservation(error.observedState)
+            ) {
+                onAuthoritativeLocalAuth(error.observedState)
+            } else {
+                publishAddressBookUnavailable(
+                    memberKey,
+                    epoch,
+                    "Murph couldn't refresh address-book sharing. Try again.",
+                )
+            }
+            return null
         } catch (_: CompanionApiException.ConsentRequired) {
             beginLaunchConsentRecovery(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = consentFollowUp,
                 healthLockHeld = false,
+                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             )
             return null
         } catch (_: CompanionApiException.Unauthorized) {
@@ -4295,6 +4728,7 @@ class AppSession(
     private suspend fun drainAddressBookReconcile(
         completedMemberKey: String?,
         completedEpoch: Int?,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         val requested = synchronized(pendingAddressBookReconcileLock) {
             pendingAddressBookReconcile.also { pendingAddressBookReconcile = null }
@@ -4311,7 +4745,10 @@ class AppSession(
         ) {
             return
         }
-        reconcileAddressBookForeground(requested.showBusy)
+        reconcileAddressBookForeground(
+            requested.showBusy,
+            onAuthoritativeLocalAuth,
+        )
     }
 
     private fun ownsAddressBookWork(memberKey: String, epoch: Int): Boolean =

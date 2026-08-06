@@ -325,6 +325,13 @@ sealed interface HealthSyncState {
 sealed class CompanionApiException(message: String) : Exception(message) {
     data object Network : CompanionApiException("Network request failed")
     data object Unauthorized : CompanionApiException("Authentication required")
+    class LocalAuthUnavailable(
+        val observedState: AuthSessionState,
+    ) : CompanionApiException("Local authentication is temporarily unavailable")
+    data object AccessRequired : CompanionApiException("Active Murph access required")
+    data object MemberSuspended : CompanionApiException("Murph account suspended")
+    data object AdmissionRetryable : CompanionApiException("Murph account setup temporarily unavailable")
+    data object AdmissionSupportRequired : CompanionApiException("Murph account setup needs support")
     data object NoAccount : CompanionApiException("No Murph account")
     data object AccountConflict : CompanionApiException("Murph account conflict")
     data object ConsentRequired : CompanionApiException("Murph consent required")

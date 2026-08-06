@@ -65,10 +65,10 @@ Never put the Privy app secret in this app. The Android Privy app client must al
 - release package: `ai.withmurph.app`
 - debug package: `ai.withmurph.app.dev`
 
-Deploy the companion backend from Murph PR #1296 before testing account creation
-or first-run setup. Android deliberately reuses the backend's canonical account
-admission and onboarding owners; it does not create a second signup or catalog
-source in the app.
+Deploy the companion backend from Murph PRs #1296 and #1341 before testing
+account creation or first-run setup. Android deliberately reuses the backend's
+canonical account-admission and onboarding owners; it does not create a second
+signup or catalog source in the app.
 
 ## Build and test
 
@@ -171,10 +171,10 @@ message.
 ## Connection lifecycle
 
 - One neutral OTP flow serves new and returning members. After Privy verifies
-  the destination, the app checks canonical membership. A missing account is
-  admitted through the existing member-fenced sign-in-token transaction with
-  no connection intent; no
-  Junction token is retained or identified until the member explicitly grants
+  the destination, the app calls the member-fenced companion admission endpoint
+  before status, onboarding, or health work. Admission creates or restores only
+  the Murph account; it does not mint a Junction token or grant device-sync
+  authority. Junction remains untouched until the member explicitly grants
   Health Connect access.
 - Every member-bound bootstrap, token, status, consent, onboarding, contact,
   and sync continuation is fenced to the current Privy member. Canonical
@@ -192,7 +192,9 @@ message.
   explicit **Not now** choice. The step is not permission, sync, or server
   truth; it clears on member trust boundaries and never regresses after setup.
 - The app does not create a Junction connection merely because a member signs in.
-- Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
+- Before showing setup, the app completes admission and then uses the read-only
+  status endpoint to confirm the Privy identity maps to an active, consented
+  Murph member.
 - A session restored while offline repeats that validation when Privy becomes
   online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
