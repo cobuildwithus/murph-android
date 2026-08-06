@@ -13,3 +13,5 @@ Account admission and initial onboarding require the listed Murph backend PRs
 to deploy before this Android change. The mobile client deliberately consumes
 those server-owned contracts rather than duplicating signup, catalog, or
 completion state.
+
+<!-- Hosted workflow trigger diagnostic; reverted immediately. -->
