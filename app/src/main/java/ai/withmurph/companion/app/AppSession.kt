@@ -1734,6 +1734,7 @@ class AppSession(
                         message = terminalMemberBoundaryMessage(error),
                         canRetry = false,
                         signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                        revokeAuthorization = true,
                     )
                 } else {
                     val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
@@ -3063,6 +3064,7 @@ class AppSession(
                     message = terminalMemberBoundaryMessage(error),
                     canRetry = false,
                     signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                    revokeAuthorization = true,
                 )
             } else {
                 publishPermissionAwareHealthState(
@@ -3209,16 +3211,23 @@ class AppSession(
         canRetry: Boolean,
         signOutLabel: String = "Sign out and start fresh",
         retainedConsentOwner: PendingLaunchConsentRecovery? = null,
+        revokeAuthorization: Boolean = false,
     ): Boolean {
         closeProductAuthorityForBoundary()
         invalidateSessionEpoch(retainedConsentOwner)
-        val resetSucceeded = try {
-            health.signOutSdk()
-            true
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
+        val authorizationRevoked =
+            !revokeAuthorization || localState.revokeHealthSetupAuthorization()
+        val resetSucceeded = if (!authorizationRevoked) {
             false
+        } else {
+            try {
+                health.signOutSdk()
+                true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                false
+            }
         }
         _state.update { current ->
             current.copy(
@@ -3698,7 +3707,7 @@ class AppSession(
         signOutLabel: String = "Sign out and start fresh",
     ) {
         closeProductAuthorityForBoundary()
-        if (!resetHealthSdkAtTrustBoundary()) return
+        if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         publishBackendBootstrapFailure(
             message = message,
             canRetry = false,
@@ -3712,7 +3721,7 @@ class AppSession(
         signOutLabel: String = "Sign out and start fresh",
     ) {
         closeProductAuthorityForBoundary()
-        if (!resetHealthSdkAtTrustBoundary()) return
+        if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Failed(
@@ -3858,24 +3867,33 @@ class AppSession(
 
     private suspend fun resetHealthSdkAtTrustBoundary(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+        revokeAuthorization: Boolean = false,
     ): Boolean {
         invalidateSessionEpoch(acceptedConsentOwner)
+        if (revokeAuthorization && !localState.revokeHealthSetupAuthorization()) {
+            publishHealthResetFailure()
+            return false
+        }
         return try {
             healthMutex.withLock { health.signOutSdk() }
             true
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            _state.update { current ->
-                current.copy(
-                    phase = AppPhase.Failed(
-                        message = "Murph couldn't safely reset health sync. Keep the app open and try again.",
-                        canRetry = true,
-                        canSignOut = true,
-                    ),
-                )
-            }
+            publishHealthResetFailure()
             false
+        }
+    }
+
+    private fun publishHealthResetFailure() {
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = "Murph couldn't safely reset health sync. Keep the app open and try again.",
+                    canRetry = true,
+                    canSignOut = true,
+                ),
+            )
         }
     }
 
