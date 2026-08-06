@@ -2252,7 +2252,7 @@ class AppSession(
             (previousMemberKey == null && health.isSignedIn()) ||
                 (previousMemberKey != null && previousMemberKey != authState.memberKey)
         if (mustDistrustPersistedHealthSession) {
-            if (!resetHealthSdkAtTrustBoundary()) return
+            if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
             clearInitialOnboardingState()
             localState.clearMemberScopedState()
         }
@@ -2524,8 +2524,8 @@ class AppSession(
     }
 
     private suspend fun enterSignedOut() {
-        if (health.isSignedIn() || localState.memberKey != null) {
-            if (!resetHealthSdkAtTrustBoundary()) return
+        if (health.isSignedIn() || localState.memberKey != null || healthWasRequested()) {
+            if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         } else {
             invalidateSessionEpoch()
         }
@@ -2586,12 +2586,22 @@ class AppSession(
         val retainedConsentOwner = (observed as? AuthSessionState.SignedIn)?.let {
             retainAcceptedConsentForUnverifiedCandidate(it)
         }
+        val revokeAuthorization = observed == AuthSessionState.SignedOut ||
+            (
+                observed is AuthSessionState.SignedIn &&
+                    !isUnverifiedDifferentMemberCandidate(observed)
+                )
         closeProductAuthorityForBoundary()
         val resetSucceeded = if (healthAlreadySignedOut) {
             invalidateSessionEpoch(retainedConsentOwner)
-            true
+            if (revokeAuthorization && !localState.revokeHealthSetupAuthorization()) {
+                publishHealthResetFailure()
+                false
+            } else {
+                true
+            }
         } else {
-            resetHealthSdkAtTrustBoundary(retainedConsentOwner)
+            resetHealthSdkAtTrustBoundary(retainedConsentOwner, revokeAuthorization)
         }
         if (!resetSucceeded) return true
         if (observed == AuthSessionState.SignedOut) {
@@ -3110,6 +3120,7 @@ class AppSession(
                 failCurrentSessionWhileHealthLocked(
                     message = "Your session needs a refresh. Sign in again.",
                     canRetry = false,
+                    revokeAuthorization = true,
                 )
             ) {
                 finishSignedOut()
@@ -3145,6 +3156,7 @@ class AppSession(
                     failCurrentSessionWhileHealthLocked(
                         message = "Your signed-in account changed. Try again to continue.",
                         canRetry = true,
+                        revokeAuthorization = true,
                     )
                 ) {
                     finishChangedMemberAuthTransition()
@@ -3215,19 +3227,17 @@ class AppSession(
     ): Boolean {
         closeProductAuthorityForBoundary()
         invalidateSessionEpoch(retainedConsentOwner)
-        val authorizationRevoked =
-            !revokeAuthorization || localState.revokeHealthSetupAuthorization()
-        val resetSucceeded = if (!authorizationRevoked) {
+        if (revokeAuthorization && !localState.revokeHealthSetupAuthorization()) {
+            publishHealthResetFailure()
+            return false
+        }
+        val resetSucceeded = try {
+            health.signOutSdk()
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
             false
-        } else {
-            try {
-                health.signOutSdk()
-                true
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                false
-            }
         }
         _state.update { current ->
             current.copy(
@@ -3239,7 +3249,7 @@ class AppSession(
                     } else {
                         "Murph couldn't safely reset health sync. Keep the app open and try signing out again."
                     },
-                    canRetry = canRetry && resetSucceeded,
+                    canRetry = if (resetSucceeded) canRetry else true,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
                 ),
@@ -3642,7 +3652,7 @@ class AppSession(
 
     private suspend fun publishAccountConflictFailure() {
         closeProductAuthorityForBoundary()
-        if (!resetHealthSdkAtTrustBoundary()) return
+        if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         finishAccountConflictFailure()
     }
 
@@ -3650,6 +3660,10 @@ class AppSession(
     private suspend fun publishAccountConflictFailureWhileHealthLocked() {
         closeProductAuthorityForBoundary()
         invalidateSessionEpoch()
+        if (!localState.revokeHealthSetupAuthorization()) {
+            publishHealthResetFailure()
+            return
+        }
         try {
             health.signOutSdk()
         } catch (error: CancellationException) {
