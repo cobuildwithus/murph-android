@@ -987,6 +987,69 @@ class AppSessionTest {
     }
 
     @Test
+    fun synchronousHealthSetupDuringAddressBookRefreshRunsTheFirstSyncOnce() = runTest {
+        val fixture = fixture(contacts = SupportedContacts)
+        fixture.session.start()
+        val addressStatusGate = CompletableDeferred<Unit>()
+        fixture.api.addressStatusGate = addressStatusGate
+        fixture.api.addressStatusEntered = CompletableDeferred()
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        fixture.api.addressStatusEntered.await()
+        fixture.api.addressStatusGate = null
+
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        assertEquals(1, fixture.health.syncCalls)
+
+        addressStatusGate.complete(Unit)
+        foreground.await()
+
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun reconnectDuringAddressBookRefreshRunsTheReplacementSyncOnce() = runTest {
+        val fixture = fixture(contacts = SupportedContacts)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.session.start()
+        val syncCallsBeforeReconnect = fixture.health.syncCalls
+        val addressStatusGate = CompletableDeferred<Unit>()
+        fixture.api.addressStatusGate = addressStatusGate
+        fixture.api.addressStatusEntered = CompletableDeferred()
+
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        fixture.api.addressStatusEntered.await()
+        fixture.api.addressStatusGate = null
+
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        assertEquals(syncCallsBeforeReconnect + 1, fixture.health.syncCalls)
+
+        addressStatusGate.complete(Unit)
+        foreground.await()
+
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(syncCallsBeforeReconnect + 1, fixture.health.syncCalls)
+    }
+
+    @Test
     fun staleForegroundRefreshCannotQueueASecondFirstSync() = runTest {
         val fixture = fixture()
         fixture.session.start()
