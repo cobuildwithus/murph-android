@@ -80,6 +80,24 @@ comparison without using a real account or health data. Supported `scenario`
 values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
 `attention`, `consentRequired`, `consentLoadFailure`, and `failure`.
 
+Every PR that changes a shipped path under `app/src/main/` or
+`app/src/release/` must include current emulator PNGs from the exact pushed
+head. Keep them under `app-store-assets/review-evidence/<feature>/`, embed their
+exact-head raw GitHub URLs in the PR's `Android visual proof` section, and name
+physical-device-only gaps. Use only debug synthetic fixtures and raw 8-bit RGBA
+emulator screenshots. Inspect the pixels and keep no text, profile, Exif, or
+private metadata.
+
+`Android Visual Proof / verify` uses a base-owned `pull_request_target`
+workflow that executes only the trusted base verifier while inspecting the
+candidate as data. A PR cannot weaken the gate and certify itself. The bootstrap
+PR needs independent review because its base does not yet contain the workflow.
+Run its contract tests locally with:
+
+```bash
+node --test scripts/check-android-visual-proof.test.mjs
+```
+
 Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
 
 ## ReviewGPT

@@ -6,6 +6,13 @@ if [ ! -x ./gradlew ]; then
     exit 1
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+    echo "Node.js is required to test the Android visual-proof verifier." >&2
+    exit 1
+fi
+
+node --test scripts/check-android-visual-proof.test.mjs
+
 if grep -Fq 'LaunchedEffect(value)' app/src/main/java/ai/withmurph/companion/ui/login/LoginScreen.kt; then
     echo "OTP submission must not run from composition." >&2
     exit 1
