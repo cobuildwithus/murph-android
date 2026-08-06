@@ -81,9 +81,29 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class AppTab {
+internal enum class AppTab {
     Home,
     Settings,
+}
+
+internal data class ReadyAppShellState(
+    val activeTab: AppTab,
+    val showsTabBar: Boolean,
+    val showsReconnect: Boolean,
+)
+
+internal fun readyAppShellState(
+    selectedTab: AppTab,
+    initialSetupStep: InitialSetupStep,
+    healthReconnectRequired: Boolean,
+): ReadyAppShellState {
+    val setupComplete = initialSetupStep == InitialSetupStep.Complete
+    val activeTab = if (setupComplete) selectedTab else AppTab.Home
+    return ReadyAppShellState(
+        activeTab = activeTab,
+        showsTabBar = setupComplete,
+        showsReconnect = healthReconnectRequired && activeTab == AppTab.Home,
+    )
 }
 
 @Composable
@@ -132,9 +152,12 @@ private fun ReadyApp(
     var showsWhoopGuide by rememberSaveable { mutableStateOf(false) }
     var connectAfterConsent by rememberSaveable { mutableStateOf(false) }
     var shareAddressBookAfterConsent by rememberSaveable { mutableStateOf(false) }
-    val showsReconnect = state.healthReconnectRequired
     val setupComplete = state.initialSetupStep == InitialSetupStep.Complete
-    val activeTab = if (setupComplete) selectedTab else AppTab.Home
+    val shellState = readyAppShellState(
+        selectedTab = selectedTab,
+        initialSetupStep = state.initialSetupStep,
+        healthReconnectRequired = state.healthReconnectRequired,
+    )
     val bannerRecovery = state.launchConsentRecovery?.takeIf { !it.showSheet }
 
     LaunchedEffect(state.initialSetupStep) {
@@ -159,8 +182,8 @@ private fun ReadyApp(
             connectAfterConsent = false
         }
     }
-    LaunchedEffect(showsReconnect) {
-        if (showsReconnect) {
+    LaunchedEffect(state.healthReconnectRequired) {
+        if (state.healthReconnectRequired) {
             showsHealthConsent = false
             showsAddressBookConsent = false
             showsWhoopGuide = false
@@ -183,7 +206,7 @@ private fun ReadyApp(
         containerColor = MurphColors.Cream,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            if (!showsReconnect && setupComplete) {
+            if (shellState.showsTabBar) {
                 MurphTabBar(
                     selectedTab = selectedTab,
                     onSelect = { selectedTab = it },
@@ -200,7 +223,7 @@ private fun ReadyApp(
                 )
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                if (showsReconnect) {
+                if (shellState.showsReconnect) {
                     ReconnectHealthContent(
                         availability = state.healthAvailability,
                         message = state.healthMessage,
@@ -216,7 +239,7 @@ private fun ReadyApp(
                         onSignOut = actions.onSignOut,
                     )
                 } else {
-                    when (activeTab) {
+                    when (shellState.activeTab) {
                         AppTab.Home -> HomeScreen(
                             state = state,
                             onConnectHealth = {

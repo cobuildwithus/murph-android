@@ -277,13 +277,6 @@ class HttpCompanionApi(
         }
     }
 
-    private fun readResponseBody(connection: HttpURLConnection, status: Int): String {
-        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-        return stream?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
-            reader.readText().take(MAX_RESPONSE_CHARS)
-        }.orEmpty()
-    }
-
     private fun JSONObject.optNullableString(key: String): String? {
         if (isNull(key)) return null
         return optString(key).takeIf(String::isNotBlank)
@@ -302,8 +295,30 @@ class HttpCompanionApi(
         const val INITIAL_ONBOARDING_CONTACT_CARD_PATH =
             "/api/device-sync/companion/initial-onboarding/contact-card"
         const val LAUNCH_CONSENT_PATH = "/api/device-sync/companion/legal-consent"
-        const val MAX_RESPONSE_CHARS = 128 * 1024
     }
+}
+
+internal const val MAX_RESPONSE_CHARS = 128 * 1024
+private const val MAX_UTF8_BYTES_PER_RESPONSE_CHAR = 4L
+
+internal fun readResponseBody(connection: HttpURLConnection, status: Int): String {
+    if (connection.contentLengthLong > MAX_RESPONSE_CHARS * MAX_UTF8_BYTES_PER_RESPONSE_CHAR) {
+        throw CompanionApiException.InvalidResponse
+    }
+
+    val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+    return stream?.reader(StandardCharsets.UTF_8)?.use { reader ->
+        val body = StringBuilder()
+        val chunk = CharArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val remaining = MAX_RESPONSE_CHARS - body.length
+            val read = reader.read(chunk, 0, minOf(chunk.size, remaining + 1))
+            if (read < 0) break
+            if (read > remaining) throw CompanionApiException.InvalidResponse
+            body.append(chunk, 0, read)
+        }
+        body.toString()
+    }.orEmpty()
 }
 
 internal object CompanionAdmissionApiContract {
