@@ -7,6 +7,17 @@
     <!-- Optional, foreground-only friendly-name projection. No contact writes or background sync. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!--
+        Optional automatic meal capture. Full image-library access is required
+        because selected-photo access cannot observe future Camera inserts.
+        People who prefer not to grant it can keep texting photos in their Murph conversation.
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!-- Vital's optional headless sync is intentionally excluded from this release. -->
     <uses-permission
         android:name="android.permission.RECEIVE_BOOT_COMPLETED"

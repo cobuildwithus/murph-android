@@ -17,6 +17,7 @@ import ai.withmurph.companion.ui.components.MurphLinkButton
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.home.HomeScreen
 import ai.withmurph.companion.ui.login.LoginScreen
+import ai.withmurph.companion.ui.meals.MealsScreen
 import ai.withmurph.companion.ui.settings.SettingsScreen
 import ai.withmurph.companion.ui.theme.MurphColors
 import androidx.compose.foundation.BorderStroke
@@ -38,6 +39,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,8 +67,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class AppTab {
+enum class MurphDestination {
     Home,
+    Meals,
     Settings,
 }
 
@@ -75,6 +78,7 @@ fun MurphApp(
     appState: AppUiState,
     loginState: LoginUiState,
     actions: MurphActions,
+    initialDestination: MurphDestination = MurphDestination.Home,
 ) {
     when (val phase = appState.phase) {
         AppPhase.Launching -> LoadingScreen()
@@ -91,7 +95,7 @@ fun MurphApp(
             onOpenPrivacy = actions.onOpenPrivacy,
             onOpenTerms = actions.onOpenTerms,
         )
-        AppPhase.Ready -> ReadyApp(appState, actions)
+        AppPhase.Ready -> ReadyApp(appState, actions, initialDestination)
         is AppPhase.Failed -> FailureScreen(phase, actions)
     }
 }
@@ -101,10 +105,12 @@ fun MurphApp(
 private fun ReadyApp(
     state: AppUiState,
     actions: MurphActions,
+    initialDestination: MurphDestination,
 ) {
-    var selectedTab by rememberSaveable { mutableStateOf(AppTab.Home) }
+    var selectedTab by rememberSaveable { mutableStateOf(initialDestination) }
     var showsHealthConsent by rememberSaveable { mutableStateOf(false) }
     var showsAddressBookConsent by rememberSaveable { mutableStateOf(false) }
+    var showsMealPhotoConsent by rememberSaveable { mutableStateOf(false) }
     var showsWhoopGuide by rememberSaveable { mutableStateOf(false) }
     var connectAfterConsent by rememberSaveable { mutableStateOf(false) }
     var shareAddressBookAfterConsent by rememberSaveable { mutableStateOf(false) }
@@ -131,6 +137,7 @@ private fun ReadyApp(
         if (state.launchConsentRecovery != null) {
             showsHealthConsent = false
             showsAddressBookConsent = false
+            showsMealPhotoConsent = false
             showsWhoopGuide = false
             connectAfterConsent = false
             shareAddressBookAfterConsent = false
@@ -150,7 +157,7 @@ private fun ReadyApp(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (selectedTab) {
-                AppTab.Home -> HomeScreen(
+                MurphDestination.Home -> HomeScreen(
                     state = state,
                     onConnectHealth = {
                         if (state.launchConsentRecovery == null) {
@@ -175,7 +182,28 @@ private fun ReadyApp(
                         }
                     },
                 )
-                AppTab.Settings -> SettingsScreen(
+                MurphDestination.Meals -> MealsScreen(
+                    state = state,
+                    onOpenSettings = actions.onOpenAppSettings,
+                    onEnable = {
+                        if (state.launchConsentRecovery == null) {
+                            showsMealPhotoConsent = true
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
+                    onRefresh = {
+                        if (state.launchConsentRecovery == null) {
+                            actions.onRefreshMealPhotos()
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
+                    onTurnOff = actions.onTurnOffMealPhotos,
+                    onApprove = actions.onApproveMealPhoto,
+                    onDismiss = actions.onDismissMealPhoto,
+                )
+                MurphDestination.Settings -> SettingsScreen(
                     state = state,
                     onShareAddressBook = {
                         if (state.launchConsentRecovery == null) {
@@ -274,6 +302,25 @@ private fun ReadyApp(
         }
     }
 
+    if (showsMealPhotoConsent && state.launchConsentRecovery == null) {
+        ModalBottomSheet(
+            onDismissRequest = { showsMealPhotoConsent = false },
+            modifier = Modifier.padding(top = 48.dp).fillMaxHeight(),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MurphColors.Cream,
+            dragHandle = { MurphSheetHandle() },
+        ) {
+            MealPhotoConsentContent(
+                onContinue = {
+                    showsMealPhotoConsent = false
+                    actions.onEnableMealPhotos()
+                },
+                onNotNow = { showsMealPhotoConsent = false },
+                onOpenPrivacy = actions.onOpenPrivacy,
+            )
+        }
+    }
+
     if (showsWhoopGuide && state.launchConsentRecovery == null) {
         ModalBottomSheet(
             onDismissRequest = { showsWhoopGuide = false },
@@ -289,6 +336,47 @@ private fun ReadyApp(
                 onBack = { showsWhoopGuide = false },
             )
         }
+    }
+}
+
+@Composable
+private fun MealPhotoConsentContent(
+    onContinue: () -> Unit,
+    onNotNow: () -> Unit,
+    onOpenPrivacy: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        MurphIcon(
+            kind = MurphIconKind.Shield,
+            modifier = Modifier.size(40.dp),
+            contentDescription = null,
+        )
+        Text(
+            text = "Review new meal-photo suggestions",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MurphColors.Slate,
+        )
+        Text(
+            text = "Android will ask for Full Photos access so Murph can notice future photos in the background. Selected-photo access cannot observe future photos.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MurphColors.SlateMuted,
+        )
+        Text(
+            text = "Meal detection runs on this phone. Suggested photos stay here until you see the thumbnail and choose Yes, send. Before upload, Murph creates a new JPEG and strips embedded metadata.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MurphColors.SlateMuted,
+        )
+        MurphPrimaryButton("Continue to Photos access", onContinue)
+        MurphLinkButton("Not now", onNotNow)
+        MurphLinkButton("Read Murph's privacy policy", onOpenPrivacy)
     }
 }
 
@@ -479,20 +567,21 @@ private fun launchConsentDocuments(
 
 @Composable
 private fun MurphTabBar(
-    selectedTab: AppTab,
-    onSelect: (AppTab) -> Unit,
+    selectedTab: MurphDestination,
+    onSelect: (MurphDestination) -> Unit,
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(MurphColors.Cream)
             .navigationBarsPadding()
-            .padding(top = 8.dp, bottom = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
         Surface(
             modifier = Modifier
-                .width(250.dp)
+                .fillMaxWidth()
+                .widthIn(max = 340.dp)
                 .height(72.dp)
                 .shadow(
                     elevation = 14.dp,
@@ -511,15 +600,22 @@ private fun MurphTabBar(
                 MurphTab(
                     label = "Home",
                     icon = MurphIconKind.Home,
-                    selected = selectedTab == AppTab.Home,
-                    onClick = { onSelect(AppTab.Home) },
+                    selected = selectedTab == MurphDestination.Home,
+                    onClick = { onSelect(MurphDestination.Home) },
+                    modifier = Modifier.weight(1f),
+                )
+                MurphTab(
+                    label = "Meals",
+                    icon = MurphIconKind.Sparkles,
+                    selected = selectedTab == MurphDestination.Meals,
+                    onClick = { onSelect(MurphDestination.Meals) },
                     modifier = Modifier.weight(1f),
                 )
                 MurphTab(
                     label = "Settings",
                     icon = MurphIconKind.GearFilled,
-                    selected = selectedTab == AppTab.Settings,
-                    onClick = { onSelect(AppTab.Settings) },
+                    selected = selectedTab == MurphDestination.Settings,
+                    onClick = { onSelect(MurphDestination.Settings) },
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -891,6 +987,11 @@ data class MurphActions(
     val onShareAddressBook: () -> Unit,
     val onRefreshAddressBook: () -> Unit,
     val onStopAddressBook: () -> Unit,
+    val onEnableMealPhotos: () -> Unit,
+    val onRefreshMealPhotos: () -> Unit,
+    val onTurnOffMealPhotos: () -> Unit,
+    val onApproveMealPhoto: (String) -> Unit,
+    val onDismissMealPhoto: (String) -> Unit,
     val onShowLaunchConsent: () -> Unit,
     val onDismissLaunchConsent: () -> Unit,
     val onRetryLaunchConsent: () -> Unit,

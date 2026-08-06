@@ -13,8 +13,10 @@ import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LoginMethod
+import ai.withmurph.companion.core.MealPhotoCaptureState
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
+import ai.withmurph.companion.ui.MurphDestination
 import ai.withmurph.companion.ui.theme.MurphTheme
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -34,6 +36,7 @@ class ScreenshotActivity : ComponentActivity() {
                     appState = scenario.appState(now),
                     loginState = scenario.loginState(),
                     actions = NoOpActions,
+                    initialDestination = scenario.destination(),
                 )
             }
         }
@@ -53,6 +56,7 @@ private enum class ScreenshotScenario {
     Synced,
     Delayed,
     Attention,
+    Meals,
     ConsentRequired,
     ConsentLoadFailure,
     Failure;
@@ -65,6 +69,9 @@ private enum class ScreenshotScenario {
         Delayed -> ready(HealthSyncState.Delayed(now.minus(Duration.ofHours(48))))
         Attention -> ready(
             HealthSyncState.NeedsAttention(now.minus(Duration.ofHours(96))),
+        )
+        Meals -> ready(HealthSyncState.NotConnected).copy(
+            mealPhotoCapture = MealPhotoCaptureState.On,
         )
         ConsentRequired -> ready(HealthSyncState.NotConnected).copy(
             launchConsentRecovery = LaunchConsentRecoveryUiState(
@@ -103,6 +110,7 @@ private enum class ScreenshotScenario {
         Synced,
         Delayed,
         Attention,
+        Meals,
         ConsentRequired,
         ConsentLoadFailure,
         Failure -> LoginUiState()
@@ -116,6 +124,12 @@ private enum class ScreenshotScenario {
         totalResourceCount = 4,
         backendEnvironment = "screenshot",
     )
+
+    fun destination(): MurphDestination = if (this == Meals) {
+        MurphDestination.Meals
+    } else {
+        MurphDestination.Home
+    }
 
     companion object {
         fun from(value: String?): ScreenshotScenario =
@@ -171,6 +185,11 @@ private val NoOpActions = MurphActions(
     onShareAddressBook = {},
     onRefreshAddressBook = {},
     onStopAddressBook = {},
+    onEnableMealPhotos = {},
+    onRefreshMealPhotos = {},
+    onTurnOffMealPhotos = {},
+    onApproveMealPhoto = {},
+    onDismissMealPhoto = {},
     onShowLaunchConsent = {},
     onDismissLaunchConsent = {},
     onRetryLaunchConsent = {},

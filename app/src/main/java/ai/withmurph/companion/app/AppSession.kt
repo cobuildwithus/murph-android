@@ -22,8 +22,12 @@ import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
+import ai.withmurph.companion.core.MealPhotoActionResult
+import ai.withmurph.companion.core.MealPhotoCaptureControlling
+import ai.withmurph.companion.core.MealPhotoCaptureState
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
+import ai.withmurph.companion.core.UnsupportedMealPhotoCapture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -42,6 +46,7 @@ class AppSession(
     private val api: CompanionApi,
     private val health: HealthSyncing,
     private val contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
+    private val meals: MealPhotoCaptureControlling = UnsupportedMealPhotoCapture,
     private val localState: LocalState,
     private val config: AppConfig,
     private val now: () -> Instant = Instant::now,
@@ -50,6 +55,7 @@ class AppSession(
     private val startMutex = Mutex()
     private val healthMutex = Mutex()
     private val addressBookMutex = Mutex()
+    private val mealPhotoMutex = Mutex()
     private val launchConsentMutex = Mutex()
     private var hasCompletedStartup = false
     private var needsForegroundRefresh = false
@@ -57,11 +63,13 @@ class AppSession(
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
     private var pendingAddressBookPermissionFlow: PendingAddressBookPermissionFlow? = null
+    private var pendingMealPhotoPermissionFlow: PendingMealPhotoPermissionFlow? = null
     private val pendingAddressBookReconcileLock = Any()
     private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
     private var nextHealthPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
+    private var nextMealPhotoPermissionRequestId = 1
 
     private val _state = MutableStateFlow(
         AppUiState(totalResourceCount = health.totalResourceCount),
@@ -125,7 +133,7 @@ class AppSession(
                 ?: return@withLock null
             acceptLaunchConsentLocked(pending, status)
         } ?: return
-        resumeLaunchConsentFollowUp(followUp)
+        resumeLaunchConsentFollowUp(followUp, pending.resumeMealCapture)
     }
 
     fun consumeHealthPermissionLaunchRequest(requestId: Int): Boolean {
@@ -156,6 +164,215 @@ class AppSession(
                 return true
             }
         }
+    }
+
+    fun consumeMealPhotoPermissionLaunchRequest(requestId: Int): Boolean {
+        while (true) {
+            val current = _state.value
+            if (current.pendingMealPhotoPermissionRequestId != requestId) return false
+            if (
+                _state.compareAndSet(
+                    current,
+                    current.copy(pendingMealPhotoPermissionRequestId = null),
+                )
+            ) {
+                return true
+            }
+        }
+    }
+
+    suspend fun prepareAutomaticMealPhotoCapture(): Boolean {
+        if (hasActiveLaunchConsentRecovery()) {
+            showLaunchConsentRecovery()
+            return false
+        }
+        if (!meals.automaticCaptureSupported) return false
+        return mealPhotoMutex.withLock {
+            if (pendingMealPhotoPermissionFlow != null) return@withLock false
+            val memberKey = currentMemberKey ?: return@withLock false
+            val epoch = sessionEpoch
+            if (!ownsMealPhotoWork(memberKey, epoch)) return@withLock false
+            pendingMealPhotoPermissionFlow = PendingMealPhotoPermissionFlow(
+                epoch = epoch,
+                memberKey = memberKey,
+                previousState = _state.value.mealPhotoCapture,
+            )
+            val requestId = nextMealPhotoPermissionRequestId++
+            _state.update {
+                it.copy(
+                    mealPhotoCapture = MealPhotoCaptureState.Enabling,
+                    isMealPhotoBusy = true,
+                    mealPhotoMessage = null,
+                    pendingMealPhotoPermissionRequestId = requestId,
+                )
+            }
+            true
+        }
+    }
+
+    suspend fun completeMealPhotoPermissionFlow(fullAccessGranted: Boolean): Boolean {
+        val pending = pendingMealPhotoPermissionFlow ?: return false
+        return mealPhotoMutex.withLock {
+            if (pendingMealPhotoPermissionFlow !== pending) return@withLock false
+            pendingMealPhotoPermissionFlow = null
+            _state.update { it.copy(pendingMealPhotoPermissionRequestId = null) }
+            try {
+                if (!ownsMealPhotoWork(pending.memberKey, pending.epoch)) return@withLock false
+                if (!fullAccessGranted) {
+                    publishMealPhotoState(
+                        pending.memberKey,
+                        pending.epoch,
+                        MealPhotoCaptureState.NeedsFullAccess,
+                        "Meal photo suggestions need full Photos access. You can keep texting meal photos in your existing Murph conversation instead.",
+                    )
+                    return@withLock false
+                }
+                val captureState = meals.enable(pending.memberKey)
+                if (!ownsMealPhotoWork(pending.memberKey, pending.epoch)) return@withLock false
+                publishMealPhotoState(
+                    pending.memberKey,
+                    pending.epoch,
+                    captureState,
+                    mealPhotoMessage(captureState),
+                )
+                refreshMealPhotoReviews(pending.memberKey, pending.epoch)
+                captureState == MealPhotoCaptureState.On
+            } catch (_: CompanionApiException.ConsentRequired) {
+                if (ownsMealPhotoWork(pending.memberKey, pending.epoch)) {
+                    beginLaunchConsentRecovery(
+                        expectedEpoch = pending.epoch,
+                        memberKey = pending.memberKey,
+                        followUp = LaunchConsentFollowUp.EnableMealPhotoCapture,
+                        healthLockHeld = false,
+                    )
+                }
+                false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                publishMealPhotoState(
+                    pending.memberKey,
+                    pending.epoch,
+                    MealPhotoCaptureState.NeedsAttention,
+                    "Murph couldn't turn on meal photo suggestions. Try again.",
+                )
+                false
+            } finally {
+                if (ownsMealPhotoWork(pending.memberKey, pending.epoch)) {
+                    _state.update { it.copy(isMealPhotoBusy = false) }
+                }
+            }
+        }
+    }
+
+    fun cancelMealPhotoPermissionFlow(message: String? = null) {
+        val pending = pendingMealPhotoPermissionFlow
+        pendingMealPhotoPermissionFlow = null
+        _state.update { current ->
+            current.copy(
+                mealPhotoCapture = pending?.previousState ?: current.mealPhotoCapture,
+                isMealPhotoBusy = false,
+                mealPhotoMessage = message ?: current.mealPhotoMessage,
+                pendingMealPhotoPermissionRequestId = null,
+            )
+        }
+    }
+
+    suspend fun refreshMealPhotoCapture(showBusy: Boolean = true) {
+        val memberKey = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        if (!ownsMealPhotoWork(memberKey, epoch)) return
+        val local = meals.currentState(memberKey)
+        if (local == MealPhotoCaptureState.Off || local == MealPhotoCaptureState.Unavailable) {
+            publishMealPhotoState(memberKey, epoch, local, null)
+            return
+        }
+        mealPhotoMutex.withLock {
+            if (!ownsMealPhotoWork(memberKey, epoch)) return@withLock
+            if (showBusy) _state.update { it.copy(isMealPhotoBusy = true, mealPhotoMessage = null) }
+            try {
+                var captureState = meals.refresh(memberKey)
+                if (captureState == MealPhotoCaptureState.NeedsAttention) {
+                    val consent = api.fetchLaunchConsentStatus(memberKey)
+                    if (!consent.launchGranted) {
+                        beginLaunchConsentRecovery(
+                            expectedEpoch = epoch,
+                            memberKey = memberKey,
+                            followUp = LaunchConsentFollowUp.RefreshMealPhotoCapture,
+                            healthLockHeld = false,
+                        )
+                        return@withLock
+                    }
+                    captureState = meals.resumeAfterConsent(memberKey)
+                }
+                publishMealPhotoState(memberKey, epoch, captureState, mealPhotoMessage(captureState))
+                refreshMealPhotoReviews(memberKey, epoch)
+            } catch (_: CompanionApiException.ConsentRequired) {
+                beginLaunchConsentRecovery(
+                    expectedEpoch = epoch,
+                    memberKey = memberKey,
+                    followUp = LaunchConsentFollowUp.RefreshMealPhotoCapture,
+                    healthLockHeld = false,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                publishMealPhotoState(
+                    memberKey,
+                    epoch,
+                    MealPhotoCaptureState.NeedsAttention,
+                    "Meal photo suggestions need attention. Try again when you're online.",
+                )
+            } finally {
+                if (ownsMealPhotoWork(memberKey, epoch)) {
+                    _state.update { it.copy(isMealPhotoBusy = false) }
+                }
+            }
+        }
+    }
+
+    suspend fun turnOffMealPhotoCapture(): Boolean {
+        val memberKey = currentMemberKey ?: return false
+        val epoch = sessionEpoch
+        _state.update { it.copy(isMealPhotoBusy = true, mealPhotoMessage = null) }
+        // Reach the service's durable fence immediately; an upload/refresh may currently own the
+        // UI mutex, and explicit Off must cancel it rather than wait behind it.
+        val disabled = try {
+            meals.disable(memberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+        mealPhotoMutex.withLock {
+            if (ownsMealPhotoWork(memberKey, epoch)) {
+                _state.update {
+                    it.copy(
+                        mealPhotoCapture = if (disabled) {
+                            MealPhotoCaptureState.Off
+                        } else {
+                            MealPhotoCaptureState.NeedsAttention
+                        },
+                        isMealPhotoBusy = false,
+                        mealPhotoMessage = if (disabled) {
+                            "Meal photo suggestions are off."
+                        } else {
+                            "Meal photo suggestions are off on this phone, but Murph still needs to finish removing remote access. Try again when you're online."
+                        },
+                        mealPhotoReviewItems = emptyList(),
+                    )
+                }
+            }
+        }
+        return disabled
+    }
+
+    suspend fun approveMealPhoto(captureId: String) {
+        updateMealPhotoReview(captureId, approve = true)
+    }
+
+    suspend fun dismissMealPhoto(captureId: String) {
+        updateMealPhotoReview(captureId, approve = false)
     }
 
     suspend fun prepareAddressBookSharing(): Boolean {
@@ -1002,6 +1219,11 @@ class AppSession(
                 !_state.value.authVerifiedOnline
             ) {
                 reconcile(force = true)
+            } else if (
+                _state.value.phase == AppPhase.Ready &&
+                _state.value.authVerifiedOnline
+            ) {
+                refreshMealPhotoCapture(showBusy = false)
             }
             return
         }
@@ -1013,6 +1235,8 @@ class AppSession(
             _state.value.authVerifiedOnline
         ) {
             reconcileAddressBookForeground(showBusy = false)
+            refreshMealPhotoCapture(showBusy = false)
+            if (hasActiveLaunchConsentRecovery()) return
         }
         if (ownsPendingHealthConnection()) {
             return
@@ -1125,6 +1349,13 @@ class AppSession(
     }
 
     suspend fun signOut() = withContext(NonCancellable) {
+        // Close upload authority before the durable sign-out tombstone can survive process death.
+        if (!meals.suspendAtTrustBoundary()) {
+            publishPendingSignOutFailure(
+                "We couldn't safely pause meal photo suggestions. Keep Murph open and try again.",
+            )
+            return@withContext
+        }
         if (!localState.beginSignOut()) {
             _state.update {
                 it.copy(
@@ -1154,7 +1385,7 @@ class AppSession(
 
     private suspend fun enforceHealthSetupAuthorization(): Boolean {
         if (!health.isSignedIn() || healthWasRequested()) return true
-        if (!resetHealthSdkAtTrustBoundary()) return false
+        if (!resetMemberScopedServicesAtTrustBoundary()) return false
         currentMemberKey = null
         localState.clearMemberScopedState()
         return true
@@ -1169,7 +1400,7 @@ class AppSession(
             (previousMemberKey == null && health.isSignedIn()) ||
                 (previousMemberKey != null && previousMemberKey != authState.memberKey)
         if (mustDistrustPersistedHealthSession) {
-            if (!resetHealthSdkAtTrustBoundary()) return
+            if (!resetMemberScopedServicesAtTrustBoundary()) return
             localState.clearMemberScopedState()
         }
         localState.memberKey = authState.memberKey
@@ -1294,6 +1525,13 @@ class AppSession(
                 } else {
                     null
                 },
+                mealPhotoCapture = meals.currentState(authState.memberKey),
+                isMealPhotoBusy = false,
+                mealPhotoMessage = if (authState.verifiedOnline) {
+                    null
+                } else {
+                    "You're offline. Meal photo suggestions will resume after Murph verifies your session."
+                },
             )
         }
         if (
@@ -1301,6 +1539,10 @@ class AppSession(
             ownsAddressBookWork(authState.memberKey, epoch)
         ) {
             reconcileAddressBookForeground(showBusy = false)
+        }
+        if (authState.verifiedOnline && ownsMealPhotoWork(authState.memberKey, epoch)) {
+            refreshMealPhotoCapture(showBusy = false)
+            if (hasActiveLaunchConsentRecovery()) return
         }
         if (
             healthWasRequested() &&
@@ -1339,8 +1581,14 @@ class AppSession(
     }
 
     private suspend fun enterSignedOut() {
-        if (health.isSignedIn() || localState.memberKey != null) {
-            if (!resetHealthSdkAtTrustBoundary()) return
+        val mealState = meals.currentState(localState.memberKey)
+        if (
+            health.isSignedIn() ||
+            localState.memberKey != null ||
+            mealState != MealPhotoCaptureState.Off &&
+            mealState != MealPhotoCaptureState.Unavailable
+        ) {
+            if (!resetMemberScopedServicesAtTrustBoundary()) return
         } else {
             invalidateSessionEpoch()
         }
@@ -1353,7 +1601,7 @@ class AppSession(
         )
     }
 
-    private fun restoreOfflineIfPossible() {
+    private suspend fun restoreOfflineIfPossible() {
         val memberKey = localState.memberKey
         if (memberKey == null) {
             _state.update {
@@ -1393,6 +1641,8 @@ class AppSession(
                 } else {
                     null
                 },
+                mealPhotoCapture = meals.currentState(memberKey),
+                mealPhotoMessage = "You're offline. Meal photo suggestions will resume after Murph verifies your session.",
             )
         }
     }
@@ -1574,6 +1824,12 @@ class AppSession(
         if (!localState.signOutPending) return
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
+        if (!meals.suspendAtTrustBoundary()) {
+            publishPendingSignOutFailure(
+                "We couldn't safely pause meal photo suggestions. Keep Murph open and try again.",
+            )
+            return
+        }
         try {
             healthMutex.withLock { health.signOutSdk() }
         } catch (error: CancellationException) {
@@ -1581,6 +1837,19 @@ class AppSession(
         } catch (_: Exception) {
             publishPendingSignOutFailure(
                 "We couldn't safely reset health sync. Keep Murph open and try again.",
+            )
+            return
+        }
+        val mealsDisabled = try {
+            meals.disable(localState.memberKey ?: currentMemberKey ?: return)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+        if (!mealsDisabled) {
+            publishPendingSignOutFailure(
+                "We couldn't safely remove meal-photo suggestion access. Keep Murph open and try again.",
             )
             return
         }
@@ -1848,7 +2117,7 @@ class AppSession(
         message: String,
         canRetry: Boolean,
     ) {
-        if (!resetHealthSdkAtTrustBoundary()) return
+        if (!resetMemberScopedServicesAtTrustBoundary()) return
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Failed(
@@ -1975,6 +2244,41 @@ class AppSession(
         }
     }
 
+    /** The fence blocks new meal work; Junction remains the first service actually torn down. */
+    private suspend fun resetMemberScopedServicesAtTrustBoundary(): Boolean {
+        if (!meals.suspendAtTrustBoundary()) {
+            _state.update { current ->
+                current.copy(
+                    phase = AppPhase.Failed(
+                        message = "Murph couldn't safely pause meal photo suggestions. Keep the app open and try again.",
+                        canRetry = true,
+                        canSignOut = true,
+                    ),
+                )
+            }
+            return false
+        }
+        if (!resetHealthSdkAtTrustBoundary()) return false
+        val disabled = try {
+            meals.disable(localState.memberKey ?: currentMemberKey ?: return false)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+        if (disabled) return true
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = "Murph couldn't safely remove meal-photo suggestion access. Keep the app open and try again.",
+                    canRetry = true,
+                    canSignOut = true,
+                ),
+            )
+        }
+        return false
+    }
+
     private suspend fun beginLaunchConsentRecovery(
         expectedEpoch: Int,
         memberKey: String,
@@ -1994,6 +2298,12 @@ class AppSession(
             prioritizeActiveLaunchConsentFollowUp(followUp)
             return
         }
+        val resumeMealCapture = followUp == LaunchConsentFollowUp.EnableMealPhotoCapture ||
+            followUp == LaunchConsentFollowUp.RefreshMealPhotoCapture ||
+            meals.currentState(memberKey) !in setOf(
+                MealPhotoCaptureState.Off,
+                MealPhotoCaptureState.Unavailable,
+            )
         invalidateSessionEpoch()
         currentMemberKey = memberKey
         localState.memberKey = memberKey
@@ -2001,6 +2311,7 @@ class AppSession(
             epoch = sessionEpoch,
             memberKey = memberKey,
             followUp = followUp,
+            resumeMealCapture = resumeMealCapture,
         )
         pendingLaunchConsentRecovery = pending
         _state.update { current ->
@@ -2077,15 +2388,29 @@ class AppSession(
             current.copy(
                 launchConsentRecovery = current.launchConsentRecovery?.copy(
                     phase = LaunchConsentRecoveryPhase.Pausing,
-                    message = "Pausing health sync before loading consent.",
+                    message = "Pausing health sync and meal photo suggestions before loading consent.",
                     canDismiss = false,
                     canAccept = false,
                 ) ?: LaunchConsentRecoveryUiState(
                     phase = LaunchConsentRecoveryPhase.Pausing,
-                    message = "Pausing health sync before loading consent.",
+                    message = "Pausing health sync and meal photo suggestions before loading consent.",
                     showSheet = true,
                 ),
             )
+        }
+        val mealTeardownSucceeded = try {
+            meals.pauseForConsentRecovery(pending.memberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+        if (!mealTeardownSucceeded) {
+            publishLaunchConsentLoadFailure(
+                pending,
+                "Murph couldn't safely pause meal photo suggestions. Try again, or sign out.",
+            )
+            return
         }
         val teardownSucceeded = try {
             if (healthLockHeld) {
@@ -2365,7 +2690,10 @@ class AppSession(
         }
     }
 
-    private suspend fun resumeLaunchConsentFollowUp(followUp: LaunchConsentFollowUp) {
+    private suspend fun resumeLaunchConsentFollowUp(
+        followUp: LaunchConsentFollowUp,
+        resumeMealCapture: Boolean,
+    ) {
         try {
             when (followUp) {
                 LaunchConsentFollowUp.Reconcile -> reconcile(force = true)
@@ -2376,6 +2704,9 @@ class AppSession(
                 LaunchConsentFollowUp.ReconcileAddressBook ->
                     reconcileAddressBookForeground(showBusy = false)
                 LaunchConsentFollowUp.StopAddressBookSharing -> stopAddressBookSharing()
+                LaunchConsentFollowUp.EnableMealPhotoCapture,
+                LaunchConsentFollowUp.RefreshMealPhotoCapture,
+                -> Unit
                 is LaunchConsentFollowUp.AutomaticAddressBookDeletion ->
                     resumeAutomaticAddressBookDeletion(followUp.mutation)
                 is LaunchConsentFollowUp.CompleteHealthPermission ->
@@ -2393,11 +2724,51 @@ class AppSession(
                     completeAddressBookPermissionFlow(permissionGranted = true)
                 }
             }
+            if (resumeMealCapture && _state.value.phase == AppPhase.Ready) {
+                resumeMealPhotoCaptureAfterConsent()
+            }
         } finally {
             if (!hasActiveLaunchConsentRecovery()) {
                 _state.update { current ->
                     current.copy(launchConsentRecovery = null)
                 }
+            }
+        }
+    }
+
+    private suspend fun resumeMealPhotoCaptureAfterConsent() {
+        val memberKey = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        if (!ownsMealPhotoWork(memberKey, epoch)) return
+        val localState = meals.currentState(memberKey)
+        if (localState == MealPhotoCaptureState.Off || localState == MealPhotoCaptureState.Unavailable) {
+            publishMealPhotoState(memberKey, epoch, localState, null)
+            return
+        }
+        if (localState == MealPhotoCaptureState.On) {
+            publishMealPhotoState(memberKey, epoch, localState, null)
+            refreshMealPhotoReviews(memberKey, epoch)
+            return
+        }
+        mealPhotoMutex.withLock {
+            if (!ownsMealPhotoWork(memberKey, epoch)) return@withLock
+            _state.update { it.copy(isMealPhotoBusy = true, mealPhotoMessage = null) }
+            val captureState = try {
+                meals.resumeAfterConsent(memberKey)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                MealPhotoCaptureState.NeedsAttention
+            }
+            publishMealPhotoState(
+                memberKey,
+                epoch,
+                captureState,
+                mealPhotoMessage(captureState),
+            )
+            refreshMealPhotoReviews(memberKey, epoch)
+            if (ownsMealPhotoWork(memberKey, epoch)) {
+                _state.update { it.copy(isMealPhotoBusy = false) }
             }
         }
     }
@@ -2885,7 +3256,103 @@ class AppSession(
             memberKey == localState.memberKey &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.authVerifiedOnline &&
+            pendingLaunchConsentRecovery == null &&
             !localState.signOutPending
+
+    private fun ownsMealPhotoWork(memberKey: String, epoch: Int): Boolean =
+        epoch == sessionEpoch &&
+            memberKey == currentMemberKey &&
+            memberKey == localState.memberKey &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.authVerifiedOnline &&
+            pendingLaunchConsentRecovery == null &&
+            !localState.signOutPending
+
+    private fun publishMealPhotoState(
+        memberKey: String,
+        epoch: Int,
+        captureState: MealPhotoCaptureState,
+        message: String?,
+    ) {
+        if (!ownsMealPhotoWork(memberKey, epoch)) return
+        _state.update {
+            it.copy(
+                mealPhotoCapture = captureState,
+                mealPhotoMessage = message,
+            )
+        }
+    }
+
+    private suspend fun refreshMealPhotoReviews(memberKey: String, epoch: Int) {
+        if (!ownsMealPhotoWork(memberKey, epoch)) return
+        val reviews = try {
+            meals.reviewItems()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return
+        }
+        if (ownsMealPhotoWork(memberKey, epoch)) {
+            _state.update { it.copy(mealPhotoReviewItems = reviews) }
+        }
+    }
+
+    private suspend fun updateMealPhotoReview(captureId: String, approve: Boolean) {
+        val memberKey = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        if (!ownsMealPhotoWork(memberKey, epoch)) return
+        mealPhotoMutex.withLock {
+            if (!ownsMealPhotoWork(memberKey, epoch)) return@withLock
+            _state.update {
+                it.copy(
+                    mealPhotoActionId = captureId,
+                    mealPhotoMessage = null,
+                )
+            }
+            val result = try {
+                if (approve) {
+                    meals.approveReviewItem(captureId)
+                } else {
+                    meals.dismissReviewItem(captureId)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                MealPhotoActionResult.TryAgain
+            }
+            refreshMealPhotoReviews(memberKey, epoch)
+            if (ownsMealPhotoWork(memberKey, epoch)) {
+                _state.update {
+                    it.copy(
+                        mealPhotoActionId = null,
+                        mealPhotoMessage = when (result) {
+                            MealPhotoActionResult.Sent -> "Meal photo sent."
+                            MealPhotoActionResult.Dismissed -> "Photo removed from review."
+                            MealPhotoActionResult.PhotoUnavailable ->
+                                "That photo is no longer available on this phone."
+                            MealPhotoActionResult.NeedsAttention ->
+                                "Meal photo suggestions need attention before this photo can be sent."
+                            MealPhotoActionResult.TryAgain -> "That didn't finish. Try again."
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    private fun mealPhotoMessage(captureState: MealPhotoCaptureState): String? = when (captureState) {
+        MealPhotoCaptureState.Unavailable ->
+            "Meal photo suggestions aren't available on this Android version."
+        MealPhotoCaptureState.Off,
+        MealPhotoCaptureState.On,
+        MealPhotoCaptureState.Enabling,
+        -> null
+        MealPhotoCaptureState.NeedsPhotosAccess,
+        MealPhotoCaptureState.NeedsFullAccess,
+        -> "Meal photo suggestions need full Photos access. You can keep texting meal photos in your existing Murph conversation instead."
+        MealPhotoCaptureState.NeedsAttention ->
+            "Meal photo suggestions need attention. Open Murph while online and try again."
+    }
 
     private fun createAddressBookMutation(baseRevision: Int): AddressBookMutation =
         AddressBookMutation(baseRevision, newMutationId())
@@ -2954,6 +3421,7 @@ class AppSession(
         sessionEpoch += 1
         pendingHealthConnection = null
         pendingAddressBookPermissionFlow = null
+        pendingMealPhotoPermissionFlow = null
         pendingLaunchConsentRecovery = null
         synchronized(pendingAddressBookReconcileLock) {
             pendingAddressBookReconcile = null
@@ -2962,9 +3430,13 @@ class AppSession(
             it.copy(
                 isConnectingHealth = false,
                 isAddressBookBusy = false,
+                isMealPhotoBusy = false,
+                mealPhotoActionId = null,
+                mealPhotoReviewItems = emptyList(),
                 launchConsentRecovery = null,
                 pendingHealthPermissionRequestId = null,
                 pendingAddressBookPermissionRequestId = null,
+                pendingMealPhotoPermissionRequestId = null,
             )
         }
     }
@@ -2992,6 +3464,12 @@ class AppSession(
         val ownedRevisionForPermissionLoss: Int?,
     )
 
+    private data class PendingMealPhotoPermissionFlow(
+        val epoch: Int,
+        val memberKey: String,
+        val previousState: MealPhotoCaptureState,
+    )
+
     private data class PendingAddressBookReconcile(
         val memberKey: String?,
         val epoch: Int,
@@ -3002,6 +3480,7 @@ class AppSession(
         val epoch: Int,
         val memberKey: String,
         var followUp: LaunchConsentFollowUp,
+        val resumeMealCapture: Boolean,
     )
 
     private sealed interface LaunchConsentFollowUp {
@@ -3011,6 +3490,8 @@ class AppSession(
         data object PrepareAddressBookPermission : LaunchConsentFollowUp
         data object ReconcileAddressBook : LaunchConsentFollowUp
         data object StopAddressBookSharing : LaunchConsentFollowUp
+        data object EnableMealPhotoCapture : LaunchConsentFollowUp
+        data object RefreshMealPhotoCapture : LaunchConsentFollowUp
         data class AutomaticAddressBookDeletion(
             val mutation: AddressBookMutation,
         ) : LaunchConsentFollowUp

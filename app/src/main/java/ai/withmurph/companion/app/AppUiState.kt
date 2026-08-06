@@ -4,6 +4,8 @@ import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.LaunchConsentStatus
+import ai.withmurph.companion.core.MealPhotoCaptureState
+import ai.withmurph.companion.core.MealPhotoReviewItem
 
 sealed interface AppPhase {
     data object Launching : AppPhase
@@ -35,7 +37,17 @@ data class AppUiState(
     val launchConsentRecovery: LaunchConsentRecoveryUiState? = null,
     val pendingHealthPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
+    val mealPhotoCapture: MealPhotoCaptureState = MealPhotoCaptureState.Off,
+    val isMealPhotoBusy: Boolean = false,
+    val mealPhotoActionId: String? = null,
+    val mealPhotoMessage: String? = null,
+    val mealPhotoReviewItems: List<MealPhotoReviewItem> = emptyList(),
+    val pendingMealPhotoPermissionRequestId: Int? = null,
 )
+
+internal fun shouldProtectAppSnapshot(state: AppUiState): Boolean =
+    state.phase == AppPhase.NeedsLogin ||
+        state.mealPhotoReviewItems.any { it.thumbnailJpeg != null }
 
 enum class LaunchConsentRecoveryPhase {
     Pausing,

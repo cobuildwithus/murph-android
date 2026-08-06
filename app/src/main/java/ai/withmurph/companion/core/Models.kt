@@ -154,6 +154,114 @@ data class AddressBookDeletionRequest(
     val mutation: AddressBookMutation,
 )
 
+data class MealPhotoCaptureEnrollmentRequest(
+    val appInstallationId: String,
+    val appVersion: String,
+    val authorityRevision: Long,
+    val schemaVersion: Int = 2,
+) {
+    init {
+        require(schemaVersion == 2) { "Unsupported meal-photo enrollment schema" }
+        require(authorityRevision in 1..MAX_AUTHORITY_REVISION) {
+            "Meal-photo authority revision must be a positive 32-bit integer"
+        }
+        require(CANONICAL_UUID_V4.matches(appInstallationId)) {
+            "Meal-photo installation id must be UUIDv4"
+        }
+        require(APP_VERSION.matches(appVersion)) { "Invalid meal-photo app version" }
+    }
+
+    private companion object {
+        val APP_VERSION = Regex("^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
+    }
+}
+
+data class MealPhotoCaptureRevocationRequest(
+    val appInstallationId: String,
+    val authorityRevision: Long,
+    val schemaVersion: Int = 2,
+) {
+    init {
+        require(schemaVersion == 2) { "Unsupported meal-photo revocation schema" }
+        require(authorityRevision in 1..MAX_AUTHORITY_REVISION) {
+            "Meal-photo authority revision must be a positive 32-bit integer"
+        }
+        require(CANONICAL_UUID_V4.matches(appInstallationId)) {
+            "Meal-photo installation id must be UUIDv4"
+        }
+    }
+}
+
+data class MealPhotoCaptureEnrollment(
+    val uploadToken: String,
+    val idempotencySecret: String,
+    val expiresAt: Instant,
+) {
+    init {
+        require(UPLOAD_TOKEN.matches(uploadToken)) { "Invalid meal-photo upload token" }
+        require(IDEMPOTENCY_SECRET.matches(idempotencySecret)) {
+            "Invalid meal-photo idempotency secret"
+        }
+    }
+
+    private companion object {
+        val UPLOAD_TOKEN = Regex("^murph_meal_photo_[A-Za-z0-9_-]{43}$")
+        val IDEMPOTENCY_SECRET = Regex("^[A-Za-z0-9_-]{43}$")
+    }
+}
+
+enum class MealPhotoCaptureState {
+    Unavailable,
+    Off,
+    Enabling,
+    On,
+    NeedsPhotosAccess,
+    NeedsFullAccess,
+    NeedsAttention,
+}
+
+enum class MealPhotoReviewStatus {
+    NeedsReview,
+    Sent,
+}
+
+data class MealPhotoReviewItem(
+    val id: String,
+    val capturedAt: Instant,
+    val status: MealPhotoReviewStatus,
+    /** A bounded metadata-free rendering held in memory only. */
+    val thumbnailJpeg: ByteArray?,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is MealPhotoReviewItem &&
+            id == other.id &&
+            capturedAt == other.capturedAt &&
+            status == other.status &&
+            thumbnailJpeg.contentEquals(other.thumbnailJpeg)
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + capturedAt.hashCode()
+        result = 31 * result + status.hashCode()
+        result = 31 * result + (thumbnailJpeg?.contentHashCode() ?: 0)
+        return result
+    }
+}
+
+enum class MealPhotoActionResult {
+    Sent,
+    Dismissed,
+    PhotoUnavailable,
+    NeedsAttention,
+    TryAgain,
+}
+
+private val CANONICAL_UUID_V4 = Regex(
+    "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+)
+
+private const val MAX_AUTHORITY_REVISION = Int.MAX_VALUE.toLong()
+
 sealed interface AddressBookSharingState {
     data object Loading : AddressBookSharingState
     data object Unavailable : AddressBookSharingState

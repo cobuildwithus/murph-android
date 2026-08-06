@@ -12,10 +12,16 @@ import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
+import ai.withmurph.companion.core.MealPhotoCaptureEnrollment
+import ai.withmurph.companion.core.MealPhotoCaptureEnrollmentRequest
+import ai.withmurph.companion.core.MealPhotoCaptureRevocationRequest
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,6 +31,8 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class HttpCompanionApi(
     baseUrl: String,
@@ -148,6 +156,40 @@ class HttpCompanionApi(
         return AddressBookApiContract.validateDeletionResponse(request, status)
     }
 
+    override suspend fun createMealPhotoCaptureEnrollment(
+        memberKey: String,
+        request: MealPhotoCaptureEnrollmentRequest,
+    ): MealPhotoCaptureEnrollment {
+        val response = requestJson(
+            method = "POST",
+            path = MEAL_PHOTO_ENROLLMENT_PATH,
+            body = MealPhotoCaptureApiJson.enrollmentBody(request),
+            authenticate = { identityTokenForMember(memberKey) },
+            revisionConflict = true,
+        )
+        return MealPhotoCaptureApiContract.parseEnrollment(
+            uploadToken = response.strictMealValue("uploadToken"),
+            idempotencySecret = response.strictMealValue("idempotencySecret"),
+            expiresAt = response.strictMealValue("expiresAt"),
+        )
+    }
+
+    override suspend fun revokeMealPhotoCaptureEnrollment(
+        memberKey: String,
+        request: MealPhotoCaptureRevocationRequest,
+    ): Boolean {
+        val response = requestJson(
+            method = "DELETE",
+            path = MEAL_PHOTO_ENROLLMENT_PATH,
+            body = MealPhotoCaptureApiJson.revocationBody(request),
+            authenticate = { identityTokenForMember(memberKey) },
+            revisionConflict = true,
+        )
+        return MealPhotoCaptureApiContract.parseRevocation(
+            response.strictMealValue("revoked"),
+        )
+    }
+
     private suspend fun requestJson(
         method: String,
         path: String,
@@ -177,27 +219,37 @@ class HttpCompanionApi(
             }
         }
 
-        try {
-            if (body != null) {
-                connection.outputStream.use { stream ->
-                    stream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+        val response = suspendCancellableCoroutine<JSONObject> { continuation ->
+            continuation.invokeOnCancellation { connection.disconnect() }
+            try {
+                if (body != null) {
+                    connection.outputStream.use { stream ->
+                        stream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+                    }
                 }
+                val status = connection.responseCode
+                val text = readResponseBody(connection, status)
+                if (status !in 200..299) {
+                    throw mapCompanionApiError(status, text, revisionConflict)
+                }
+                val parsed = if (text.isBlank()) JSONObject() else JSONObject(text)
+                if (continuation.isActive) continuation.resume(parsed)
+            } catch (error: CompanionApiException) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            } catch (_: IOException) {
+                if (continuation.isActive) {
+                    continuation.resumeWithException(CompanionApiException.Network)
+                }
+            } catch (_: org.json.JSONException) {
+                if (continuation.isActive) {
+                    continuation.resumeWithException(CompanionApiException.InvalidResponse)
+                }
+            } finally {
+                connection.disconnect()
             }
-            val status = connection.responseCode
-            val text = readResponseBody(connection, status)
-            if (status !in 200..299) {
-                throw mapCompanionApiError(status, text, revisionConflict)
-            }
-            if (text.isBlank()) JSONObject() else JSONObject(text)
-        } catch (error: CompanionApiException) {
-            throw error
-        } catch (_: IOException) {
-            throw CompanionApiException.Network
-        } catch (_: org.json.JSONException) {
-            throw CompanionApiException.InvalidResponse
-        } finally {
-            connection.disconnect()
         }
+        currentCoroutineContext().ensureActive()
+        response
     }
 
     private fun readResponseBody(connection: HttpURLConnection, status: Int): String {
@@ -221,8 +273,70 @@ class HttpCompanionApi(
     private companion object {
         const val ADDRESS_BOOK_PATH = "/api/device-sync/companion/address-book"
         const val LAUNCH_CONSENT_PATH = "/api/device-sync/companion/legal-consent"
+        const val MEAL_PHOTO_ENROLLMENT_PATH =
+            "/api/device-sync/companion/meal-photo-capture/enrollment"
         const val MAX_RESPONSE_CHARS = 128 * 1024
     }
+}
+
+private fun JSONObject.strictMealValue(key: String): Any {
+    if (!has(key) || isNull(key)) throw CompanionApiException.InvalidResponse
+    return try {
+        get(key)
+    } catch (_: org.json.JSONException) {
+        throw CompanionApiException.InvalidResponse
+    }
+}
+
+internal object MealPhotoCaptureApiJson {
+    fun enrollmentBody(request: MealPhotoCaptureEnrollmentRequest): JSONObject =
+        JSONObject(MealPhotoCaptureApiContract.enrollmentBody(request))
+
+    fun revocationBody(request: MealPhotoCaptureRevocationRequest): JSONObject =
+        JSONObject(MealPhotoCaptureApiContract.revocationBody(request))
+}
+
+internal object MealPhotoCaptureApiContract {
+    fun enrollmentBody(request: MealPhotoCaptureEnrollmentRequest): Map<String, Any> = mapOf(
+        "schemaVersion" to request.schemaVersion,
+        "appInstallationId" to request.appInstallationId,
+        "appVersion" to request.appVersion,
+        "authorityRevision" to request.authorityRevision,
+    )
+
+    fun revocationBody(request: MealPhotoCaptureRevocationRequest): Map<String, Any> = mapOf(
+        "schemaVersion" to request.schemaVersion,
+        "appInstallationId" to request.appInstallationId,
+        "authorityRevision" to request.authorityRevision,
+    )
+
+    fun parseEnrollment(
+        uploadToken: Any?,
+        idempotencySecret: Any?,
+        expiresAt: Any?,
+    ): MealPhotoCaptureEnrollment {
+        val parsedExpiry = try {
+            Instant.parse(strictString(expiresAt))
+        } catch (_: Exception) {
+            throw CompanionApiException.InvalidResponse
+        }
+        return try {
+            MealPhotoCaptureEnrollment(
+                uploadToken = strictString(uploadToken),
+                idempotencySecret = strictString(idempotencySecret),
+                expiresAt = parsedExpiry,
+            )
+        } catch (_: IllegalArgumentException) {
+            throw CompanionApiException.InvalidResponse
+        }
+    }
+
+    fun parseRevocation(revoked: Any?): Boolean =
+        revoked as? Boolean ?: throw CompanionApiException.InvalidResponse
+
+    private fun strictString(value: Any?): String =
+        (value as? String)?.takeIf(String::isNotBlank)
+            ?: throw CompanionApiException.InvalidResponse
 }
 
 internal object LaunchConsentApiJson {

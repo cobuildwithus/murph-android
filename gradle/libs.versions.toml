@@ -10,6 +10,8 @@ health-connect = "1.1.0"
 privy = "0.12.0"
 vital = "5.0.2"
 junit = "4.13.2"
+mlkit-image-labeling = "17.0.9"
+work = "2.11.2"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
@@ -28,6 +30,8 @@ privy-core = { module = "io.privy:privy-core", version.ref = "privy" }
 vital-client = { module = "io.tryvital:vital-client", version.ref = "vital" }
 vital-health-connect = { module = "io.tryvital:vital-health-connect", version.ref = "vital" }
 junit = { module = "junit:junit", version.ref = "junit" }
+mlkit-image-labeling = { module = "com.google.mlkit:image-labeling", version.ref = "mlkit-image-labeling" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -55,6 +55,16 @@ interface CompanionApi {
         memberKey: String,
         request: AddressBookDeletionRequest,
     ): AddressBookServerStatus = throw CompanionApiException.InvalidResponse
+
+    suspend fun createMealPhotoCaptureEnrollment(
+        memberKey: String,
+        request: MealPhotoCaptureEnrollmentRequest,
+    ): MealPhotoCaptureEnrollment = throw CompanionApiException.InvalidResponse
+
+    suspend fun revokeMealPhotoCaptureEnrollment(
+        memberKey: String,
+        request: MealPhotoCaptureRevocationRequest,
+    ): Boolean = throw CompanionApiException.InvalidResponse
 }
 
 interface AddressBookContactSource {
@@ -90,6 +100,42 @@ interface HealthSyncing {
     suspend fun refreshPermissionState()
     suspend fun syncAllGrantedResources()
     suspend fun signOutSdk()
+}
+
+interface MealPhotoCaptureControlling {
+    val automaticCaptureSupported: Boolean
+    fun permissionRequest(): Array<String>
+    suspend fun currentState(memberKey: String?): MealPhotoCaptureState
+    suspend fun refresh(memberKey: String): MealPhotoCaptureState
+    suspend fun enable(memberKey: String): MealPhotoCaptureState
+    suspend fun resumeAfterConsent(memberKey: String): MealPhotoCaptureState
+    suspend fun suspendAtTrustBoundary(): Boolean
+    suspend fun pauseForConsentRecovery(memberKey: String): Boolean
+    suspend fun disable(memberKey: String): Boolean
+    suspend fun reviewItems(): List<MealPhotoReviewItem>
+    suspend fun approveReviewItem(captureId: String): MealPhotoActionResult
+    suspend fun dismissReviewItem(captureId: String): MealPhotoActionResult
+}
+
+object UnsupportedMealPhotoCapture : MealPhotoCaptureControlling {
+    override val automaticCaptureSupported: Boolean = false
+    override fun permissionRequest(): Array<String> = emptyArray()
+    override suspend fun currentState(memberKey: String?): MealPhotoCaptureState =
+        MealPhotoCaptureState.Unavailable
+    override suspend fun refresh(memberKey: String): MealPhotoCaptureState =
+        MealPhotoCaptureState.Unavailable
+    override suspend fun enable(memberKey: String): MealPhotoCaptureState =
+        MealPhotoCaptureState.Unavailable
+    override suspend fun resumeAfterConsent(memberKey: String): MealPhotoCaptureState =
+        MealPhotoCaptureState.Unavailable
+    override suspend fun suspendAtTrustBoundary(): Boolean = true
+    override suspend fun pauseForConsentRecovery(memberKey: String): Boolean = true
+    override suspend fun disable(memberKey: String): Boolean = true
+    override suspend fun reviewItems(): List<MealPhotoReviewItem> = emptyList()
+    override suspend fun approveReviewItem(captureId: String): MealPhotoActionResult =
+        MealPhotoActionResult.NeedsAttention
+    override suspend fun dismissReviewItem(captureId: String): MealPhotoActionResult =
+        MealPhotoActionResult.PhotoUnavailable
 }
 
 interface LocalState {

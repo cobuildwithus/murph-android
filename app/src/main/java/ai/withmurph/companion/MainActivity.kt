@@ -1,8 +1,11 @@
 package ai.withmurph.companion
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
@@ -10,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -19,6 +23,7 @@ import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
 import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.app.shouldProtectAppSnapshot
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
 import ai.withmurph.companion.ui.theme.MurphTheme
@@ -52,6 +57,18 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val mealPhotoPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions(),
+        ) {
+            val hasFullAccess = ContextCompat.checkSelfPermission(
+                this,
+                fullPhotoPermission(),
+            ) == PackageManager.PERMISSION_GRANTED
+            graph.applicationScope.launch {
+                graph.session.completeMealPhotoPermissionFlow(hasFullAccess)
+            }
+        }
+
         val healthPermissionLauncher = registerForActivityResult(
             graph.health.healthPermissionContract(),
         ) { deferredOutcome ->
@@ -80,7 +97,7 @@ class MainActivity : ComponentActivity() {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
             SideEffect {
-                setLoginSnapshotProtection(appState.phase == AppPhase.NeedsLogin)
+                setLoginSnapshotProtection(shouldProtectAppSnapshot(appState))
             }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
@@ -108,6 +125,28 @@ class MainActivity : ComponentActivity() {
                             graph.session.cancelAddressBookPermissionFlow()
                             graph.session.reportAddressBookPermissionLaunchFailure(
                                 "Contacts permission couldn't be opened. Try again.",
+                            )
+                        }
+                    }
+                }
+            }
+            LaunchedEffect(appState.pendingMealPhotoPermissionRequestId) {
+                val requestId = appState.pendingMealPhotoPermissionRequestId
+                    ?: return@LaunchedEffect
+                lifecycle.withResumed {
+                    if (graph.session.consumeMealPhotoPermissionLaunchRequest(requestId)) {
+                        try {
+                            val permissions = graph.meals.permissionRequest()
+                            if (permissions.isEmpty()) {
+                                graph.session.cancelMealPhotoPermissionFlow(
+                                    "Meal photo suggestions aren't available on this phone.",
+                                )
+                            } else {
+                                mealPhotoPermissionLauncher.launch(permissions)
+                            }
+                        } catch (_: Exception) {
+                            graph.session.cancelMealPhotoPermissionFlow(
+                                "Photos permission couldn't be opened. Try again.",
                             )
                         }
                     }
@@ -158,6 +197,31 @@ class MainActivity : ComponentActivity() {
                         onStopAddressBook = {
                             graph.applicationScope.launch {
                                 graph.session.stopAddressBookSharing()
+                            }
+                        },
+                        onEnableMealPhotos = {
+                            graph.applicationScope.launch {
+                                graph.session.prepareAutomaticMealPhotoCapture()
+                            }
+                        },
+                        onRefreshMealPhotos = {
+                            graph.applicationScope.launch {
+                                graph.session.refreshMealPhotoCapture()
+                            }
+                        },
+                        onTurnOffMealPhotos = {
+                            graph.applicationScope.launch {
+                                graph.session.turnOffMealPhotoCapture()
+                            }
+                        },
+                        onApproveMealPhoto = { captureId ->
+                            graph.applicationScope.launch {
+                                graph.session.approveMealPhoto(captureId)
+                            }
+                        },
+                        onDismissMealPhoto = { captureId ->
+                            graph.applicationScope.launch {
+                                graph.session.dismissMealPhoto(captureId)
                             }
                         },
                         onShowLaunchConsent = graph.session::showLaunchConsentRecovery,
@@ -281,6 +345,13 @@ class MainActivity : ComponentActivity() {
         !isFinishing &&
             !isDestroyed &&
             lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+
+    private fun fullPhotoPermission(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
 
     private fun setLoginSnapshotProtection(enabled: Boolean) {
         if (enabled) {
