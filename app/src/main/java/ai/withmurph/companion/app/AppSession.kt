@@ -1387,7 +1387,7 @@ class AppSession(
             return
         }
         val authAllowsSync = reconcileForegroundAuth()
-        if (!ownsForegroundRefresh(generation)) return
+        if (!ownsForegroundRefresh(generation) || !needsForegroundRefresh) return
         val foregroundClaim = ForegroundRefreshClaim(generation, sessionEpoch)
         val healthWasRequestedAfterAuth = healthWasRequested()
         needsForegroundRefresh = false

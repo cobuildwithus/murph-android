@@ -958,6 +958,60 @@ class AppSessionTest {
     }
 
     @Test
+    fun sameGenerationForegroundRefreshesRunTheFirstSyncOnce() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        val statusCallsBeforeCompletion = fixture.api.statusSources.size
+        val authCallsBeforeRefresh = fixture.auth.currentStateCalls
+        val authGate = CompletableDeferred<Unit>()
+        fixture.auth.currentStateGate = authGate
+
+        fixture.session.didEnterBackground()
+        val firstForeground = async { fixture.session.didBecomeActive() }
+        val recreatedForeground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+        assertEquals(authCallsBeforeRefresh + 2, fixture.auth.currentStateCalls)
+
+        assertTrue(fixture.session.completeHealthHistoryPermissionFlow())
+        assertEquals(0, fixture.health.syncCalls)
+        authGate.complete(Unit)
+        firstForeground.await()
+        recreatedForeground.await()
+
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeCompletion + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
+    fun sameGenerationForegroundRefreshesRunAnOrdinarySyncOnce() = runTest {
+        val fixture = completedHealthFixture()
+        val syncCallsBeforeRefresh = fixture.health.syncCalls
+        val statusCallsBeforeRefresh = fixture.api.statusSources.size
+        val authCallsBeforeRefresh = fixture.auth.currentStateCalls
+        val authGate = CompletableDeferred<Unit>()
+        fixture.auth.currentStateGate = authGate
+
+        fixture.session.didEnterBackground()
+        val firstForeground = async { fixture.session.didBecomeActive() }
+        val recreatedForeground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+        assertEquals(authCallsBeforeRefresh + 2, fixture.auth.currentStateCalls)
+
+        authGate.complete(Unit)
+        firstForeground.await()
+        recreatedForeground.await()
+
+        assertEquals(syncCallsBeforeRefresh + 1, fixture.health.syncCalls)
+        assertEquals(statusCallsBeforeRefresh + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
     fun historyCompletionDuringAddressBookRefreshRunsTheFirstSyncOnce() = runTest {
         val fixture = fixture(contacts = SupportedContacts)
         fixture.session.start()
