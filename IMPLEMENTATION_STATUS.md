@@ -24,6 +24,9 @@
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
   setup, waiting, synced, delayed, attention, consent required, consent load
   failure, and failure states.
+- Exact-head visual-proof enforcement for every shipped `main` or `release`
+  app-path change, using a base-owned verifier, strict raw-emulator PNGs,
+  durable evidence URLs, and an explicit physical-device gap declaration.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
@@ -37,10 +40,12 @@ Android Gradle Plugin 8.10.1, compile SDK 36, and the real vendor artifacts:
 - Privy Android `0.12.0` APIs (`Privy.init`, `getAuthState`, `getUser`, `user.identityToken`, SMS/email OTP, `logout`).
 - Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the four-resource WHOOP bridge, and manual sync).
 
-`./scripts/verify.sh` passes, including Debug and Release unit tests, Android
-lint, and APK assembly. The debug APK was installed and cold-launched on a
-Pixel 8 API 36 Google APIs emulator. Phone login, compact landscape scrolling,
-and country-picker dismissal were exercised with the keyboard visible.
+The visual-proof contract tests pass directly and now run first in
+`./scripts/verify.sh`. The prior executable Android verification covered Debug
+and Release unit tests, Android lint, and APK assembly. The debug APK was
+installed and cold-launched on a Pixel 8 API 36 Google APIs emulator. Phone
+login, compact landscape scrolling, and country-picker dismissal were exercised
+with the keyboard visible.
 
 The first executable build required two app-owned corrections: an invalid
 Kotlin throw label in the HTTP adapter and one exact transitive Java-resource
