@@ -52,17 +52,15 @@ interface AuthProvider {
 interface CompanionApi {
     suspend fun admitCompanion(memberKey: String, timeZone: String)
 
-    suspend fun createJunctionSignInToken(request: SignInTokenRequest): SignInTokenResponse
     suspend fun createJunctionSignInToken(
         memberKey: String,
         request: SignInTokenRequest,
-    ): SignInTokenResponse = createJunctionSignInToken(request)
+    ): SignInTokenResponse
 
-    suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus
     suspend fun fetchSyncStatus(
         memberKey: String,
         sourceProviderSlug: String,
-    ): CompanionSyncStatus = fetchSyncStatus(sourceProviderSlug)
+    ): CompanionSyncStatus
 
     suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding =
         throw CompanionApiException.InvalidResponse

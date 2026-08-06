@@ -44,8 +44,7 @@ import java.time.Instant
 
 class HttpCompanionApi(
     baseUrl: String,
-    private val identityToken: suspend () -> String,
-    private val identityTokenForMember: suspend (String) -> String = { identityToken() },
+    private val identityTokenForMember: suspend (String) -> String,
 ) : CompanionApi {
     private val baseUri = URI(baseUrl.trimEnd('/')).also { uri ->
         require(uri.scheme == "https") { "Murph backend URL must use HTTPS" }
@@ -66,20 +65,8 @@ class HttpCompanionApi(
     }
 
     override suspend fun createJunctionSignInToken(
-        request: SignInTokenRequest,
-    ): SignInTokenResponse = createJunctionSignInToken(request, identityToken)
-
-    override suspend fun createJunctionSignInToken(
         memberKey: String,
         request: SignInTokenRequest,
-    ): SignInTokenResponse = createJunctionSignInToken(
-        request,
-        authenticate = { identityTokenForMember(memberKey) },
-    )
-
-    private suspend fun createJunctionSignInToken(
-        request: SignInTokenRequest,
-        authenticate: suspend () -> String,
     ): SignInTokenResponse {
         val sdkVersionsJson = JSONObject().apply {
             request.sdkVersions.forEach(::put)
@@ -96,7 +83,7 @@ class HttpCompanionApi(
             method = "POST",
             path = "/api/device-sync/companion/sign-in-token",
             body = body,
-            authenticate = authenticate,
+            authenticate = { identityTokenForMember(memberKey) },
         )
         val token = response.optString("signInToken").takeIf(String::isNotBlank)
             ?: throw CompanionApiException.InvalidResponse
@@ -105,27 +92,15 @@ class HttpCompanionApi(
         return SignInTokenResponse(token, environment)
     }
 
-    override suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus {
-        return fetchSyncStatus(sourceProviderSlug, identityToken)
-    }
-
     override suspend fun fetchSyncStatus(
         memberKey: String,
         sourceProviderSlug: String,
-    ): CompanionSyncStatus = fetchSyncStatus(
-        sourceProviderSlug,
-        authenticate = { identityTokenForMember(memberKey) },
-    )
-
-    private suspend fun fetchSyncStatus(
-        sourceProviderSlug: String,
-        authenticate: suspend () -> String,
     ): CompanionSyncStatus {
         val encodedSource = URLEncoder.encode(sourceProviderSlug, StandardCharsets.UTF_8.name())
         val response = requestJson(
             method = "GET",
             path = "/api/device-sync/companion/status?sourceProviderSlug=$encodedSource",
-            authenticate = authenticate,
+            authenticate = { identityTokenForMember(memberKey) },
         )
         val lastReceivedAt = response.optNullableString("lastDataReceivedAt")?.parseInstant()
         val observedAt = response.optString("observedAt").takeIf(String::isNotBlank)?.parseInstant()
@@ -250,7 +225,7 @@ class HttpCompanionApi(
         method: String,
         path: String,
         body: JSONObject? = null,
-        authenticate: suspend () -> String = identityToken,
+        authenticate: suspend () -> String,
         revisionConflict: Boolean = false,
     ): JSONObject = withContext(Dispatchers.IO) {
         val token = try {

@@ -2,6 +2,7 @@ package ai.withmurph.companion.app
 
 import android.content.Intent
 import ai.withmurph.companion.core.AddressBookContactSource
+import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.AddressBookPersonContact
 import ai.withmurph.companion.core.AddressBookServerStatus
 import ai.withmurph.companion.core.AddressBookWriteCapability
@@ -188,6 +189,98 @@ class AppSessionTest {
     }
 
     @Test
+    fun freshAdmissionRetryableFailureDoesNotBindOrReachProductWork() = runTest {
+        val memberKey = "did:privy:fresh-admission-member"
+        val fixture = fixture(memberKey = memberKey)
+        fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+        fixture.localState.memberKeyWrites.clear()
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.session.currentMemberKeyForTest())
+        assertFalse(memberKey in fixture.localState.memberKeyWrites)
+        assertEquals(listOf(memberKey), fixture.api.admissionMemberKeys)
+        assertEquals(listOf("admission"), fixture.events)
+        assertNoPostAdmissionProductWork(fixture)
+    }
+
+    @Test
+    fun verifiedMemberSwitchAdmissionFailureClearsOldOwnerWithoutBindingCandidate() = runTest {
+        val oldMemberKey = "did:privy:old-admission-member"
+        val candidateMemberKey = "did:privy:new-admission-member"
+        val fixture = fixture(memberKey = candidateMemberKey)
+        fixture.localState.memberKey = oldMemberKey
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.localState.healthReceiptBaselineAt = InstantValue(2)
+        fixture.localState.lastKnownDataReceivedAt = InstantValue(3)
+        fixture.localState.lastKnownStatusObservedAt = InstantValue(4)
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.session.currentMemberKeyForTest())
+        assertFalse(candidateMemberKey in fixture.localState.memberKeyWrites)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.healthReceiptBaselineAt)
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
+        assertNull(fixture.localState.lastKnownStatusObservedAt)
+        assertEquals(1, fixture.localState.clearMemberScopedStateCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(listOf(candidateMemberKey), fixture.api.admissionMemberKeys)
+        assertTrue(fixture.events.indexOf("sign-out") < fixture.events.indexOf("admission"))
+        assertNoPostAdmissionProductWork(fixture)
+    }
+
+    @Test
+    fun establishedHealthMemberMustPassAdmissionBeforeResumeWork() = runTest {
+        val requestedAt = InstantValue(1)
+        val receiptBaselineAt = InstantValue(2)
+        val receivedAt = InstantValue(3)
+        val observedAt = InstantValue(4)
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.localState.healthAccessRequestedAt = requestedAt
+        fixture.localState.healthReceiptBaselineAt = receiptBaselineAt
+        fixture.localState.lastKnownDataReceivedAt = receivedAt
+        fixture.localState.lastKnownStatusObservedAt = observedAt
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+        assertEquals(receiptBaselineAt, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(receivedAt, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(observedAt, fixture.localState.lastKnownStatusObservedAt)
+        assertTrue(fixture.localState.memberKeyWrites.isEmpty())
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertEquals(0, fixture.health.signOutCalls)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(MEMBER_KEY, fixture.session.currentMemberKeyForTest())
+        assertEquals(listOf(MEMBER_KEY), fixture.api.admissionMemberKeys)
+        assertEquals(listOf("admission"), fixture.events)
+        assertNoPostAdmissionProductWork(fixture)
+    }
+
+    @Test
     fun statusCannotReplaceOrRepeatAccountAdmission() = runTest {
         val fixture = fixture()
         fixture.api.statusError = CompanionApiException.NoAccount
@@ -204,9 +297,11 @@ class AppSessionTest {
     }
 
     @Test
-    fun admissionConsentRecoveryRetriesAdmissionWithoutStartingHealth() = runTest {
-        val fixture = fixture()
+    fun freshAdmissionConsentRecoveryBindsOnlyAfterRetriedAdmissionSucceeds() = runTest {
+        val memberKey = "did:privy:fresh-consent-member"
+        val fixture = fixture(memberKey = memberKey)
         fixture.api.admissionError = CompanionApiException.ConsentRequired
+        fixture.localState.memberKeyWrites.clear()
 
         fixture.session.start()
 
@@ -214,19 +309,229 @@ class AppSessionTest {
             LaunchConsentRecoveryPhase.Required,
             fixture.session.state.value.launchConsentRecovery?.phase,
         )
+        assertNull(fixture.localState.memberKey)
+        assertEquals(memberKey, fixture.session.currentMemberKeyForTest())
+        assertFalse(memberKey in fixture.localState.memberKeyWrites)
+        assertEquals(listOf(memberKey), fixture.api.admissionMemberKeys)
+        assertEquals(listOf(memberKey), fixture.api.launchConsentFetches)
         assertEquals(listOf(ZoneId.systemDefault().id), fixture.api.admissionTimeZones)
         assertTrue(fixture.api.statusSources.isEmpty())
         assertTrue(fixture.api.intents.isEmpty())
+        assertTrue(fixture.api.initialOnboardingFetches.isEmpty())
         assertEquals(0, fixture.health.identifyCalls)
 
         fixture.api.admissionError = null
         fixture.session.acceptLaunchConsent()
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(memberKey, fixture.localState.memberKey)
+        assertEquals(memberKey, fixture.session.currentMemberKeyForTest())
+        assertEquals(1, fixture.localState.memberKeyWrites.count { it == memberKey })
+        assertEquals(listOf(memberKey, memberKey), fixture.api.admissionMemberKeys)
         assertEquals(2, fixture.api.admissionTimeZones.size)
+        assertEquals(listOf(memberKey), fixture.api.statusAuthMemberKeys)
         assertEquals(listOf("health_connect"), fixture.api.statusSources)
+        assertEquals(listOf(memberKey), fixture.api.initialOnboardingFetches)
+        assertTrue(fixture.events.lastIndexOf("admission") < fixture.events.indexOf("status"))
         assertTrue(fixture.api.intents.isEmpty())
         assertEquals(0, fixture.health.identifyCalls)
+    }
+
+    @Test
+    fun acceptedAdmissionCandidateRetriesTransientAdmissionFromTheVisibleFailureAction() = runTest {
+        val memberKey = "did:privy:fresh-consent-retry-member"
+        val fixture = fixture(memberKey = memberKey)
+        fixture.api.admissionError = CompanionApiException.ConsentRequired
+        fixture.localState.memberKeyWrites.clear()
+
+        fixture.session.start()
+
+        fixture.api.launchConsentAcceptHandler = { _, request, current ->
+            grantLaunchConsentScope(current, request.scope).also { updated ->
+                if (updated.launchGranted) {
+                    fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+                }
+            }
+        }
+        fixture.session.acceptLaunchConsent()
+
+        val retryableFailure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(retryableFailure.canRetry)
+        assertNull(fixture.localState.memberKey)
+        assertEquals(memberKey, fixture.session.currentMemberKeyForTest())
+        assertFalse(memberKey in fixture.localState.memberKeyWrites)
+        assertEquals(listOf(memberKey, memberKey), fixture.api.admissionMemberKeys)
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertTrue(fixture.api.intents.isEmpty())
+        assertTrue(fixture.api.initialOnboardingFetches.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        val acceptedConsentRequests = fixture.api.launchConsentAcceptances.toList()
+        assertTrue(acceptedConsentRequests.isNotEmpty())
+
+        fixture.api.admissionError = null
+        fixture.session.retry()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(memberKey, fixture.localState.memberKey)
+        assertEquals(memberKey, fixture.session.currentMemberKeyForTest())
+        assertEquals(1, fixture.localState.memberKeyWrites.count { it == memberKey })
+        assertEquals(listOf(memberKey, memberKey, memberKey), fixture.api.admissionMemberKeys)
+        assertEquals(acceptedConsentRequests, fixture.api.launchConsentAcceptances)
+        assertEquals(listOf(memberKey), fixture.api.statusAuthMemberKeys)
+        assertEquals(listOf("health_connect"), fixture.api.statusSources)
+        assertEquals(listOf(memberKey), fixture.api.initialOnboardingFetches)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun authSwitchDuringFreshAdmissionCannotLetStaleCandidateCleanupEraseVerifiedOwner() =
+        runTest {
+            val admissionCandidate = "did:privy:stale-admission-candidate"
+            val verifiedOwner = "did:privy:verified-admission-owner"
+            val fixture = fixture(memberKey = admissionCandidate)
+            fixture.localState.memberKeyWrites.clear()
+            fixture.api.admissionHandler = { memberKey ->
+                if (memberKey == admissionCandidate) {
+                    fixture.auth.state = AuthSessionState.SignedIn(
+                        verifiedOwner,
+                        verifiedOnline = true,
+                    )
+                }
+            }
+
+            fixture.session.start()
+
+            assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+            assertTrue(fixture.session.state.value.authVerifiedOnline)
+            assertEquals(verifiedOwner, fixture.localState.memberKey)
+            assertEquals(verifiedOwner, fixture.session.currentMemberKeyForTest())
+            assertFalse(admissionCandidate in fixture.localState.memberKeyWrites)
+            assertEquals(1, fixture.localState.memberKeyWrites.count { it == verifiedOwner })
+            assertEquals(
+                listOf(admissionCandidate, verifiedOwner),
+                fixture.api.admissionMemberKeys,
+            )
+            assertEquals(listOf(verifiedOwner), fixture.api.statusAuthMemberKeys)
+            assertEquals(listOf(verifiedOwner), fixture.api.initialOnboardingFetches)
+            assertNull(fixture.session.state.value.launchConsentRecovery)
+        }
+
+    @Test
+    fun acceptedAdmissionConsentSwitchBeforeReconcileClearsRecoveryAndMountsVerifiedOwner() =
+        runTest {
+            val consentCandidate = "did:privy:stale-consent-candidate"
+            val verifiedOwner = "did:privy:verified-consent-owner"
+            val fixture = fixture(memberKey = consentCandidate)
+            fixture.api.admissionError = CompanionApiException.ConsentRequired
+            fixture.localState.memberKeyWrites.clear()
+
+            fixture.session.start()
+
+            assertEquals(
+                LaunchConsentRecoveryPhase.Required,
+                fixture.session.state.value.launchConsentRecovery?.phase,
+            )
+            assertEquals(consentCandidate, fixture.session.currentMemberKeyForTest())
+            assertNull(fixture.localState.memberKey)
+
+            fixture.api.admissionError = null
+            fixture.api.launchConsentAcceptHandler = { _, request, current ->
+                grantLaunchConsentScope(current, request.scope).also { updated ->
+                    if (updated.launchGranted) {
+                        fixture.auth.state = AuthSessionState.SignedIn(
+                            verifiedOwner,
+                            verifiedOnline = true,
+                        )
+                    }
+                }
+            }
+
+            fixture.session.acceptLaunchConsent()
+
+            assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+            assertTrue(fixture.session.state.value.authVerifiedOnline)
+            assertEquals(verifiedOwner, fixture.localState.memberKey)
+            assertEquals(verifiedOwner, fixture.session.currentMemberKeyForTest())
+            assertFalse(consentCandidate in fixture.localState.memberKeyWrites)
+            assertEquals(1, fixture.localState.memberKeyWrites.count { it == verifiedOwner })
+            assertEquals(
+                listOf(consentCandidate, verifiedOwner),
+                fixture.api.admissionMemberKeys,
+            )
+            assertTrue(
+                fixture.api.launchConsentAcceptances.all { (memberKey, _) ->
+                    memberKey == consentCandidate
+                },
+            )
+            assertEquals(listOf(verifiedOwner), fixture.api.statusAuthMemberKeys)
+            assertEquals(listOf(verifiedOwner), fixture.api.initialOnboardingFetches)
+            assertNull(fixture.session.state.value.launchConsentRecovery)
+        }
+
+    @Test
+    fun establishedTerminalAdmissionClosesAuthorityBeforeTearingDownJunction() = runTest {
+        val requestedAt = InstantValue(1)
+        val receiptBaselineAt = InstantValue(2)
+        val receivedAt = InstantValue(3)
+        val observedAt = InstantValue(4)
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.localState.healthAccessRequestedAt = requestedAt
+        fixture.localState.healthReceiptBaselineAt = receiptBaselineAt
+        fixture.localState.lastKnownDataReceivedAt = receivedAt
+        fixture.localState.lastKnownStatusObservedAt = observedAt
+        fixture.localState.recordAddressBookRevision(5)
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signOutGate = CompletableDeferred()
+        fixture.api.admissionError = CompanionApiException.AccessRequired
+
+        val startup = async { fixture.session.start() }
+        fixture.health.signOutEntered.await()
+        runCurrent()
+
+        assertFalse(startup.isCompleted)
+        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+        assertEquals(receiptBaselineAt, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(receivedAt, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(observedAt, fixture.localState.lastKnownStatusObservedAt)
+        assertEquals(5, fixture.localState.addressBookRevision)
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertTrue(fixture.localState.memberKeyWrites.isEmpty())
+        assertEquals(listOf(MEMBER_KEY), fixture.api.admissionMemberKeys)
+        assertEquals(listOf("admission"), fixture.events)
+        assertNoPostAdmissionProductWork(fixture)
+
+        fixture.session.syncNow()
+        assertEquals(0, fixture.health.syncCalls)
+        fixture.health.signOutGate?.complete(Unit)
+        startup.await()
+
+        val terminalFailure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(terminalFailure.canRetry)
+        assertEquals("Try a different sign-in", terminalFailure.signOutLabel)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(listOf("admission", "sign-out"), fixture.events)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+        assertEquals(receiptBaselineAt, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(receivedAt, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(observedAt, fixture.localState.lastKnownStatusObservedAt)
+        assertEquals(5, fixture.localState.addressBookRevision)
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertTrue(fixture.localState.memberKeyWrites.isEmpty())
+        assertNoPostAdmissionProductWork(fixture)
     }
 
     @Test
@@ -1671,7 +1976,15 @@ class AppSessionTest {
         )
         assertNull(fixture.session.state.value.healthMessage)
         assertEquals(
-            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            listOf(
+                "admission",
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "sync",
+                "status",
+            ),
             fixture.events,
         )
     }
@@ -2175,6 +2488,7 @@ class AppSessionTest {
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertNull(fixture.localState.initialSetupStep)
+        assertNull(fixture.localState.addressBookRevision)
         assertNull(fixture.session.state.value.initialOnboarding)
         assertNull(fixture.session.state.value.initialOnboardingDraft)
     }
@@ -2190,6 +2504,7 @@ class AppSessionTest {
         val receiptBaselineAt = fixture.localState.healthReceiptBaselineAt
         val statusObservedAt = fixture.localState.lastKnownStatusObservedAt
         val initialSetupStep = fixture.localState.initialSetupStep
+        val addressBookRevision = fixture.localState.addressBookRevision
         val signOutCalls = fixture.health.signOutCalls
         fixture.health.signOutError = IllegalStateException("teardown failed")
         fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
@@ -2198,7 +2513,8 @@ class AppSessionTest {
 
         fixture.session.syncNow()
 
-        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
         assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
         assertTrue(fixture.health.signedIn)
         assertEquals(memberKey, fixture.localState.memberKey)
@@ -2206,6 +2522,7 @@ class AppSessionTest {
         assertEquals(receiptBaselineAt, fixture.localState.healthReceiptBaselineAt)
         assertEquals(statusObservedAt, fixture.localState.lastKnownStatusObservedAt)
         assertEquals(initialSetupStep, fixture.localState.initialSetupStep)
+        assertEquals(addressBookRevision, fixture.localState.addressBookRevision)
         assertEquals(onboarding, fixture.session.state.value.initialOnboarding)
         assertEquals(draft, fixture.session.state.value.initialOnboardingDraft)
 
@@ -2231,6 +2548,7 @@ class AppSessionTest {
         val draft = fixture.session.state.value.initialOnboardingDraft
         val requestedAt = fixture.localState.healthAccessRequestedAt
         val initialSetupStep = fixture.localState.initialSetupStep
+        val addressBookRevision = fixture.localState.addressBookRevision
         val signOutCalls = fixture.health.signOutCalls
         fixture.health.signOutError = IllegalStateException("teardown failed")
         fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
@@ -2239,12 +2557,14 @@ class AppSessionTest {
 
         fixture.session.syncNow()
 
-        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
         assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
         assertTrue(fixture.health.signedIn)
         assertEquals(MEMBER_KEY, fixture.localState.memberKey)
         assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
         assertEquals(initialSetupStep, fixture.localState.initialSetupStep)
+        assertEquals(addressBookRevision, fixture.localState.addressBookRevision)
         assertEquals(onboarding, fixture.session.state.value.initialOnboarding)
         assertEquals(draft, fixture.session.state.value.initialOnboardingDraft)
 
@@ -3282,7 +3602,7 @@ class AppSessionTest {
 
         fixture.session.syncNow()
 
-        assertEquals(listOf("token-resume", "sign-out"), fixture.events)
+        assertEquals(listOf("admission", "token-resume", "sign-out"), fixture.events)
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
@@ -3310,6 +3630,7 @@ class AppSessionTest {
         assertEquals(
             listOf(
                 "status",
+                "admission",
                 "token-resume",
                 "identify",
                 "configure",
@@ -3388,10 +3709,12 @@ class AppSessionTest {
 
         assertEquals(
             listOf(
+                "admission",
                 "token-resume",
                 "identify",
                 "configure",
                 "status",
+                "admission",
                 "token-resume",
                 "identify",
                 "configure",
@@ -3612,6 +3935,364 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertTrue(fixture.api.intents.isEmpty())
+    }
+
+    @Test
+    fun preAcceptConsentOwnerSurvivesUnverifiedCandidateUntilEstablishedMemberReturns() = runTest {
+        val candidateMemberKey = "did:privy:unverified-consent-candidate"
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+
+        fixture.session.start()
+
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = candidateMemberKey,
+            verifiedOnline = false,
+        )
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(
+            LaunchConsentRecoveryPhase.LoadFailed,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals(listOf(MEMBER_KEY), fixture.api.launchConsentFetches)
+        assertFalse(candidateMemberKey in fixture.api.admissionMemberKeys)
+        assertFalse(candidateMemberKey in fixture.api.statusAuthMemberKeys)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.api.statusError = null
+        fixture.session.retryLaunchConsentRecovery()
+
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals(listOf(MEMBER_KEY, MEMBER_KEY), fixture.api.launchConsentFetches)
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertTrue(fixture.api.admissionMemberKeys.all { it == MEMBER_KEY })
+        assertTrue(fixture.api.statusAuthMemberKeys.all { it == MEMBER_KEY })
+    }
+
+    @Test
+    fun genericRetryResumesAcceptedConsentContinuationAfterUnverifiedCandidateClears() = runTest {
+        val candidateMemberKey = "did:privy:unverified-accepted-consent-candidate"
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.api.initialOnboardingCompletionError = CompanionApiException.ConsentRequired
+
+        fixture.session.saveInitialOnboarding()
+
+        val exactRequest = fixture.api.initialOnboardingCompletions.single().second
+        fixture.api.initialOnboardingCompletionError = null
+        fixture.api.launchConsentAcceptHandler = { _, request, current ->
+            grantLaunchConsentScope(current, request.scope).also { updated ->
+                if (updated.launchGranted) {
+                    fixture.auth.state = AuthSessionState.SignedIn(
+                        memberKey = candidateMemberKey,
+                        verifiedOnline = false,
+                    )
+                }
+            }
+        }
+
+        fixture.session.acceptLaunchConsent()
+
+        val retryableFailure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(retryableFailure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(1, fixture.api.initialOnboardingCompletions.size)
+        assertEquals(
+            LaunchConsentRecoveryPhase.LoadFailed,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals("coach", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.retry()
+
+        assertEquals(2, fixture.api.initialOnboardingCompletions.size)
+        assertEquals(exactRequest, fixture.api.initialOnboardingCompletions.last().second)
+        assertEquals(
+            InitialOnboardingStage.Welcome,
+            fixture.session.state.value.initialOnboardingStage,
+        )
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.health.signedIn)
+        assertTrue(fixture.api.initialOnboardingCompletions.all { it.first == MEMBER_KEY })
+    }
+
+    @Test
+    fun acceptedOnboardingReplaySurvivesUnverifiedCandidateDuringExactDispatch() = runTest {
+        val candidateMemberKey = "did:privy:unverified-dispatch-candidate"
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.api.initialOnboardingCompletionError = CompanionApiException.ConsentRequired
+
+        fixture.session.saveInitialOnboarding()
+
+        val exactRequest = fixture.api.initialOnboardingCompletions.single().second
+        val exactDraft = fixture.session.state.value.initialOnboardingDraft
+        fixture.api.initialOnboardingCompletionError =
+            CompanionApiException.LocalAuthUnavailable(
+                AuthSessionState.SignedIn(
+                    memberKey = candidateMemberKey,
+                    verifiedOnline = false,
+                ),
+            )
+
+        fixture.session.acceptLaunchConsent()
+
+        val retryableFailure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(retryableFailure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(exactDraft, fixture.session.state.value.initialOnboardingDraft)
+        assertEquals(
+            LaunchConsentRecoveryPhase.LoadFailed,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals(2, fixture.api.initialOnboardingCompletions.size)
+        assertEquals(exactRequest, fixture.api.initialOnboardingCompletions.last().second)
+        assertTrue(fixture.api.initialOnboardingCompletions.all { it.first == MEMBER_KEY })
+        assertFalse(candidateMemberKey in fixture.api.initialOnboardingFetches)
+        assertFalse(fixture.health.signedIn)
+
+        fixture.api.initialOnboardingCompletionError = null
+        fixture.session.retry()
+
+        assertEquals(3, fixture.api.initialOnboardingCompletions.size)
+        assertEquals(exactRequest, fixture.api.initialOnboardingCompletions.last().second)
+        assertEquals(
+            InitialOnboardingStage.Welcome,
+            fixture.session.state.value.initialOnboardingStage,
+        )
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.health.signedIn)
+        assertTrue(fixture.api.initialOnboardingCompletions.all { it.first == MEMBER_KEY })
+    }
+
+    @Test
+    fun mountedOnboardingDraftSurvivesUnverifiedCandidateAndEstablishedMemberRecovery() = runTest {
+        val candidateMemberKey = "did:privy:unverified-onboarding-candidate"
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.api.initialOnboarding = pendingInitialOnboarding(contactCard = null)
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        val exactDraft = fixture.session.state.value.initialOnboardingDraft
+
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = candidateMemberKey,
+            verifiedOnline = false,
+        )
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        val retryableFailure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(retryableFailure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(exactDraft, fixture.session.state.value.initialOnboardingDraft)
+        assertTrue(fixture.session.state.value.initialOnboarding != null)
+        assertFalse(candidateMemberKey in fixture.api.initialOnboardingFetches)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.retry()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(exactDraft, fixture.session.state.value.initialOnboardingDraft)
+        assertTrue(fixture.session.state.value.initialOnboarding != null)
+        assertTrue(fixture.api.initialOnboardingFetches.all { it == MEMBER_KEY })
+    }
+
+    @Test
+    fun unverifiedDifferentMemberPreservesTheDurableOwnerAndBlocksAllProductWork() = runTest {
+        val candidateMemberKey = "did:privy:candidate-member"
+        val requestedAt = InstantValue(1)
+        val receiptBaselineAt = InstantValue(2)
+        val receivedAt = InstantValue(3)
+        val observedAt = InstantValue(4)
+        val pendingReplacement = AddressBookMutation(
+            baseRevision = 7,
+            mutationId = "00000000-0000-4000-8000-000000000001",
+        )
+        val fixture = fixture(memberKey = candidateMemberKey)
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = candidateMemberKey,
+            verifiedOnline = false,
+        )
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.localState.healthAccessRequestedAt = requestedAt
+        fixture.localState.healthReceiptBaselineAt = receiptBaselineAt
+        fixture.localState.lastKnownDataReceivedAt = receivedAt
+        fixture.localState.lastKnownStatusObservedAt = observedAt
+        fixture.localState.recordAddressBookRevision(7)
+        fixture.localState.beginAddressBookReplacement(pendingReplacement)
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertTrue(failure.canSignOut)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+        assertEquals(receiptBaselineAt, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(receivedAt, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(observedAt, fixture.localState.lastKnownStatusObservedAt)
+        assertFalse(fixture.localState.healthReconnectRequired)
+        assertEquals(7, fixture.localState.addressBookRevision)
+        assertEquals(pendingReplacement, fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertFalse(candidateMemberKey in fixture.localState.memberKeyWrites)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertNoHealthOrBackendProductWork(fixture)
+    }
+
+    @Test
+    fun unverifiedDifferentMemberFencesUnexpectedLiveHealthBeforeDurableEnforcement() = runTest {
+        val candidateMemberKey = "did:privy:candidate-member"
+        val pendingReplacement = AddressBookMutation(
+            baseRevision = 9,
+            mutationId = "00000000-0000-4000-8000-000000000002",
+        )
+        val fixture = fixture(memberKey = candidateMemberKey)
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = candidateMemberKey,
+            verifiedOnline = false,
+        )
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.localState.recordAddressBookRevision(9)
+        fixture.localState.beginAddressBookReplacement(pendingReplacement)
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertTrue(failure.canSignOut)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.healthReceiptBaselineAt)
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
+        assertNull(fixture.localState.lastKnownStatusObservedAt)
+        assertFalse(fixture.localState.healthReconnectRequired)
+        assertEquals(9, fixture.localState.addressBookRevision)
+        assertEquals(pendingReplacement, fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertFalse(candidateMemberKey in fixture.localState.memberKeyWrites)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertNoHealthOrBackendProductWork(fixture)
+    }
+
+    @Test
+    fun unverifiedDifferentMemberWithoutADurableOwnerIsNeverPersisted() = runTest {
+        val candidateMemberKey = "did:privy:candidate-member"
+        val fixture = fixture(memberKey = candidateMemberKey)
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = candidateMemberKey,
+            verifiedOnline = false,
+        )
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertTrue(failure.canSignOut)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertNull(fixture.localState.memberKey)
+        assertFalse(candidateMemberKey in fixture.localState.memberKeyWrites)
+        assertTrue(fixture.health.signOutCalls >= 1)
+        assertFalse(fixture.health.signedIn)
+        assertNoHealthOrBackendProductWork(fixture)
+    }
+
+    @Test
+    fun unverifiedDifferentMemberObservedDuringTokenAuthPreservesTheDurableOwner() = runTest {
+        val candidateMemberKey = "did:privy:candidate-member"
+        val requestedAt = InstantValue(1)
+        val receiptBaselineAt = InstantValue(2)
+        val receivedAt = InstantValue(3)
+        val observedAt = InstantValue(4)
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.localState.healthAccessRequestedAt = requestedAt
+        fixture.localState.healthReceiptBaselineAt = receiptBaselineAt
+        fixture.localState.lastKnownDataReceivedAt = receivedAt
+        fixture.localState.lastKnownStatusObservedAt = observedAt
+        fixture.localState.recordAddressBookRevision(7)
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.signInError = CompanionApiException.LocalAuthUnavailable(
+            AuthSessionState.SignedIn(candidateMemberKey, verifiedOnline = false),
+        )
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertTrue(failure.canSignOut)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(requestedAt, fixture.localState.healthAccessRequestedAt)
+        assertEquals(receiptBaselineAt, fixture.localState.healthReceiptBaselineAt)
+        assertEquals(receivedAt, fixture.localState.lastKnownDataReceivedAt)
+        assertEquals(observedAt, fixture.localState.lastKnownStatusObservedAt)
+        assertEquals(7, fixture.localState.addressBookRevision)
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertFalse(candidateMemberKey in fixture.localState.memberKeyWrites)
+        assertEquals(listOf(MEMBER_KEY), fixture.api.tokenAuthMemberKeys)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertTrue(fixture.api.addressStatusMemberKeys.isEmpty())
+        assertTrue(fixture.api.initialOnboardingFetches.isEmpty())
+        assertTrue(fixture.api.launchConsentFetches.isEmpty())
     }
 
     @Test
@@ -4385,7 +5066,15 @@ class AppSessionTest {
         fixture.session.didBecomeActive()
 
         assertEquals(
-            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            listOf(
+                "admission",
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "sync",
+                "status",
+            ),
             fixture.events,
         )
         assertTrue(fixture.session.state.value.authVerifiedOnline)
@@ -4411,7 +5100,15 @@ class AppSessionTest {
         fixture.session.syncNow()
 
         assertEquals(
-            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            listOf(
+                "admission",
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "sync",
+                "status",
+            ),
             fixture.events,
         )
         assertTrue(fixture.session.state.value.authVerifiedOnline)
@@ -4432,7 +5129,7 @@ class AppSessionTest {
         fixture.session.didEnterBackground()
         fixture.session.didBecomeActive()
 
-        assertEquals(listOf("token-resume", "sign-out"), fixture.events)
+        assertEquals(listOf("admission", "token-resume", "sign-out"), fixture.events)
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(0, fixture.health.configureCalls)
         assertEquals(0, fixture.health.syncCalls)
@@ -4441,7 +5138,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun revokedHealthSetupTearsDownBeforeUnavailableAuthCanRestoreReady() = runTest {
+    fun revokedHealthSetupTearsDownWithoutDiscardingTheOfflineOwner() = runTest {
         val fixture = fixture()
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
         fixture.localState.memberKey = MEMBER_KEY
@@ -4453,13 +5150,64 @@ class AppSessionTest {
         assertEquals(1, fixture.health.signOutCalls)
         assertFalse(fixture.health.signedIn)
         assertEquals(1, fixture.auth.currentStateCalls)
-        assertEquals(null, fixture.localState.memberKey)
-        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
         assertTrue(fixture.api.statusSources.isEmpty())
         assertTrue(fixture.api.intents.isEmpty())
         assertEquals(0, fixture.health.identifyCalls)
         assertEquals(0, fixture.health.configureCalls)
         assertEquals(0, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun orphanJunctionTeardownPreservesOwnerWhenAuthChangesAfterInitialSample() = runTest {
+        val candidateMemberKey = "did:privy:unverified-candidate"
+        val pendingReplacement = AddressBookMutation(
+            baseRevision = 11,
+            mutationId = "00000000-0000-4000-8000-000000000003",
+        )
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.FriendlyNames
+        fixture.localState.recordAddressBookRevision(11)
+        fixture.localState.beginAddressBookReplacement(pendingReplacement)
+        fixture.localState.memberKeyWrites.clear()
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        val teardownGate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = teardownGate
+
+        val startup = async { fixture.session.start() }
+        fixture.health.signOutEntered.await()
+        assertEquals(1, fixture.auth.currentStateCalls)
+        fixture.auth.state = AuthSessionState.SignedIn(
+            memberKey = candidateMemberKey,
+            verifiedOnline = false,
+        )
+
+        teardownGate.complete(Unit)
+        startup.await()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertTrue(failure.canSignOut)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.healthReceiptBaselineAt)
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
+        assertNull(fixture.localState.lastKnownStatusObservedAt)
+        assertEquals(11, fixture.localState.addressBookRevision)
+        assertEquals(pendingReplacement, fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
+        assertFalse(candidateMemberKey in fixture.localState.memberKeyWrites)
+        assertNull(fixture.session.currentMemberKeyForTest())
+        assertTrue(fixture.health.signOutCalls >= 1)
+        assertFalse(fixture.health.signedIn)
+        assertNoHealthOrBackendProductWork(fixture)
     }
 
     @Test
@@ -4474,7 +5222,7 @@ class AppSessionTest {
         fixture.session.start()
 
         assertEquals(1, fixture.health.signOutCalls)
-        assertEquals(0, fixture.auth.currentStateCalls)
+        assertEquals(1, fixture.auth.currentStateCalls)
         assertTrue(fixture.health.signedIn)
         assertEquals(MEMBER_KEY, fixture.localState.memberKey)
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
@@ -5201,7 +5949,15 @@ class AppSessionTest {
         }
 
         assertEquals(
-            listOf("token-resume", "identify", "configure", "status", "sync", "status"),
+            listOf(
+                "admission",
+                "token-resume",
+                "identify",
+                "configure",
+                "status",
+                "sync",
+                "status",
+            ),
             fixture.events,
         )
         assertEquals(tokenCount + 1, fixture.api.intents.size)
@@ -5569,7 +6325,7 @@ class AppSessionTest {
             state = AuthSessionState.SignedIn(memberKey, verifiedOnline = true),
             events = events,
         )
-        val api = FakeApi(events, now) { auth.state }
+        val api = FakeApi(events, now)
         val health = FakeHealth(events)
         val localState = FakeLocalState()
         val session = createSession(auth, api, health, localState, contacts)
@@ -5664,6 +6420,51 @@ class AppSessionTest {
         assertEquals(0, fixture.health.syncCalls)
     }
 
+    private fun assertNoHealthOrBackendProductWork(fixture: Fixture) {
+        assertEquals(0, fixture.auth.identityTokenCalls)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.connectCalls)
+        assertEquals(0, fixture.health.refreshCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertTrue(fixture.api.admissionTimeZones.isEmpty())
+        assertTrue(fixture.api.signInRequests.isEmpty())
+        assertTrue(fixture.api.tokenAuthMemberKeys.isEmpty())
+        assertTrue(fixture.api.statusAuthMemberKeys.isEmpty())
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertTrue(fixture.api.addressStatusMemberKeys.isEmpty())
+        assertTrue(fixture.api.launchConsentFetches.isEmpty())
+        assertTrue(fixture.api.launchConsentAcceptances.isEmpty())
+        assertTrue(fixture.api.initialOnboardingFetches.isEmpty())
+        assertTrue(fixture.api.initialOnboardingCompletions.isEmpty())
+        assertTrue(fixture.api.initialOnboardingContactCards.isEmpty())
+    }
+
+    private fun assertNoPostAdmissionProductWork(fixture: Fixture) {
+        assertEquals(0, fixture.auth.identityTokenCalls)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.connectCalls)
+        assertEquals(0, fixture.health.refreshCalls)
+        assertEquals(0, fixture.health.syncCalls)
+        assertTrue(fixture.api.signInRequests.isEmpty())
+        assertTrue(fixture.api.tokenAuthMemberKeys.isEmpty())
+        assertTrue(fixture.api.statusAuthMemberKeys.isEmpty())
+        assertTrue(fixture.api.statusSources.isEmpty())
+        assertTrue(fixture.api.addressStatusMemberKeys.isEmpty())
+        assertTrue(fixture.api.launchConsentFetches.isEmpty())
+        assertTrue(fixture.api.launchConsentAcceptances.isEmpty())
+        assertTrue(fixture.api.initialOnboardingFetches.isEmpty())
+        assertTrue(fixture.api.initialOnboardingCompletions.isEmpty())
+        assertTrue(fixture.api.initialOnboardingContactCards.isEmpty())
+    }
+
+    private fun AppSession.currentMemberKeyForTest(): String? {
+        val field = AppSession::class.java.getDeclaredField("currentMemberKey")
+        field.isAccessible = true
+        return field.get(this) as String?
+    }
+
     private data class Fixture(
         val session: AppSession,
         val auth: FakeAuth,
@@ -5681,6 +6482,7 @@ class AppSessionTest {
         var currentStateEntered = CompletableDeferred<Unit>()
         var signOutError: Throwable? = null
         var currentStateCalls = 0
+        var identityTokenCalls = 0
         var signOutCalls = 0
 
         override suspend fun currentState(): AuthSessionState {
@@ -5691,7 +6493,10 @@ class AppSessionTest {
         }
         override suspend fun sendCode(method: LoginMethod, destination: String) = Unit
         override suspend fun confirmCode(method: LoginMethod, destination: String, code: String) = Unit
-        override suspend fun identityToken(): String = "identity-token"
+        override suspend fun identityToken(): String {
+            identityTokenCalls += 1
+            return "identity-token"
+        }
         override suspend fun signOut() {
             signOutCalls += 1
             events += "privy-sign-out"
@@ -5703,13 +6508,15 @@ class AppSessionTest {
     private class FakeApi(
         private val events: MutableList<String>,
         observedAt: Instant,
-        private val currentAuthState: () -> AuthSessionState,
     ) : CompanionApi {
+        val admissionMemberKeys = mutableListOf<String>()
         val admissionTimeZones = mutableListOf<String>()
         var admissionError: Throwable? = null
+        var admissionHandler: (suspend (String) -> Unit)? = null
         val intents = mutableListOf<ConnectionIntent?>()
         val signInRequests = mutableListOf<SignInTokenRequest>()
-        val tokenAuthMemberKeys = mutableListOf<String?>()
+        val tokenAuthMemberKeys = mutableListOf<String>()
+        val statusAuthMemberKeys = mutableListOf<String>()
         val statusSources = mutableListOf<String>()
         var status = CompanionSyncStatus(
             lastDataReceivedAt = null,
@@ -5727,6 +6534,7 @@ class AppSessionTest {
         var addressStatusGate: CompletableDeferred<Unit>? = null
         var addressStatusEntered = CompletableDeferred<Unit>()
         var addressStatusError: Throwable? = null
+        val addressStatusMemberKeys = mutableListOf<String>()
         var maximumStatusCalls: Int? = null
         var signInGate: CompletableDeferred<Unit>? = null
         var signInGateOnCall: Int? = null
@@ -5760,18 +6568,20 @@ class AppSessionTest {
             mutableListOf<Pair<String, InitialOnboardingContactCardRequest>>()
 
         override suspend fun admitCompanion(memberKey: String, timeZone: String) {
+            admissionMemberKeys += memberKey
             admissionTimeZones += timeZone
             events += "admission"
+            admissionHandler?.invoke(memberKey)
             admissionError?.let { throw it }
         }
 
         override suspend fun createJunctionSignInToken(
+            memberKey: String,
             request: SignInTokenRequest,
         ): SignInTokenResponse {
             signInRequests += request
             intents += request.connectionIntent
-            tokenAuthMemberKeys +=
-                (currentAuthState() as? AuthSessionState.SignedIn)?.memberKey
+            tokenAuthMemberKeys += memberKey
             events += "token-${request.connectionIntent?.wireValue ?: "omitted"}"
             maximumSignInCalls?.let { maximum ->
                 assertTrue(
@@ -5787,7 +6597,11 @@ class AppSessionTest {
             return SignInTokenResponse("junction-token", "sandbox")
         }
 
-        override suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus {
+        override suspend fun fetchSyncStatus(
+            memberKey: String,
+            sourceProviderSlug: String,
+        ): CompanionSyncStatus {
+            statusAuthMemberKeys += memberKey
             statusSources += sourceProviderSlug
             events += "status"
             maximumStatusCalls?.let { maximum ->
@@ -5813,6 +6627,7 @@ class AppSessionTest {
         override suspend fun fetchAddressBookStatus(
             memberKey: String,
         ): AddressBookServerStatus {
+            addressStatusMemberKeys += memberKey
             addressStatusEntered.complete(Unit)
             addressStatusGate?.await()
             addressStatusError?.let { throw it }
@@ -6006,7 +6821,12 @@ class AppSessionTest {
 
     private class FakeLocalState : LocalState {
         override val installationId = "installation-id"
+        val memberKeyWrites = mutableListOf<String?>()
         override var memberKey: String? = null
+            set(value) {
+                field = value
+                memberKeyWrites += value
+            }
         override var initialSetupStep: InitialSetupStep? = null
         override var healthAccessRequestedAt: InstantValue? = null
         override var healthReceiptBaselineAt: InstantValue? = null
@@ -6021,10 +6841,17 @@ class AppSessionTest {
         var advanceInitialSetupSucceeds = true
         var beginSignOutSucceeds = true
         var completeSignOutSucceeds = true
+        var clearMemberScopedStateCalls = 0
         private var storedAddressBookRevision: Int? = null
+        private var storedAddressBookReplacement: AddressBookMutation? = null
+        private var storedAddressBookDeletion: AddressBookMutation? = null
 
         override val addressBookRevision: Int?
             get() = storedAddressBookRevision
+        override val pendingAddressBookReplacement: AddressBookMutation?
+            get() = storedAddressBookReplacement
+        override val pendingAddressBookDeletion: AddressBookMutation?
+            get() = storedAddressBookDeletion
 
         override fun advanceInitialSetupStep(
             expected: InitialSetupStep,
@@ -6033,6 +6860,9 @@ class AppSessionTest {
         ): Boolean {
             if (!advanceInitialSetupSucceeds || initialSetupStep != expected) return false
             initialSetupStep = next
+            if (abandonPendingAddressBookReplacement) {
+                storedAddressBookReplacement = null
+            }
             return true
         }
 
@@ -6041,8 +6871,18 @@ class AppSessionTest {
             return true
         }
 
-        override fun recordDisabledAddressBookRevision(revision: Int): Boolean =
-            recordAddressBookRevision(revision)
+        override fun recordDisabledAddressBookRevision(revision: Int): Boolean {
+            storedAddressBookRevision = revision
+            storedAddressBookReplacement = null
+            storedAddressBookDeletion = null
+            return true
+        }
+
+        override fun beginAddressBookReplacement(mutation: AddressBookMutation): Boolean {
+            storedAddressBookReplacement = mutation
+            storedAddressBookDeletion = null
+            return true
+        }
 
         override fun completeHealthSetupAuthorization(
             requestedAt: InstantValue,
@@ -6105,6 +6945,7 @@ class AppSessionTest {
         }
 
         override fun clearMemberScopedState() {
+            clearMemberScopedStateCalls += 1
             memberKey = null
             healthAccessRequestedAt = null
             healthReceiptBaselineAt = null
@@ -6113,6 +6954,8 @@ class AppSessionTest {
             healthReconnectRequired = false
             initialSetupStep = null
             storedAddressBookRevision = null
+            storedAddressBookReplacement = null
+            storedAddressBookDeletion = null
         }
     }
 

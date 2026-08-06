@@ -67,7 +67,6 @@ class HttpCompanionApiAuthenticationTest {
         authenticate: suspend (String) -> String,
     ): HttpCompanionApi = HttpCompanionApi(
         baseUrl = "https://network-must-not-run.invalid",
-        identityToken = { error("Unscoped token callback must not run") },
         identityTokenForMember = authenticate,
     )
 

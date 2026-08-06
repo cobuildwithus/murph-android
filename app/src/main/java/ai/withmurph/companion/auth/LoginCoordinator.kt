@@ -100,7 +100,6 @@ class LoginCoordinator(
         )
         _state.value = next
 
-        val automaticTarget = next.normalizedDestination
         val shouldAutomaticallySend = current.destination.isEmpty() &&
             next.method == LoginMethod.Phone &&
             next.canSendCode &&

@@ -34,7 +34,6 @@ class AppGraph private constructor(
             )
             val api = HttpCompanionApi(
                 baseUrl = config.backendBaseUrl,
-                identityToken = auth::identityToken,
                 identityTokenForMember = auth::identityTokenForMember,
             )
             val localState = SharedPreferencesLocalState(context)
