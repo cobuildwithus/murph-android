@@ -776,6 +776,48 @@ class AddressBookSessionTest {
     }
 
     @Test
+    fun stopRequestedDuringAcceptedHealthRestoreSupersedesAddressPermission() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCalls = fixture.health.syncCalls
+        var blocked = true
+        fixture.api.beforeStatusReturn = { _, _ ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+        }
+        assertFalse(fixture.session.prepareAddressBookSharing())
+        val restoreGate = CompletableDeferred<Unit>()
+        fixture.health.identifyGate = restoreGate
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        fixture.health.identifyEntered.await()
+        fixture.session.stopAddressBookSharing()
+        restoreGate.complete(Unit)
+        acceptance.await()
+
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(5, fixture.api.deletions.single().second.mutation.baseRevision)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+    }
+
+    @Test
     fun stopConsentRecoveryReplaysTheExactDurableDeletionMutation() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
@@ -783,9 +825,13 @@ class AddressBookSessionTest {
             initializeLocal = {
                 memberKey = MEMBER_ONE
                 revision = 5
+                healthAccessRequestedAt = InstantValue(1)
             },
         )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.session.start()
+        val syncCalls = fixture.health.syncCalls
         var blocked = true
         fixture.api.deleteHandler = { memberKey, request ->
             if (blocked) {
@@ -812,6 +858,60 @@ class AddressBookSessionTest {
         assertEquals(savedMutation, fixture.api.deletions[0].second.mutation)
         assertEquals(savedMutation, fixture.api.deletions[1].second.mutation)
         assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun foregroundDefersHealthRestoreUntilAcceptedDeletionFinishes() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCalls = fixture.health.syncCalls
+        val resumedDeletionEntered = CompletableDeferred<Unit>()
+        val resumedDeletionGate = CompletableDeferred<Unit>()
+        var blockedByConsent = true
+        fixture.api.deleteHandler = { memberKey, request ->
+            if (blockedByConsent) {
+                blockedByConsent = false
+                throw CompanionApiException.ConsentRequired
+            }
+            resumedDeletionEntered.complete(Unit)
+            resumedDeletionGate.await()
+            disabledStatus(request.mutation.baseRevision + 1).also {
+                fixture.api.statuses[memberKey] = it
+            }
+        }
+        fixture.session.stopAddressBookSharing()
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        resumedDeletionEntered.await()
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertFalse(fixture.health.signedIn)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Saving,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        resumedDeletionGate.complete(Unit)
+        acceptance.await()
+
+        assertTrue(fixture.health.signedIn)
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
         assertEquals(6, fixture.localState.addressBookRevision)
         assertNull(fixture.session.state.value.launchConsentRecovery)
     }
@@ -931,11 +1031,12 @@ class AddressBookSessionTest {
             this.permissionGranted = permissionGranted
         }
         val localState = FakeLocalState().apply(initializeLocal)
+        val health = FakeHealth()
         var mutationSequence = 0
         val session = AppSession(
             auth = auth,
             api = api,
-            health = FakeHealth(),
+            health = health,
             contacts = contacts,
             localState = localState,
             config = AppConfig(
@@ -952,7 +1053,7 @@ class AddressBookSessionTest {
                 "00000000-0000-4000-8000-${mutationSequence.toString().padStart(12, '0')}"
             },
         )
-        return Fixture(session, auth, api, contacts, localState, events)
+        return Fixture(session, auth, api, contacts, localState, health, events)
     }
 
     private data class Fixture(
@@ -961,6 +1062,7 @@ class AddressBookSessionTest {
         val api: FakeApi,
         val contacts: FakeContacts,
         val localState: FakeLocalState,
+        val health: FakeHealth,
         val events: MutableList<String>,
     )
 
@@ -1095,16 +1197,32 @@ class AddressBookSessionTest {
 
     private class FakeHealth : HealthSyncing {
         override val totalResourceCount = 4
+        var signedIn = false
+        var grantedCount = 0
+        var syncCalls = 0
+        var identifyGate: CompletableDeferred<Unit>? = null
+        val identifyEntered = CompletableDeferred<Unit>()
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
-        override fun isSignedIn(): Boolean = false
+        override fun isSignedIn(): Boolean = signedIn
         override fun configure() = Unit
-        override fun grantedResourceCount(): Int = 0
-        override suspend fun identify(memberKey: String, authenticate: suspend () -> String) = Unit
-        override suspend fun connectAfterPermissionRequest() = Unit
+        override fun grantedResourceCount(): Int = grantedCount
+        override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
+            authenticate()
+            identifyEntered.complete(Unit)
+            identifyGate?.await()
+            signedIn = true
+        }
+        override suspend fun connectAfterPermissionRequest() {
+            grantedCount = totalResourceCount
+        }
         override suspend fun refreshPermissionState() = Unit
-        override suspend fun syncAllGrantedResources() = Unit
-        override suspend fun signOutSdk() = Unit
+        override suspend fun syncAllGrantedResources() {
+            syncCalls += 1
+        }
+        override suspend fun signOutSdk() {
+            signedIn = false
+        }
     }
 
     private class FakeLocalState : LocalState {

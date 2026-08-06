@@ -55,12 +55,15 @@ class AppSession(
 ) {
     private val startMutex = Mutex()
     private val healthMutex = Mutex()
+    private val foregroundMutex = Mutex()
     private val addressBookMutex = Mutex()
     private val launchConsentMutex = Mutex()
     private val initialOnboardingMutex = Mutex()
     private var hasCompletedStartup = false
     private var needsForegroundRefresh = false
     private var foregroundGeneration = 0
+    private var lastStartedHealthSyncSequence = 0L
+    private var lastCompletedValidatedHealthSyncSequence = 0L
     private var sessionEpoch = 0
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
@@ -120,22 +123,28 @@ class AppSession(
     suspend fun retryLaunchConsentRecovery() {
         val pending = pendingLaunchConsentRecovery ?: return
         if (!revalidateLaunchConsentMember(pending)) return
-        launchConsentMutex.withLock {
-            if (!ownsLaunchConsentRecovery(pending)) return@withLock
-            loadLaunchConsentStatus(pending, healthLockHeld = false)
+        val continuation = launchConsentMutex.withLock {
+            if (!ownsLaunchConsentRecovery(pending)) return@withLock null
+            if (pending.accepted) {
+                beginAcceptedConsentContinuation(pending)
+            } else {
+                loadLaunchConsentStatus(pending, healthLockHeld = false)
+                null
+            }
         }
+        continuation?.let { resumeLaunchConsentFollowUp(it) }
     }
 
     suspend fun acceptLaunchConsent() {
         val pending = pendingLaunchConsentRecovery ?: return
         if (!revalidateLaunchConsentMember(pending)) return
-        val followUp = launchConsentMutex.withLock {
+        val continuation = launchConsentMutex.withLock {
             if (!ownsLaunchConsentRecovery(pending)) return@withLock null
             val status = _state.value.launchConsentRecovery?.status
                 ?: return@withLock null
             acceptLaunchConsentLocked(pending, status)
         } ?: return
-        resumeLaunchConsentFollowUp(followUp)
+        resumeLaunchConsentFollowUp(continuation)
     }
 
     fun selectInitialOnboardingAvatar(avatarId: String) {
@@ -265,6 +274,7 @@ class AppSession(
 
     private suspend fun completeInitialOnboardingRequest(
         request: InitialOnboardingCompletionRequest,
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
     ) {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
@@ -273,19 +283,23 @@ class AppSession(
             if (
                 current.phase != AppPhase.Ready ||
                 current.initialOnboarding?.status != InitialOnboardingStatus.Pending ||
-                hasActiveLaunchConsentRecovery() ||
+                !allowsLaunchConsentWork(acceptedConsentOwner) ||
                 current.isInitialOnboardingSaving ||
                 current.initialOnboardingCompletedNow ||
                 memberKey != currentMemberKey ||
                 epoch != sessionEpoch
             ) return@withLock
             initialOnboardingGeneration += 1
+            val generation = initialOnboardingGeneration
             _state.update {
                 it.copy(isInitialOnboardingSaving = true, initialOnboardingMessage = null)
             }
             try {
                 val response = api.completeInitialOnboarding(memberKey, request)
-                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    releaseInitialOnboardingBusy(generation)
+                    return@withLock
+                }
                 if (response.status != InitialOnboardingStatus.Completed) {
                     throw CompanionApiException.InvalidResponse
                 }
@@ -305,20 +319,33 @@ class AppSession(
                     clearInitialOnboardingState()
                 }
             } catch (error: CancellationException) {
+                releaseInitialOnboardingBusy(generation)
                 throw error
             } catch (_: CompanionApiException.ConsentRequired) {
-                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
-                _state.update { it.copy(isInitialOnboardingSaving = false) }
+                val followUp = LaunchConsentFollowUp.CompleteInitialOnboarding(request)
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    prioritizeStaleInitialOnboardingConsent(memberKey, followUp)
+                    releaseInitialOnboardingBusy(generation)
+                    return@withLock
+                }
+                releaseInitialOnboardingBusy(generation)
                 beginLaunchConsentRecovery(
                     expectedEpoch = epoch,
                     memberKey = memberKey,
-                    followUp = LaunchConsentFollowUp.CompleteInitialOnboarding(request),
+                    followUp = followUp,
                     healthLockHeld = false,
                 )
             } catch (_: CompanionApiException.AccountConflict) {
-                publishAccountConflictFailure()
+                if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    publishAccountConflictFailure()
+                } else {
+                    releaseInitialOnboardingBusy(generation)
+                }
             } catch (error: CompanionApiException) {
-                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    releaseInitialOnboardingBusy(generation)
+                    return@withLock
+                }
                 when (error) {
                     CompanionApiException.Unauthorized,
                     CompanionApiException.NoAccount ->
@@ -330,16 +357,21 @@ class AppSession(
                     )
                 }
             } catch (_: Exception) {
-                if (ownsInitialOnboardingWork(memberKey, epoch)) {
+                if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
                     )
+                } else {
+                    releaseInitialOnboardingBusy(generation)
                 }
             }
         }
     }
 
-    private suspend fun prepareInitialOnboardingContactCard(avatarId: String) {
+    private suspend fun prepareInitialOnboardingContactCard(
+        avatarId: String,
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ) {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
         initialOnboardingMutex.withLock {
@@ -347,11 +379,13 @@ class AppSession(
             if (
                 current.phase != AppPhase.Ready ||
                 current.initialOnboarding?.contactCard?.avatars?.none { it.id == avatarId } != false ||
-                hasActiveLaunchConsentRecovery() ||
+                !allowsLaunchConsentWork(acceptedConsentOwner) ||
                 current.isInitialOnboardingSaving ||
                 current.initialOnboardingCompletedNow ||
                 !ownsInitialOnboardingWork(memberKey, epoch)
             ) return@withLock
+            initialOnboardingGeneration += 1
+            val generation = initialOnboardingGeneration
             _state.update {
                 it.copy(isInitialOnboardingSaving = true, initialOnboardingMessage = null)
             }
@@ -360,7 +394,10 @@ class AppSession(
                     memberKey,
                     InitialOnboardingContactCardRequest(avatarId),
                 )
-                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    releaseInitialOnboardingBusy(generation)
+                    return@withLock
+                }
                 val handoffId = nextInitialOnboardingContactCardHandoffId++
                 _state.update {
                     it.copy(
@@ -371,20 +408,34 @@ class AppSession(
                     )
                 }
             } catch (error: CancellationException) {
+                releaseInitialOnboardingBusy(generation)
                 throw error
             } catch (_: CompanionApiException.ConsentRequired) {
-                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
-                _state.update { it.copy(isInitialOnboardingSaving = false) }
+                val followUp =
+                    LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(avatarId)
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    prioritizeStaleInitialOnboardingConsent(memberKey, followUp)
+                    releaseInitialOnboardingBusy(generation)
+                    return@withLock
+                }
+                releaseInitialOnboardingBusy(generation)
                 beginLaunchConsentRecovery(
                     expectedEpoch = epoch,
                     memberKey = memberKey,
-                    followUp = LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(avatarId),
+                    followUp = followUp,
                     healthLockHeld = false,
                 )
             } catch (_: CompanionApiException.AccountConflict) {
-                publishAccountConflictFailure()
+                if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    publishAccountConflictFailure()
+                } else {
+                    releaseInitialOnboardingBusy(generation)
+                }
             } catch (error: CompanionApiException) {
-                if (!ownsInitialOnboardingWork(memberKey, epoch)) return@withLock
+                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
+                    releaseInitialOnboardingBusy(generation)
+                    return@withLock
+                }
                 when (error) {
                     CompanionApiException.Unauthorized,
                     CompanionApiException.NoAccount ->
@@ -396,10 +447,12 @@ class AppSession(
                     )
                 }
             } catch (_: Exception) {
-                if (ownsInitialOnboardingWork(memberKey, epoch)) {
+                if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishInitialOnboardingFailure(
                         "We couldn't open the contact card. Check your connection and try again.",
                     )
+                } else {
+                    releaseInitialOnboardingBusy(generation)
                 }
             }
         }
@@ -450,8 +503,12 @@ class AppSession(
         }
     }
 
-    suspend fun prepareAddressBookSharing(): Boolean {
-        if (hasActiveLaunchConsentRecovery()) return false
+    suspend fun prepareAddressBookSharing(): Boolean = prepareAddressBookSharing(null)
+
+    private suspend fun prepareAddressBookSharing(
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): Boolean {
+        if (!allowsLaunchConsentWork(acceptedConsentOwner)) return false
         if (!contacts.isSupported) return false
         addressBookMutex.lock()
         var prepared = false
@@ -775,9 +832,13 @@ class AppSession(
         }
     }
 
-    suspend fun stopAddressBookSharing() {
+    suspend fun stopAddressBookSharing() = stopAddressBookSharing(null)
+
+    private suspend fun stopAddressBookSharing(
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ) {
         if (!contacts.isSupported) return
-        if (
+        if (acceptedConsentOwner == null &&
             prioritizeActiveLaunchConsentFollowUp(
                 LaunchConsentFollowUp.StopAddressBookSharing,
             )
@@ -944,8 +1005,12 @@ class AppSession(
         }
     }
 
-    private suspend fun reconcile(force: Boolean) = startMutex.withLock {
-        if (hasActiveLaunchConsentRecovery()) return@withLock
+    private suspend fun reconcile(
+        force: Boolean,
+        foregroundClaim: ForegroundRefreshClaim? = null,
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ) = startMutex.withLock {
+        if (!allowsLaunchConsentWork(acceptedConsentOwner)) return@withLock
         if (hasCompletedStartup && !force) return@withLock
         try {
             _state.update { current ->
@@ -967,7 +1032,11 @@ class AppSession(
             when (val authState = auth.currentState()) {
                 AuthSessionState.SignedOut -> enterSignedOut()
                 AuthSessionState.TemporarilyUnavailable -> restoreOfflineIfPossible()
-                is AuthSessionState.SignedIn -> reconcileSignedIn(authState)
+                is AuthSessionState.SignedIn -> reconcileSignedIn(
+                    authState,
+                    foregroundClaim,
+                    acceptedConsentOwner = acceptedConsentOwner,
+                )
             }
             hasCompletedStartup = _state.value.phase != AppPhase.Launching
         } catch (error: CancellationException) {
@@ -976,13 +1045,17 @@ class AppSession(
         }
     }
 
-    suspend fun prepareHealthConnection(): Boolean {
-        if (hasActiveLaunchConsentRecovery()) return false
+    suspend fun prepareHealthConnection(): Boolean = prepareHealthConnection(null)
+
+    private suspend fun prepareHealthConnection(
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): Boolean {
+        if (!allowsLaunchConsentWork(acceptedConsentOwner)) return false
         if (
             _state.value.phase == AppPhase.Ready &&
             !_state.value.authVerifiedOnline
         ) {
-            reconcile(force = true)
+            reconcile(force = true, acceptedConsentOwner = acceptedConsentOwner)
         }
         var authStateToReconcile: AuthSessionState? = null
         val prepared = healthMutex.withLock {
@@ -1032,10 +1105,10 @@ class AppSession(
                             return false
                         }
                     }
-                    var preparationEpoch = validatedEpoch
-                    if (hadCompletedSetup || health.isSignedIn()) {
-                        invalidateSessionEpoch()
-                        preparationEpoch = sessionEpoch
+                    val hadLiveHealthSession = health.isSignedIn()
+                    invalidateSessionEpoch()
+                    val preparationEpoch = sessionEpoch
+                    if (hadCompletedSetup || hadLiveHealthSession) {
                         _state.update {
                             it.copy(
                                 healthSync = HealthSyncState.NotConnected,
@@ -1335,20 +1408,23 @@ class AppSession(
         }
     }
 
-    suspend fun syncNow() = syncNow(foregroundClaim = null)
+    suspend fun syncNow() = syncNow(foregroundClaim = null, acceptedConsentOwner = null)
 
-    private suspend fun syncNow(foregroundClaim: ForegroundRefreshClaim?) {
-        if (hasActiveLaunchConsentRecovery()) return
+    private suspend fun syncNow(
+        foregroundClaim: ForegroundRefreshClaim?,
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ) {
+        if (!allowsLaunchConsentWork(acceptedConsentOwner)) return
         if (
             _state.value.phase != AppPhase.Ready ||
             !healthWasRequested()
         ) return
         if (!_state.value.authVerifiedOnline) {
-            reconcile(force = true)
+            reconcile(force = true, foregroundClaim, acceptedConsentOwner)
             return
         }
         if (!health.isSignedIn()) {
-            reconcile(force = true)
+            reconcile(force = true, foregroundClaim, acceptedConsentOwner)
             return
         }
         if (health.grantedResourceCount() == 0) {
@@ -1364,94 +1440,112 @@ class AppSession(
                 !ownsForegroundRefresh(foregroundClaim)
             ) return@withLock false
             val epoch = sessionEpoch
-            syncAndRefresh(epoch)
+            syncAndRefresh(epoch, foregroundClaim)
         }
-        if (needsHealthReconciliation) reconcile(force = true)
+        if (needsHealthReconciliation) {
+            reconcile(force = true, foregroundClaim, acceptedConsentOwner)
+        }
     }
 
     suspend fun didBecomeActive() {
-        val generation = foregroundGeneration
-        if (hasActiveLaunchConsentRecovery()) {
-            if (!needsForegroundRefresh) return
-            needsForegroundRefresh = false
-            refreshActiveLaunchConsentAfterForeground()
-            return
-        }
-        if (!needsForegroundRefresh) {
+        val foregroundClaim = ForegroundRefreshClaim(
+            generation = foregroundGeneration,
+            sessionEpoch = sessionEpoch,
+            healthSyncSequenceAtEntry = lastStartedHealthSyncSequence,
+        )
+        runForegroundRefresh(foregroundClaim)
+    }
+
+    private suspend fun runForegroundRefresh(foregroundClaim: ForegroundRefreshClaim) {
+        foregroundMutex.withLock {
+            if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
+            val consentRecovery = pendingLaunchConsentRecovery
             if (
-                _state.value.phase == AppPhase.Ready &&
-                !_state.value.authVerifiedOnline
+                consentRecovery != null &&
+                deferForegroundRefreshForAcceptedConsent(consentRecovery, foregroundClaim)
             ) {
-                reconcile(force = true)
+                return@withLock
             }
-            return
-        }
-        val authAllowsSync = reconcileForegroundAuth()
-        if (!ownsForegroundRefresh(generation) || !needsForegroundRefresh) return
-        val foregroundClaim = ForegroundRefreshClaim(generation, sessionEpoch)
-        val healthWasRequestedAfterAuth = healthWasRequested()
-        needsForegroundRefresh = false
-        if (
-            authAllowsSync &&
-            _state.value.phase == AppPhase.Ready &&
-            _state.value.initialOnboarding != null
-        ) {
-            refreshInitialOnboardingAfterForeground()
-            if (!ownsForegroundRefresh(foregroundClaim)) return
-        }
-        if (
-            (authAllowsSync || ownsPendingHealthConnection()) &&
-            _state.value.phase == AppPhase.Ready &&
-            _state.value.authVerifiedOnline
-        ) {
-            reconcileAddressBookForeground(showBusy = false)
-            if (!ownsForegroundRefresh(foregroundClaim)) return
-        }
-        if (ownsPendingHealthConnection()) {
-            return
-        }
-        if (_state.value.phase != AppPhase.Ready) {
-            return
-        }
-        try {
-            health.refreshPermissionState()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            // Availability and backend receipt status remain independently useful.
-        }
-        if (!ownsForegroundRefresh(foregroundClaim)) return
-        val availability = health.availability()
-        val grantedResourceCount = health.grantedResourceCount()
-        val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
-        _state.update { current ->
-            current.copy(
-                healthAvailability = availability,
-                healthSync = if (needsPermissionRecovery) {
-                    HealthSyncState.NotConnected
-                } else {
-                    current.healthSync
-                },
-                grantedResourceCount = grantedResourceCount,
-                healthMessage = if (
-                    needsPermissionRecovery &&
-                    availability == HealthConnectAvailability.Available
-                ) {
-                    HEALTH_PERMISSION_RECOVERY_MESSAGE
-                } else {
-                    current.healthMessage
-                },
-            )
-        }
-        if (
-            ownsForegroundRefresh(foregroundClaim) &&
-            authAllowsSync &&
-            healthWasRequestedAfterAuth &&
-            _state.value.phase == AppPhase.Ready &&
-            healthWasRequested() &&
-            grantedResourceCount > 0
-        ) {
-            syncNow(foregroundClaim)
+            if (hasActiveLaunchConsentRecovery()) {
+                if (!needsForegroundRefresh) return@withLock
+                needsForegroundRefresh = false
+                refreshActiveLaunchConsentAfterForeground()
+                return@withLock
+            }
+            val consumesForegroundRefresh = needsForegroundRefresh
+            if (!consumesForegroundRefresh) {
+                if (
+                    _state.value.phase != AppPhase.Ready ||
+                    _state.value.authVerifiedOnline
+                ) return@withLock
+            }
+            val healthWasRequestedAtClaim = healthWasRequested()
+            if (consumesForegroundRefresh) needsForegroundRefresh = false
+            val authAllowsSync = reconcileForegroundAuth(foregroundClaim)
+            if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
+            if (
+                authAllowsSync &&
+                _state.value.phase == AppPhase.Ready &&
+                _state.value.initialOnboarding != null
+            ) {
+                refreshInitialOnboardingAfterForeground()
+                if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
+            }
+            if (
+                ownsPendingHealthConnection() ||
+                (!healthWasRequestedAtClaim && healthWasRequested())
+            ) {
+                return@withLock
+            }
+            if (
+                authAllowsSync &&
+                _state.value.phase == AppPhase.Ready &&
+                _state.value.authVerifiedOnline
+            ) {
+                reconcileAddressBookForeground(showBusy = false)
+                if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
+            }
+            if (_state.value.phase != AppPhase.Ready) return@withLock
+            try {
+                health.refreshPermissionState()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Availability and backend receipt status remain independently useful.
+            }
+            if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
+            val availability = health.availability()
+            val grantedResourceCount = health.grantedResourceCount()
+            val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
+            _state.update { current ->
+                current.copy(
+                    healthAvailability = availability,
+                    healthSync = if (needsPermissionRecovery) {
+                        HealthSyncState.NotConnected
+                    } else {
+                        current.healthSync
+                    },
+                    grantedResourceCount = grantedResourceCount,
+                    healthMessage = if (
+                        needsPermissionRecovery &&
+                        availability == HealthConnectAvailability.Available
+                    ) {
+                        HEALTH_PERMISSION_RECOVERY_MESSAGE
+                    } else {
+                        current.healthMessage
+                    },
+                )
+            }
+            if (
+                ownsForegroundRefresh(foregroundClaim) &&
+                authAllowsSync &&
+                healthWasRequestedAtClaim &&
+                _state.value.phase == AppPhase.Ready &&
+                healthWasRequested() &&
+                grantedResourceCount > 0
+            ) {
+                syncNow(foregroundClaim)
+            }
         }
     }
 
@@ -1602,7 +1696,8 @@ class AppSession(
         generation == foregroundGeneration
 
     private fun ownsForegroundRefresh(claim: ForegroundRefreshClaim): Boolean =
-        ownsForegroundRefresh(claim.generation) && claim.sessionEpoch == sessionEpoch
+        ownsForegroundRefresh(claim.generation) &&
+            claim.sessionEpoch == sessionEpoch
 
     suspend fun signOut() = withContext(NonCancellable) {
         if (!localState.beginSignOut()) {
@@ -1645,7 +1740,9 @@ class AppSession(
 
     private suspend fun reconcileSignedIn(
         authState: AuthSessionState.SignedIn,
+        foregroundClaim: ForegroundRefreshClaim? = null,
         canRetryLostHealthSession: Boolean = true,
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
     ) {
         val previousMemberKey = localState.memberKey
         val mustDistrustPersistedHealthSession =
@@ -1699,7 +1796,7 @@ class AppSession(
                     }
                     return
                 }
-                if (!resetHealthSdkAtTrustBoundary()) return
+                if (!resetHealthSdkAtTrustBoundary(acceptedConsentOwner)) return
                 epoch = sessionEpoch
             } catch (error: CompanionApiException.Unauthorized) {
                 if (epoch != sessionEpoch) return
@@ -1752,6 +1849,20 @@ class AppSession(
             }
             if (!fetchInitialOnboardingProjection(authState.memberKey, epoch)) return
         }
+        if (requested && authState.verifiedOnline) {
+            try {
+                health.refreshPermissionState()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // The last cached permission state remains safe to render.
+            }
+            if (
+                epoch != sessionEpoch ||
+                authState.memberKey != currentMemberKey ||
+                authState.memberKey != localState.memberKey
+            ) return
+        }
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
         val reconnectRequired = localState.healthReconnectRequired
@@ -1802,10 +1913,10 @@ class AppSession(
             grantedResourceCount > 0
         ) {
             val needsHealthReconciliation =
-                healthMutex.withLock { syncAndRefresh(epoch) }
+                healthMutex.withLock { syncAndRefresh(epoch, foregroundClaim) }
             if (needsHealthReconciliation) {
                 if (
-                    !ownsVerifiedHealthWork(epoch) ||
+                    !ownsVerifiedHealthWork(epoch, foregroundClaim) ||
                     authState.memberKey != currentMemberKey ||
                     authState.memberKey != localState.memberKey
                 ) {
@@ -1815,7 +1926,12 @@ class AppSession(
                     _state.update { current ->
                         current.copy(phase = AppPhase.Launching, healthMessage = null)
                     }
-                    reconcileSignedIn(authState, canRetryLostHealthSession = false)
+                    reconcileSignedIn(
+                        authState,
+                        foregroundClaim,
+                        canRetryLostHealthSession = false,
+                        acceptedConsentOwner = acceptedConsentOwner,
+                    )
                 } else {
                     _state.update { current ->
                         current.copy(
@@ -1894,7 +2010,9 @@ class AppSession(
         }
     }
 
-    private suspend fun reconcileForegroundAuth(): Boolean {
+    private suspend fun reconcileForegroundAuth(
+        foregroundClaim: ForegroundRefreshClaim,
+    ): Boolean {
         val authState = try {
             auth.currentState()
         } catch (error: CancellationException) {
@@ -1902,6 +2020,7 @@ class AppSession(
         } catch (_: Exception) {
             AuthSessionState.TemporarilyUnavailable
         }
+        if (!ownsForegroundRefresh(foregroundClaim)) return false
         return when (authState) {
             AuthSessionState.SignedOut -> {
                 invalidateSessionEpoch()
@@ -1975,17 +2094,20 @@ class AppSession(
                     false
                 } else if (pendingOwnsHealthIdentity) {
                     false
+                } else if (_state.value.phase == AppPhase.Launching) {
+                    startMutex.withLock {
+                        // Wait for the existing reconciliation owner without
+                        // scheduling another backend bootstrap.
+                    }
+                    ownsForegroundRefresh(foregroundClaim) &&
+                        _state.value.phase == AppPhase.Ready &&
+                        _state.value.authVerifiedOnline &&
+                        authState.memberKey == currentMemberKey &&
+                        authState.memberKey == localState.memberKey
                 } else if (
                     !_state.value.authVerifiedOnline
                 ) {
-                    if (_state.value.phase == AppPhase.Launching) {
-                        startMutex.withLock {
-                            // Wait for the existing reconciliation owner without
-                            // scheduling another backend bootstrap.
-                        }
-                    } else {
-                        reconcile(force = true)
-                    }
+                    reconcile(force = true, foregroundClaim)
                     false
                 } else {
                     _state.update { it.copy(authVerifiedOnline = true) }
@@ -2021,8 +2143,16 @@ class AppSession(
         return null
     }
 
-    private suspend fun syncAndRefresh(epoch: Int): Boolean {
-        if (!ownsVerifiedHealthWork(epoch)) return false
+    private suspend fun syncAndRefresh(
+        epoch: Int,
+        foregroundClaim: ForegroundRefreshClaim? = null,
+    ): Boolean {
+        if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
+        if (
+            foregroundClaim != null &&
+            lastCompletedValidatedHealthSyncSequence >
+            foregroundClaim.healthSyncSequenceAtEntry
+        ) return false
         _state.update { it.copy(isSyncingHealth = true, healthMessage = null) }
         try {
             if (
@@ -2031,7 +2161,7 @@ class AppSession(
                     LaunchConsentFollowUp.SyncHealth,
                 ) == null
             ) return false
-            if (!ownsVerifiedHealthWork(epoch)) return false
+            if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
             if (health.grantedResourceCount() == 0) {
                 publishPermissionAwareHealthState(
                     status = cachedHealthStatus(),
@@ -2040,26 +2170,41 @@ class AppSession(
                 return false
             }
             if (!health.isSignedIn()) return true
+            lastStartedHealthSyncSequence += 1
+            val syncSequence = lastStartedHealthSyncSequence
+            var syncSucceeded = false
             try {
                 health.syncAllGrantedResources()
+                syncSucceeded = true
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                if (!ownsVerifiedHealthWork(epoch)) return false
+                if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
                 if (!health.isSignedIn()) return true
                 // Status refresh below still reports the last backend-confirmed receipt.
             }
-            if (!ownsVerifiedHealthWork(epoch)) return false
+            if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
             if (!health.isSignedIn()) return true
-            fetchValidatedHealthStatus(epoch, LaunchConsentFollowUp.SyncHealth)
+            if (
+                fetchValidatedHealthStatus(epoch, LaunchConsentFollowUp.SyncHealth) == null
+            ) return false
+            if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
+            if (!health.isSignedIn()) return true
+            if (syncSucceeded) {
+                lastCompletedValidatedHealthSyncSequence = syncSequence
+            }
             return false
         } finally {
             _state.update { it.copy(isSyncingHealth = false) }
         }
     }
 
-    private fun ownsVerifiedHealthWork(epoch: Int): Boolean =
-        epoch == sessionEpoch &&
+    private fun ownsVerifiedHealthWork(
+        epoch: Int,
+        foregroundClaim: ForegroundRefreshClaim? = null,
+    ): Boolean =
+        (foregroundClaim == null || ownsForegroundRefresh(foregroundClaim)) &&
+            epoch == sessionEpoch &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.authVerifiedOnline
 
@@ -2483,6 +2628,36 @@ class AppSession(
             _state.value.initialOnboarding != null &&
             !localState.signOutPending
 
+    private fun ownsInitialOnboardingRequest(
+        memberKey: String,
+        epoch: Int,
+        generation: Int,
+    ): Boolean = ownsInitialOnboardingWork(memberKey, epoch) &&
+        generation == initialOnboardingGeneration
+
+    private fun releaseInitialOnboardingBusy(generation: Int) {
+        if (generation != initialOnboardingGeneration) return
+        _state.update { current ->
+            if (generation == initialOnboardingGeneration && current.isInitialOnboardingSaving) {
+                current.copy(isInitialOnboardingSaving = false)
+            } else {
+                current
+            }
+        }
+    }
+
+    private fun prioritizeStaleInitialOnboardingConsent(
+        memberKey: String,
+        followUp: LaunchConsentFollowUp,
+    ) {
+        if (
+            memberKey != currentMemberKey ||
+            memberKey != localState.memberKey ||
+            localState.signOutPending
+        ) return
+        prioritizeActiveLaunchConsentFollowUp(followUp)
+    }
+
     private fun publishInitialOnboardingFailure(message: String) {
         _state.update {
             it.copy(isInitialOnboardingSaving = false, initialOnboardingMessage = message)
@@ -2749,8 +2924,10 @@ class AppSession(
         }
     }
 
-    private suspend fun resetHealthSdkAtTrustBoundary(): Boolean {
-        invalidateSessionEpoch()
+    private suspend fun resetHealthSdkAtTrustBoundary(
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ): Boolean {
+        invalidateSessionEpoch(acceptedConsentOwner)
         return try {
             healthMutex.withLock { health.signOutSdk() }
             true
@@ -2784,19 +2961,29 @@ class AppSession(
         ) {
             return
         }
-        val existing = pendingLaunchConsentRecovery
-        if (existing != null && ownsLaunchConsentRecovery(existing)) {
+        val existing = pendingLaunchConsentRecovery?.takeIf(::ownsLaunchConsentRecovery)
+        val pending = if (existing != null) {
             prioritizeActiveLaunchConsentFollowUp(followUp)
-            return
+            val resumesAcceptedContinuation = synchronized(existing) { existing.accepted }
+            if (!resumesAcceptedContinuation) return
+            invalidateSessionEpoch(existing)
+            synchronized(existing) {
+                existing.accepted = false
+                existing.continuationInProgress = false
+                existing.continuationAttempt += 1
+                existing.continuationStage = LaunchConsentContinuationStage.Dispatch
+            }
+            existing
+        } else {
+            invalidateSessionEpoch()
+            currentMemberKey = memberKey
+            localState.memberKey = memberKey
+            PendingLaunchConsentRecovery(
+                epoch = sessionEpoch,
+                memberKey = memberKey,
+                followUp = followUp,
+            )
         }
-        invalidateSessionEpoch()
-        currentMemberKey = memberKey
-        localState.memberKey = memberKey
-        val pending = PendingLaunchConsentRecovery(
-            epoch = sessionEpoch,
-            memberKey = memberKey,
-            followUp = followUp,
-        )
         pendingLaunchConsentRecovery = pending
         _state.update { current ->
             current.copy(
@@ -2839,15 +3026,28 @@ class AppSession(
                 requested is LaunchConsentFollowUp.StopAddressBookSharing -> requested
                 existing.followUp is LaunchConsentFollowUp.StopAddressBookSharing ->
                     existing.followUp
-                requested is LaunchConsentFollowUp.AutomaticAddressBookDeletion -> requested
                 existing.followUp is LaunchConsentFollowUp.AutomaticAddressBookDeletion ->
                     existing.followUp
+                requested is LaunchConsentFollowUp.AutomaticAddressBookDeletion &&
+                    existing.followUp.isInitialOnboardingContinuation() ->
+                    existing.followUp
+                requested is LaunchConsentFollowUp.AutomaticAddressBookDeletion -> requested
+                existing.followUp.isGenericReconciliation() -> requested
                 else -> existing.followUp
             }
             if (selected == existing.followUp) {
                 false
             } else {
                 existing.followUp = selected
+                existing.followUpVersion += 1
+                if (
+                    existing.accepted &&
+                    (!existing.continuationInProgress ||
+                        existing.continuationStage ==
+                        LaunchConsentContinuationStage.RestoreAfter)
+                ) {
+                    existing.continuationStage = initialAcceptedConsentStage(selected)
+                }
                 true
             }
         }
@@ -2855,7 +3055,7 @@ class AppSession(
             _state.update { current ->
                 current.copy(
                     launchConsentRecovery = current.launchConsentRecovery?.copy(
-                        message = "Murph will finish stopping address-book sharing after consent is current.",
+                        message = "Murph will continue your requested action after consent is current.",
                     ),
                 )
             }
@@ -2955,7 +3155,10 @@ class AppSession(
     private suspend fun acceptLaunchConsentLocked(
         pending: PendingLaunchConsentRecovery,
         initialStatus: LaunchConsentStatus,
-    ): LaunchConsentFollowUp? {
+    ): AcceptedLaunchConsentContinuation? {
+        if (synchronized(pending) { pending.accepted || pending.continuationInProgress }) {
+            return null
+        }
         var latest = initialStatus
         val attemptedScopes = mutableSetOf<LaunchConsentScope>()
         if (!ownsLaunchConsentRecovery(pending)) return null
@@ -3053,13 +3256,45 @@ class AppSession(
             )
             return null
         }
-        val followUp = synchronized(pending) {
+        val continuation = synchronized(pending) {
             if (!ownsLaunchConsentRecovery(pending)) return null
-            pendingLaunchConsentRecovery = null
-            pending.followUp
+            pending.accepted = true
+            pending.continuationInProgress = true
+            pending.continuationAttempt += 1
+            pending.continuationStage = initialAcceptedConsentStage(pending.followUp)
+            AcceptedLaunchConsentContinuation(
+                pending = pending,
+                attempt = pending.continuationAttempt,
+            )
         }
-        _state.update { current -> current.copy(launchConsentRecovery = null) }
-        return followUp
+        _state.update { current ->
+            current.copy(
+                launchConsentRecovery = current.launchConsentRecovery?.copy(
+                    phase = LaunchConsentRecoveryPhase.Saving,
+                    status = latest,
+                    message = "Consent is current. Resuming your requested action.",
+                    canAccept = false,
+                ),
+            )
+        }
+        return continuation
+    }
+
+    private fun beginAcceptedConsentContinuation(
+        pending: PendingLaunchConsentRecovery,
+    ): AcceptedLaunchConsentContinuation? = synchronized(pending) {
+        if (
+            !ownsAcceptedConsentContinuation(pending) ||
+            pending.continuationInProgress
+        ) {
+            return@synchronized null
+        }
+        pending.continuationInProgress = true
+        pending.continuationAttempt += 1
+        AcceptedLaunchConsentContinuation(
+            pending = pending,
+            attempt = pending.continuationAttempt,
+        )
     }
 
     private suspend fun reloadLaunchConsentAfterStaleDocuments(
@@ -3158,49 +3393,275 @@ class AppSession(
         }
     }
 
-    private suspend fun resumeLaunchConsentFollowUp(followUp: LaunchConsentFollowUp) {
+    private suspend fun resumeLaunchConsentFollowUp(
+        continuation: AcceptedLaunchConsentContinuation,
+    ) {
+        val pending = continuation.pending
         try {
-            when (followUp) {
-                LaunchConsentFollowUp.Reconcile -> reconcile(force = true)
-                LaunchConsentFollowUp.SyncHealth -> syncNow()
-                LaunchConsentFollowUp.PrepareHealthPermission -> prepareHealthConnection()
-                LaunchConsentFollowUp.PrepareAddressBookPermission ->
-                    prepareAddressBookSharing()
-                LaunchConsentFollowUp.ReconcileAddressBook ->
-                    reconcileAddressBookForeground(showBusy = false)
-                LaunchConsentFollowUp.StopAddressBookSharing -> stopAddressBookSharing()
-                is LaunchConsentFollowUp.AutomaticAddressBookDeletion ->
-                    resumeAutomaticAddressBookDeletion(followUp.mutation)
-                is LaunchConsentFollowUp.CompleteHealthPermission ->
-                    resumeHealthPermissionAfterConsent(
-                        followUp.requestedAt,
-                        followUp.receiptBaselineAt,
-                    )
-                is LaunchConsentFollowUp.AddressBookReplacement -> {
-                    val memberKey = currentMemberKey ?: return
-                    val restored = followUp.pending.copy(
-                        epoch = sessionEpoch,
-                        memberKey = memberKey,
-                    )
-                    pendingAddressBookPermissionFlow = restored
-                    _state.update {
-                        it.copy(isAddressBookBusy = true, addressBookMessage = null)
+            while (ownsAcceptedConsentAttempt(continuation)) {
+                val step = snapshotAcceptedConsentStep(continuation) ?: return
+                publishAcceptedConsentProgress(pending, step.stage)
+                when (step.stage) {
+                    LaunchConsentContinuationStage.RestoreBefore -> {
+                        reconcile(force = true, acceptedConsentOwner = pending)
+                        if (!ownsAcceptedConsentAttempt(continuation)) return
+                        if (!canCompleteAcceptedConsentHealthRestore(pending)) {
+                            failAcceptedConsentContinuation(continuation)
+                            return
+                        }
+                        val completesAddressReconciliation = synchronized(pending) {
+                            if (
+                                !ownsAcceptedConsentAttempt(continuation) ||
+                                pending.continuationStage !=
+                                LaunchConsentContinuationStage.RestoreBefore
+                            ) {
+                                false
+                            } else if (
+                                pending.followUp == LaunchConsentFollowUp.ReconcileAddressBook
+                            ) {
+                                true
+                            } else {
+                                pending.continuationStage =
+                                    LaunchConsentContinuationStage.Dispatch
+                                false
+                            }
+                        }
+                        if (completesAddressReconciliation) {
+                            if (finishAcceptedConsentContinuation(continuation, step)) return
+                        }
                     }
-                    completeAddressBookPermissionFlow(permissionGranted = true)
+
+                    LaunchConsentContinuationStage.Dispatch -> {
+                        dispatchAcceptedConsentFollowUp(pending, step.followUp)
+                        if (!ownsAcceptedConsentAttempt(continuation)) return
+                        val completesContinuation = synchronized(pending) {
+                            if (
+                                !ownsAcceptedConsentAttempt(continuation) ||
+                                pending.continuationStage !=
+                                LaunchConsentContinuationStage.Dispatch
+                            ) {
+                                false
+                            } else if (pending.followUpVersion != step.followUpVersion) {
+                                pending.continuationStage =
+                                    initialAcceptedConsentStage(pending.followUp)
+                                false
+                            } else if (
+                                step.followUp.healthRestoreOrder() ==
+                                LaunchConsentHealthRestoreOrder.After &&
+                                healthWasRequested() &&
+                                !health.isSignedIn()
+                            ) {
+                                pending.continuationStage =
+                                    LaunchConsentContinuationStage.RestoreAfter
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                        if (completesContinuation) {
+                            if (finishAcceptedConsentContinuation(continuation, step)) return
+                        }
+                    }
+
+                    LaunchConsentContinuationStage.RestoreAfter -> {
+                        reconcile(force = true, acceptedConsentOwner = pending)
+                        if (!ownsAcceptedConsentAttempt(continuation)) return
+                        if (!canCompleteAcceptedConsentHealthRestore(pending)) {
+                            failAcceptedConsentContinuation(continuation)
+                            return
+                        }
+                        if (finishAcceptedConsentContinuation(continuation, step)) return
+                    }
                 }
-                is LaunchConsentFollowUp.CompleteInitialOnboarding ->
-                    completeInitialOnboardingRequest(followUp.request)
-                is LaunchConsentFollowUp.PrepareInitialOnboardingContactCard ->
-                    prepareInitialOnboardingContactCard(followUp.avatarId)
             }
         } finally {
-            if (!hasActiveLaunchConsentRecovery()) {
-                _state.update { current ->
-                    current.copy(launchConsentRecovery = null)
+            synchronized(pending) {
+                if (
+                    ownsAcceptedConsentContinuation(pending) &&
+                    pending.continuationAttempt == continuation.attempt
+                ) {
+                    pending.continuationInProgress = false
                 }
             }
         }
     }
+
+    private fun snapshotAcceptedConsentStep(
+        continuation: AcceptedLaunchConsentContinuation,
+    ): AcceptedLaunchConsentStep? = synchronized(continuation.pending) {
+        val pending = continuation.pending
+        if (!ownsAcceptedConsentAttempt(continuation)) return@synchronized null
+        AcceptedLaunchConsentStep(
+            stage = pending.continuationStage,
+            followUp = pending.followUp,
+            followUpVersion = pending.followUpVersion,
+        )
+    }
+
+    private suspend fun dispatchAcceptedConsentFollowUp(
+        pending: PendingLaunchConsentRecovery,
+        followUp: LaunchConsentFollowUp,
+    ) {
+        if (
+            followUp == LaunchConsentFollowUp.StopAddressBookSharing ||
+            followUp is LaunchConsentFollowUp.AutomaticAddressBookDeletion
+        ) {
+            cancelAddressBookPermissionFlow()
+        }
+        when (followUp) {
+            LaunchConsentFollowUp.Reconcile ->
+                reconcile(force = true, acceptedConsentOwner = pending)
+            LaunchConsentFollowUp.SyncHealth ->
+                syncNow(foregroundClaim = null, acceptedConsentOwner = pending)
+            LaunchConsentFollowUp.PrepareHealthPermission ->
+                prepareHealthConnection(pending)
+            LaunchConsentFollowUp.PrepareAddressBookPermission ->
+                prepareAddressBookSharing(pending)
+            LaunchConsentFollowUp.ReconcileAddressBook ->
+                reconcileAddressBookForeground(showBusy = false)
+            LaunchConsentFollowUp.StopAddressBookSharing ->
+                stopAddressBookSharing(pending)
+            is LaunchConsentFollowUp.AutomaticAddressBookDeletion ->
+                resumeAutomaticAddressBookDeletion(followUp.mutation)
+            is LaunchConsentFollowUp.CompleteHealthPermission ->
+                resumeHealthPermissionAfterConsent(
+                    followUp.requestedAt,
+                    followUp.receiptBaselineAt,
+                )
+            is LaunchConsentFollowUp.AddressBookReplacement -> {
+                val memberKey = currentMemberKey ?: return
+                val restored = followUp.pending.copy(
+                    epoch = sessionEpoch,
+                    memberKey = memberKey,
+                )
+                pendingAddressBookPermissionFlow = restored
+                _state.update {
+                    it.copy(isAddressBookBusy = true, addressBookMessage = null)
+                }
+                completeAddressBookPermissionFlow(permissionGranted = true)
+            }
+            is LaunchConsentFollowUp.CompleteInitialOnboarding ->
+                completeInitialOnboardingRequest(followUp.request, pending)
+            is LaunchConsentFollowUp.PrepareInitialOnboardingContactCard ->
+                prepareInitialOnboardingContactCard(followUp.avatarId, pending)
+        }
+    }
+
+    private suspend fun finishAcceptedConsentContinuation(
+        continuation: AcceptedLaunchConsentContinuation,
+        completedStep: AcceptedLaunchConsentStep,
+    ): Boolean {
+        val pending = continuation.pending
+        val completion = synchronized(pending) {
+            if (
+                !ownsAcceptedConsentAttempt(continuation) ||
+                pending.continuationStage != completedStep.stage ||
+                pending.followUpVersion != completedStep.followUpVersion
+            ) {
+                return@synchronized null
+            }
+            pendingLaunchConsentRecovery = null
+            pending.continuationInProgress = false
+            AcceptedLaunchConsentCompletion(pending.deferredForegroundClaim)
+        } ?: return false
+        _state.update { current -> current.copy(launchConsentRecovery = null) }
+        completion.deferredForegroundClaim?.takeIf(::ownsForegroundRefresh)?.let {
+            runForegroundRefresh(it)
+        }
+        return true
+    }
+
+    private fun failAcceptedConsentContinuation(
+        continuation: AcceptedLaunchConsentContinuation,
+    ) {
+        val pending = continuation.pending
+        synchronized(pending) {
+            if (!ownsAcceptedConsentAttempt(continuation)) return
+            pending.continuationInProgress = false
+        }
+        publishLaunchConsentLoadFailure(
+            pending,
+            "Consent is current, but Murph couldn't resume your request. Check your connection and try again.",
+        )
+    }
+
+    private fun publishAcceptedConsentProgress(
+        pending: PendingLaunchConsentRecovery,
+        stage: LaunchConsentContinuationStage,
+    ) {
+        if (!ownsAcceptedConsentContinuation(pending)) return
+        val message = when (stage) {
+            LaunchConsentContinuationStage.RestoreBefore ->
+                "Consent is current. Restoring health sync before your requested action."
+            LaunchConsentContinuationStage.Dispatch ->
+                "Consent is current. Resuming your requested action."
+            LaunchConsentContinuationStage.RestoreAfter ->
+                "Your requested action is complete. Restoring health sync."
+        }
+        _state.update { current ->
+            current.copy(
+                launchConsentRecovery = current.launchConsentRecovery?.copy(
+                    phase = LaunchConsentRecoveryPhase.Saving,
+                    message = message,
+                    canAccept = false,
+                ),
+            )
+        }
+    }
+
+    private fun initialAcceptedConsentStage(
+        followUp: LaunchConsentFollowUp,
+    ): LaunchConsentContinuationStage = if (
+        followUp.healthRestoreOrder() == LaunchConsentHealthRestoreOrder.Before &&
+        healthWasRequested() &&
+        !health.isSignedIn()
+    ) {
+        LaunchConsentContinuationStage.RestoreBefore
+    } else {
+        LaunchConsentContinuationStage.Dispatch
+    }
+
+    private fun LaunchConsentFollowUp.healthRestoreOrder():
+        LaunchConsentHealthRestoreOrder = when (this) {
+        LaunchConsentFollowUp.Reconcile,
+        LaunchConsentFollowUp.SyncHealth,
+        LaunchConsentFollowUp.PrepareHealthPermission,
+        is LaunchConsentFollowUp.CompleteHealthPermission,
+        -> LaunchConsentHealthRestoreOrder.None
+        LaunchConsentFollowUp.PrepareAddressBookPermission,
+        LaunchConsentFollowUp.ReconcileAddressBook,
+        is LaunchConsentFollowUp.CompleteInitialOnboarding,
+        is LaunchConsentFollowUp.PrepareInitialOnboardingContactCard,
+        -> LaunchConsentHealthRestoreOrder.Before
+        LaunchConsentFollowUp.StopAddressBookSharing,
+        is LaunchConsentFollowUp.AutomaticAddressBookDeletion,
+        is LaunchConsentFollowUp.AddressBookReplacement,
+        -> LaunchConsentHealthRestoreOrder.After
+    }
+
+    private fun LaunchConsentFollowUp.isGenericReconciliation(): Boolean = when (this) {
+        LaunchConsentFollowUp.Reconcile,
+        LaunchConsentFollowUp.SyncHealth,
+        LaunchConsentFollowUp.ReconcileAddressBook,
+        -> true
+        else -> false
+    }
+
+    private fun LaunchConsentFollowUp.isInitialOnboardingContinuation(): Boolean = when (this) {
+        is LaunchConsentFollowUp.CompleteInitialOnboarding,
+        is LaunchConsentFollowUp.PrepareInitialOnboardingContactCard,
+        -> true
+        else -> false
+    }
+
+    private fun canCompleteAcceptedConsentHealthRestore(
+        pending: PendingLaunchConsentRecovery,
+    ): Boolean =
+        ownsAcceptedConsentContinuation(pending) &&
+            !ownsPendingHealthConnection() &&
+            _state.value.phase == AppPhase.Ready &&
+            _state.value.authVerifiedOnline &&
+            (!healthWasRequested() || health.isSignedIn())
 
     private suspend fun resumeHealthPermissionAfterConsent(
         requestedAt: Instant,
@@ -3286,7 +3747,7 @@ class AppSession(
     }
 
     private suspend fun reconcileAddressBookForeground(showBusy: Boolean) {
-        if (!contacts.isSupported) return
+        if (!contacts.isSupported || ownsPendingHealthConnection()) return
         if (!addressBookMutex.tryLock()) {
             enqueueAddressBookReconcile(showBusy)
             return
@@ -3781,6 +4242,42 @@ class AppSession(
     private fun hasActiveLaunchConsentRecovery(): Boolean =
         pendingLaunchConsentRecovery?.let(::ownsLaunchConsentRecovery) == true
 
+    private fun allowsLaunchConsentWork(
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): Boolean = !hasActiveLaunchConsentRecovery() ||
+        acceptedConsentOwner?.let(::ownsAcceptedConsentContinuation) == true
+
+    private fun ownsAcceptedConsentContinuation(
+        pending: PendingLaunchConsentRecovery,
+    ): Boolean = ownsLaunchConsentRecovery(pending) && pending.accepted
+
+    private fun ownsAcceptedConsentAttempt(
+        continuation: AcceptedLaunchConsentContinuation,
+    ): Boolean = continuation.pending.let { pending ->
+        ownsAcceptedConsentContinuation(pending) &&
+            pending.continuationInProgress &&
+            pending.continuationAttempt == continuation.attempt
+    }
+
+    private fun deferForegroundRefreshForAcceptedConsent(
+        pending: PendingLaunchConsentRecovery,
+        foregroundClaim: ForegroundRefreshClaim,
+    ): Boolean = synchronized(pending) {
+        if (!ownsAcceptedConsentContinuation(pending)) return@synchronized false
+        val deferred = pending.deferredForegroundClaim
+        pending.deferredForegroundClaim = if (
+            deferred != null &&
+            deferred.generation == foregroundClaim.generation &&
+            deferred.sessionEpoch == foregroundClaim.sessionEpoch &&
+            deferred.healthSyncSequenceAtEntry <= foregroundClaim.healthSyncSequenceAtEntry
+        ) {
+            deferred
+        } else {
+            foregroundClaim
+        }
+        true
+    }
+
     private fun ownsLaunchConsentRecovery(pending: PendingLaunchConsentRecovery): Boolean =
         pendingLaunchConsentRecovery === pending &&
             pending.epoch == sessionEpoch &&
@@ -3788,11 +4285,24 @@ class AppSession(
             pending.memberKey == localState.memberKey &&
             !localState.signOutPending
 
-    private fun invalidateSessionEpoch() {
+    private fun invalidateSessionEpoch(
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ) {
+        val preservedConsentOwner = acceptedConsentOwner?.takeIf {
+            ownsAcceptedConsentContinuation(it)
+        }
         sessionEpoch += 1
+        preservedConsentOwner?.let { pending ->
+            synchronized(pending) {
+                pending.epoch = sessionEpoch
+                pending.deferredForegroundClaim = pending.deferredForegroundClaim
+                    ?.takeIf { it.generation == foregroundGeneration }
+                    ?.copy(sessionEpoch = sessionEpoch)
+            }
+        }
         pendingHealthConnection = null
         pendingAddressBookPermissionFlow = null
-        pendingLaunchConsentRecovery = null
+        pendingLaunchConsentRecovery = preservedConsentOwner
         synchronized(pendingAddressBookReconcileLock) {
             pendingAddressBookReconcile = null
         }
@@ -3800,7 +4310,11 @@ class AppSession(
             it.copy(
                 isConnectingHealth = false,
                 isAddressBookBusy = false,
-                launchConsentRecovery = null,
+                launchConsentRecovery = if (preservedConsentOwner == null) {
+                    null
+                } else {
+                    it.launchConsentRecovery
+                },
                 pendingHealthPermissionRequestId = null,
                 pendingHealthHistoryPermissionRequestId = null,
                 pendingAddressBookPermissionRequestId = null,
@@ -3822,6 +4336,7 @@ class AppSession(
     private data class ForegroundRefreshClaim(
         val generation: Int,
         val sessionEpoch: Int,
+        val healthSyncSequenceAtEntry: Long,
     )
 
     private data class PendingHealthConnection(
@@ -3847,10 +4362,44 @@ class AppSession(
     )
 
     private class PendingLaunchConsentRecovery(
-        val epoch: Int,
+        var epoch: Int,
         val memberKey: String,
         var followUp: LaunchConsentFollowUp,
+        var followUpVersion: Int = 0,
+        var accepted: Boolean = false,
+        var continuationInProgress: Boolean = false,
+        var continuationAttempt: Int = 0,
+        var continuationStage: LaunchConsentContinuationStage =
+            LaunchConsentContinuationStage.Dispatch,
+        var deferredForegroundClaim: ForegroundRefreshClaim? = null,
     )
+
+    private data class AcceptedLaunchConsentContinuation(
+        val pending: PendingLaunchConsentRecovery,
+        val attempt: Int,
+    )
+
+    private data class AcceptedLaunchConsentStep(
+        val stage: LaunchConsentContinuationStage,
+        val followUp: LaunchConsentFollowUp,
+        val followUpVersion: Int,
+    )
+
+    private data class AcceptedLaunchConsentCompletion(
+        val deferredForegroundClaim: ForegroundRefreshClaim?,
+    )
+
+    private enum class LaunchConsentContinuationStage {
+        RestoreBefore,
+        Dispatch,
+        RestoreAfter,
+    }
+
+    private enum class LaunchConsentHealthRestoreOrder {
+        None,
+        Before,
+        After,
+    }
 
     private sealed interface LaunchConsentFollowUp {
         data object Reconcile : LaunchConsentFollowUp
