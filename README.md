@@ -16,6 +16,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
 - Server-owned first-run contact-card, persona, voice, tone, and welcome setup.
+- A forward-only native Health Connect → Friendly Names setup sequence with explicit **Not now** choices.
 - WHOOP → Health Connect setup guidance.
 - Optional, server-backed familiar-name projection for unregistered phone participants in groups.
 - Settings, legal links, deletion, support, and sign-out.
@@ -81,11 +82,15 @@ identifier is blank or the production backend URL is not absolute HTTPS.
 
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
-values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
-`savedStatus`, `attention`, `reconnectRequired`, `consentRequired`,
-`consentLoadFailure`, `onboardingContact`, `onboardingPersona`,
+values are `login`, `email`, `otp`, `setup`, `disconnected`,
+`disconnectedUnavailable`, `awaiting`,
+`synced`, `delayed`,
+`savedStatus`, `attention`, `reconnectRequired`, `consentRequired`, `consentBanner`,
+`consentLoadFailure`, `onboardingLoading`, `onboardingContact`,
+`onboardingPersona`,
 `onboardingSupporting`, `onboardingVoice`, `onboardingTone`,
-`onboardingWelcome`, `friendlyNames`, and `failure`.
+`onboardingError`, `onboardingSaving`, `onboardingWelcome`, `friendlyNames`,
+and `failure`.
 
 Every PR that changes shipped Compose UI or visible Android resources must
 include current emulator PNGs for each materially changed state. Keep them
@@ -181,6 +186,11 @@ message.
   completion shows Welcome only to the request that completed setup, while a
   stale completion closes quietly. Foreground refresh can remove completed
   onboarding but never replace an in-progress draft.
+- After account onboarding, a member-scoped local navigation step presents
+  optional Health Connect as step 1 of 2 and Friendly Names as step 2 of 2.
+  Each step advances only after its existing durable completion boundary or an
+  explicit **Not now** choice. The step is not permission, sync, or server
+  truth; it clears on member trust boundaries and never regresses after setup.
 - The app does not create a Junction connection merely because a member signs in.
 - Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
 - A session restored while offline repeats that validation when Privy becomes
@@ -261,9 +271,9 @@ message.
 - Sign-out and member switches invalidate contact work and clear the local
   revision/replay metadata so a late completion cannot mutate the next member's
   state.
-- Once Health Connect is active, Home keeps the optional Friendly Names setup
-  discoverable until server-backed sharing is enabled; it reuses the same
-  explicit foreground consent and one-shot projection owned by Settings.
+- Initial setup shows the complete Friendly Names disclosure once. After Share
+  or **Not now**, Settings remains the discoverable opt-in owner and reuses the
+  same explicit foreground consent and one-shot projection.
 
 ## Release requirements
 

@@ -18,6 +18,7 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.InitialOnboardingPreferences
 import ai.withmurph.companion.core.InitialOnboardingStatus
@@ -61,7 +62,11 @@ class AddressBookSessionTest {
 
     @Test
     fun explicitShareFetchesStatusBeforeReadingAndPublishesServerSuccess() = runTest {
-        val fixture = fixture()
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
         fixture.session.start()
         fixture.events.clear()
 
@@ -95,6 +100,11 @@ class AddressBookSessionTest {
         )
         assertEquals(1, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
         assertEquals(
             AddressBookSharingState.Server(
                 enabled = true,
@@ -105,6 +115,131 @@ class AddressBookSessionTest {
             fixture.session.state.value.addressBookSharing,
         )
         assertFalse(fixture.session.state.value.isAddressBookBusy)
+    }
+
+    @Test
+    fun initialShareCompletesFriendlyNamesOnlyAfterTheExactLocalCommit() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(1, fixture.localState.addressBookRevision)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+    }
+
+    @Test
+    fun initialShareStaysOnFriendlyNamesWhenTheLocalRevisionCommitFails() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.localState.completeAddressBookReplacementSucceeds = false
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertTrue(fixture.localState.pendingAddressBookReplacement != null)
+    }
+
+    @Test
+    fun friendlyNamesDeferralClearsASettledRetryAndPreventsSetupReplay() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.localState.completeAddressBookReplacementSucceeds = false
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        assertTrue(fixture.localState.pendingAddressBookReplacement != null)
+        val savedSharing = fixture.session.state.value.addressBookSharing
+        assertTrue((savedSharing as AddressBookSharingState.Server).enabled)
+        val statusCalls = fixture.api.addressStatusMembers.size
+        val reads = fixture.contacts.readCalls
+        val replacements = fixture.api.replacements.size
+
+        assertTrue(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertFalse(fixture.session.state.value.addressBookHasInterruptedReplacement)
+        assertNull(fixture.session.state.value.addressBookMessage)
+        assertEquals(savedSharing, fixture.session.state.value.addressBookSharing)
+        assertFalse(fixture.session.prepareInitialAddressBookSharing())
+        assertEquals(statusCalls, fixture.api.addressStatusMembers.size)
+        assertEquals(reads, fixture.contacts.readCalls)
+        assertEquals(replacements, fixture.api.replacements.size)
+    }
+
+    @Test
+    fun friendlyNamesDeferralStaysVisibleWhenRetryCleanupCannotCommit() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                replacement = AddressBookMutation(0, MUTATION_ONE)
+                advanceInitialSetupSucceeds = false
+            },
+        )
+        fixture.session.start()
+
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
+        assertTrue(
+            fixture.session.state.value.addressBookMessage.orEmpty()
+                .contains("couldn't safely clear"),
+        )
+    }
+
+    @Test
+    fun friendlyNamesDeferralSurfacesAPlainSetupChoiceCommitFailure() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                advanceInitialSetupSucceeds = false
+            },
+        )
+        fixture.session.start()
+
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(
+            "Murph couldn't save that Friendly Names setup choice. Try again.",
+            fixture.session.state.value.addressBookMessage,
+        )
     }
 
     @Test
@@ -446,12 +581,20 @@ class AddressBookSessionTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = false,
-            initializeLocal = { memberKey = MEMBER_ONE },
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
         )
 
         fixture.session.start()
 
         assertNull(fixture.localState.addressBookRevision)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
         assertTrue(fixture.api.deletions.isEmpty())
         assertEquals(
             AddressBookSharingState.Server(
@@ -470,6 +613,30 @@ class AddressBookSessionTest {
         val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
         assertFalse(sharing.enabled)
         assertTrue(sharing.ownedByInstallation)
+    }
+
+    @Test
+    fun ownedServerStatusDoesNotInventInitialShareProvenance() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                revision = 5
+            },
+        )
+
+        fixture.session.start()
+
+        val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
+        assertTrue(sharing.enabled)
+        assertTrue(sharing.ownedByInstallation)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
     }
 
     @Test
@@ -695,7 +862,11 @@ class AddressBookSessionTest {
 
     @Test
     fun preflightConsentRecoveryResumesOnlyTheAddressBookPermissionRequest() = runTest {
-        val fixture = fixture()
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
         fixture.session.start()
         var blocked = true
         fixture.api.beforeStatusReturn = { _, _ ->
@@ -705,7 +876,7 @@ class AddressBookSessionTest {
             }
         }
 
-        assertFalse(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.prepareInitialAddressBookSharing())
         assertEquals(
             LaunchConsentRecoveryPhase.Required,
             fixture.session.state.value.launchConsentRecovery?.phase,
@@ -713,6 +884,11 @@ class AddressBookSessionTest {
         assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
         assertEquals(0, fixture.contacts.readCalls)
         assertTrue(fixture.api.replacements.isEmpty())
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
 
         fixture.session.acceptLaunchConsent()
 
@@ -729,6 +905,49 @@ class AddressBookSessionTest {
         assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
         assertEquals(1, fixture.contacts.readCalls)
         assertEquals(1, fixture.api.replacements.size)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+    }
+
+    @Test
+    fun settingsPreflightConsentRecoveryLeavesFriendlyNamesSetupUnchanged() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        var blocked = true
+        fixture.api.beforeStatusReturn = { _, _ ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+        }
+
+        assertFalse(fixture.session.prepareAddressBookSharing())
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
+
+        fixture.session.acceptLaunchConsent()
+
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingAddressBookPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeAddressBookPermissionLaunchRequest(requestId))
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+        assertEquals(1, fixture.contacts.readCalls)
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
     }
 
     @Test
@@ -988,7 +1207,50 @@ class AddressBookSessionTest {
 
     @Test
     fun acceptingLaunchConsentResumesSavedAddressBookReplacementMutation() = runTest {
-        val fixture = fixture()
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        var blockedOnce = false
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (!blockedOnce) {
+                blockedOnce = true
+                throw CompanionApiException.ConsentRequired
+            }
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val savedMutation = fixture.localState.pendingAddressBookReplacement
+        assertTrue(savedMutation != null)
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
+        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertEquals(null, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(1, fixture.localState.addressBookRevision)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun settingsReplacementConsentContinuationLeavesFriendlyNamesSetupUnchanged() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
         fixture.session.start()
         fixture.contacts.permissionGranted = true
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
@@ -1006,17 +1268,21 @@ class AddressBookSessionTest {
 
         assertTrue(fixture.session.prepareAddressBookSharing())
         assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
-        val savedMutation = fixture.localState.pendingAddressBookReplacement
-        assertTrue(savedMutation != null)
+        val savedMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
 
         fixture.session.acceptLaunchConsent()
 
         assertEquals(2, fixture.api.replacements.size)
         assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
         assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
-        assertEquals(null, fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
         assertEquals(1, fixture.localState.addressBookRevision)
-        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertNull(fixture.session.state.value.launchConsentRecovery)
     }
 
     private fun fixture(
@@ -1228,6 +1494,7 @@ class AddressBookSessionTest {
     private class FakeLocalState : LocalState {
         override val installationId = "installation-id"
         override var memberKey: String? = null
+        override var initialSetupStep: InitialSetupStep? = null
         override var healthAccessRequestedAt: InstantValue? = null
         override var healthReceiptBaselineAt: InstantValue? = null
         override var lastKnownDataReceivedAt: InstantValue? = null
@@ -1240,12 +1507,19 @@ class AddressBookSessionTest {
             requestedAt: InstantValue,
             receiptBaselineAt: InstantValue?,
             statusObservedAt: InstantValue,
+            completesInitialSetup: Boolean,
         ): Boolean {
+            if (completesInitialSetup && initialSetupStep != InitialSetupStep.HealthConnect) {
+                return false
+            }
             healthAccessRequestedAt = requestedAt
             healthReceiptBaselineAt = receiptBaselineAt
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = statusObservedAt
             healthReconnectRequired = false
+            if (completesInitialSetup) {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            }
             return true
         }
 
@@ -1260,6 +1534,8 @@ class AddressBookSessionTest {
         var revision: Int? = null
         var replacement: AddressBookMutation? = null
         var deletion: AddressBookMutation? = null
+        var completeAddressBookReplacementSucceeds = true
+        var advanceInitialSetupSucceeds = true
 
         override val addressBookRevision: Int?
             get() = revision
@@ -1267,6 +1543,17 @@ class AddressBookSessionTest {
             get() = replacement
         override val pendingAddressBookDeletion: AddressBookMutation?
             get() = deletion
+
+        override fun advanceInitialSetupStep(
+            expected: InitialSetupStep,
+            next: InitialSetupStep,
+            abandonPendingAddressBookReplacement: Boolean,
+        ): Boolean {
+            if (!advanceInitialSetupSucceeds || initialSetupStep != expected) return false
+            initialSetupStep = next
+            if (abandonPendingAddressBookReplacement) replacement = null
+            return true
+        }
 
         override fun recordAddressBookRevision(revision: Int): Boolean {
             this.revision = revision
@@ -1289,12 +1576,18 @@ class AddressBookSessionTest {
         override fun completeAddressBookReplacement(
             mutationId: String,
             revision: Int,
+            completesInitialSetup: Boolean,
         ): Boolean {
+            if (!completeAddressBookReplacementSucceeds) return false
             val pending = replacement ?: return false
             if (pending.mutationId != mutationId || revision <= pending.baseRevision) return false
+            if (completesInitialSetup && initialSetupStep != InitialSetupStep.FriendlyNames) {
+                return false
+            }
             this.revision = revision
             replacement = null
             deletion = null
+            if (completesInitialSetup) initialSetupStep = InitialSetupStep.Complete
             return true
         }
 
@@ -1341,6 +1634,7 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            initialSetupStep = null
             clearAddressBookMetadata()
             return true
         }
@@ -1358,6 +1652,7 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            initialSetupStep = null
             clearAddressBookMetadata()
         }
 

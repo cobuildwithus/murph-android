@@ -118,6 +118,7 @@ interface HealthSyncing {
 interface LocalState {
     val installationId: String
     var memberKey: String?
+    var initialSetupStep: InitialSetupStep?
     var healthAccessRequestedAt: InstantValue?
     var healthReceiptBaselineAt: InstantValue?
     var lastKnownDataReceivedAt: InstantValue?
@@ -131,10 +132,19 @@ interface LocalState {
     val pendingAddressBookDeletion: AddressBookMutation?
         get() = null
 
+    fun advanceInitialSetupStep(
+        expected: InitialSetupStep,
+        next: InitialSetupStep,
+        abandonPendingAddressBookReplacement: Boolean = false,
+    ): Boolean
     fun recordAddressBookRevision(revision: Int): Boolean = false
     fun recordDisabledAddressBookRevision(revision: Int): Boolean = false
     fun beginAddressBookReplacement(mutation: AddressBookMutation): Boolean = false
-    fun completeAddressBookReplacement(mutationId: String, revision: Int): Boolean = false
+    fun completeAddressBookReplacement(
+        mutationId: String,
+        revision: Int,
+        completesInitialSetup: Boolean = false,
+    ): Boolean = false
     fun abandonAddressBookReplacement(mutationId: String): Boolean = false
     fun beginAddressBookDeletion(mutation: AddressBookMutation): Boolean = false
     fun completeAddressBookDeletion(mutationId: String, revision: Int): Boolean = false
@@ -144,6 +154,7 @@ interface LocalState {
         requestedAt: InstantValue,
         receiptBaselineAt: InstantValue?,
         statusObservedAt: InstantValue,
+        completesInitialSetup: Boolean = false,
     ): Boolean
     fun requireHealthReconnect(): Boolean
     fun revokeHealthSetupAuthorization(): Boolean

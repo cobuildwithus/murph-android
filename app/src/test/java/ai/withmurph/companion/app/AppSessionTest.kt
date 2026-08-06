@@ -16,6 +16,7 @@ import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.InitialOnboardingCatalog
 import ai.withmurph.companion.core.InitialOnboardingCompletionAction
@@ -62,6 +63,115 @@ import java.time.ZoneId
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppSessionTest {
     @Test
+    fun startupResolvesFreshLegacyAndInterruptedInitialSetup() = runTest {
+        val fresh = fixture()
+        fresh.session.start()
+        assertEquals(InitialSetupStep.HealthConnect, fresh.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.HealthConnect, fresh.session.state.value.initialSetupStep)
+
+        val legacy = fixture()
+        legacy.localState.memberKey = MEMBER_KEY
+        legacy.localState.healthAccessRequestedAt = InstantValue(1)
+        legacy.health.signedIn = true
+        legacy.health.grantedCount = legacy.health.totalResourceCount
+        legacy.session.start()
+        assertEquals(InitialSetupStep.Complete, legacy.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, legacy.session.state.value.initialSetupStep)
+
+        val interrupted = fixture()
+        interrupted.localState.memberKey = MEMBER_KEY
+        interrupted.localState.initialSetupStep = InitialSetupStep.HealthConnect
+        interrupted.localState.healthAccessRequestedAt = InstantValue(1)
+        interrupted.health.signedIn = true
+        interrupted.health.grantedCount = interrupted.health.totalResourceCount
+        interrupted.session.start()
+        assertEquals(InitialSetupStep.FriendlyNames, interrupted.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            interrupted.session.state.value.initialSetupStep,
+        )
+
+        val deferredHealth = fixture()
+        deferredHealth.localState.initialSetupStep = InitialSetupStep.FriendlyNames
+        deferredHealth.session.start()
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            deferredHealth.session.state.value.initialSetupStep,
+        )
+
+        val completeWithoutHealth = fixture()
+        completeWithoutHealth.localState.initialSetupStep = InitialSetupStep.Complete
+        completeWithoutHealth.session.start()
+        assertEquals(
+            InitialSetupStep.Complete,
+            completeWithoutHealth.session.state.value.initialSetupStep,
+        )
+
+        val reconnectLegacy = fixture()
+        reconnectLegacy.localState.healthReconnectRequired = true
+        reconnectLegacy.session.start()
+        assertEquals(InitialSetupStep.Complete, reconnectLegacy.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.Complete,
+            reconnectLegacy.session.state.value.initialSetupStep,
+        )
+    }
+
+    @Test
+    fun explicitSetupDeferralsPersistWithoutStartingProviderWork() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        val statusCalls = fixture.api.statusSources.size
+        val tokenCalls = fixture.api.intents.size
+
+        assertTrue(fixture.session.deferHealthConnectInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.session.state.value.initialSetupStep)
+        assertEquals(statusCalls, fixture.api.statusSources.size)
+        assertEquals(tokenCalls, fixture.api.intents.size)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.connectCalls)
+
+        val recreated = recreatedSession(fixture)
+        recreated.start()
+        assertEquals(InitialSetupStep.FriendlyNames, recreated.state.value.initialSetupStep)
+        val recreatedStatusCalls = fixture.api.statusSources.size
+        val recreatedTokenCalls = fixture.api.intents.size
+
+        assertTrue(recreated.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, recreated.state.value.initialSetupStep)
+        assertEquals(recreatedStatusCalls, fixture.api.statusSources.size)
+        assertEquals(recreatedTokenCalls, fixture.api.intents.size)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.connectCalls)
+
+        val completed = recreatedSession(fixture)
+        completed.start()
+        assertEquals(InitialSetupStep.Complete, completed.state.value.initialSetupStep)
+    }
+
+    @Test
+    fun healthConnectDeferralSurfacesASetupChoiceCommitFailure() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.localState.advanceInitialSetupSucceeds = false
+
+        assertFalse(fixture.session.deferHealthConnectInitialSetup())
+
+        assertEquals(InitialSetupStep.HealthConnect, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
+        assertEquals(
+            "Murph couldn't save that Health Connect setup choice. Try again.",
+            fixture.session.state.value.healthMessage,
+        )
+    }
+
+    @Test
     fun signedInLaunchVerifiesMembershipWithoutCreatingAHealthConnectionBeforeConsent() = runTest {
         val fixture = fixture()
 
@@ -101,6 +211,8 @@ class AppSessionTest {
         assertEquals(listOf<ConnectionIntent?>(null), fixture.api.intents)
         assertTrue(fixture.localState.healthReconnectRequired)
         assertTrue(fixture.session.state.value.healthReconnectRequired)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
         assertEquals(
             "Health Connect needs to reconnect before syncing can resume.",
             fixture.session.state.value.healthMessage,
@@ -175,6 +287,8 @@ class AppSessionTest {
             LaunchConsentRecoveryPhase.Required,
             fixture.session.state.value.launchConsentRecovery?.phase,
         )
+        assertEquals(InitialSetupStep.HealthConnect, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
         fixture.api.signInError = CompanionApiException.ReconnectRequired
         fixture.session.acceptLaunchConsent()
 
@@ -283,6 +397,21 @@ class AppSessionTest {
     }
 
     @Test
+    fun failedInitialOnboardingMemberBoundaryResetReleasesSavingState() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.api.initialOnboardingCompletionError = CompanionApiException.Unauthorized
+        fixture.health.signOutError = IllegalStateException("teardown failed")
+
+        fixture.session.saveInitialOnboarding()
+
+        assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+    }
+
+    @Test
     fun contactCardHandoffIsMemberBoundAndConsumedOnce() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding = pendingInitialOnboarding()
@@ -295,6 +424,21 @@ class AppSessionTest {
         assertEquals("https://example.test/contact-card", fixture.session.consumeInitialOnboardingContactCardHandoff(event.id))
         assertNull(fixture.session.consumeInitialOnboardingContactCardHandoff(event.id))
         assertEquals(InitialOnboardingStage.MainPersona, fixture.session.state.value.initialOnboardingStage)
+    }
+
+    @Test
+    fun failedContactCardMemberBoundaryResetReleasesSavingState() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.api.initialOnboardingContactCardError = CompanionApiException.Unauthorized
+        fixture.health.signOutError = IllegalStateException("teardown failed")
+
+        fixture.session.prepareInitialOnboardingContactCard()
+
+        assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
     }
 
     @Test
@@ -1156,12 +1300,42 @@ class AppSessionTest {
     }
 
     @Test
-    fun explicitConnectOwnsTheFirstHealthConnection() = runTest {
+    fun connectRetryProjectsCurrentHealthAvailabilityBeforeChoosingRecovery() = runTest {
         val fixture = fixture()
         fixture.session.start()
         fixture.events.clear()
+        val statusCalls = fixture.api.statusSources.size
+        fixture.health.availabilityState = HealthConnectAvailability.InstallOrUpdateRequired
+
+        assertFalse(fixture.session.prepareHealthConnection())
+
+        assertEquals(
+            HealthConnectAvailability.InstallOrUpdateRequired,
+            fixture.session.state.value.healthAvailability,
+        )
+        assertEquals(
+            "Install or update Health Connect, then try again.",
+            fixture.session.state.value.healthMessage,
+        )
+        assertFalse(fixture.session.state.value.isConnectingHealth)
+        assertNull(fixture.session.state.value.pendingHealthPermissionRequestId)
+        assertEquals(statusCalls, fixture.api.statusSources.size)
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.connectCalls)
+        assertTrue(fixture.events.isEmpty())
+    }
+
+    @Test
+    fun explicitConnectOwnsTheFirstHealthConnection() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
+        fixture.events.clear()
 
         assertTrue(fixture.session.prepareHealthConnection())
+        assertFalse(fixture.session.deferHealthConnectInitialSetup())
         assertTrue(fixture.api.intents.isEmpty())
         assertEquals(0, fixture.health.identifyCalls)
         assertEquals(0, fixture.health.configureCalls)
@@ -1172,6 +1346,7 @@ class AppSessionTest {
         assertEquals(1, fixture.health.configureCalls)
         assertEquals(1, fixture.health.connectCalls)
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
         assertTrue(fixture.session.state.value.isConnectingHealth)
         assertTrue(fixture.session.state.value.pendingHealthHistoryPermissionRequestId != null)
         assertEquals(
@@ -1189,6 +1364,8 @@ class AppSessionTest {
         finishHealthHistoryPermission(fixture)
 
         assertTrue(fixture.localState.healthAccessRequestedAt != null)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.session.state.value.initialSetupStep)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
         assertEquals(1, fixture.health.syncCalls)
@@ -1754,6 +1931,8 @@ class AppSessionTest {
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(null, fixture.session.state.value.pendingHealthHistoryPermissionRequestId)
         assertEquals(0, fixture.health.syncCalls)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
         assertEquals(
             "Murph couldn't save Health Connect setup. Try again.",
             fixture.session.state.value.healthMessage,
@@ -1799,6 +1978,8 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(0, fixture.health.connectCalls)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.HealthConnect, fixture.session.state.value.initialSetupStep)
         assertEquals(
             "Choose at least one Health Connect category to connect Murph.",
             fixture.session.state.value.healthMessage,
@@ -1845,6 +2026,7 @@ class AppSessionTest {
         )
         fixture.session.start()
         assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
 
         fixture.health.grantedCount = 0
         fixture.session.didEnterBackground()
@@ -1857,6 +2039,8 @@ class AppSessionTest {
         )
         assertEquals(1, fixture.health.syncCalls)
         assertEquals(listOf("health_connect", "health_connect"), fixture.api.statusSources)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
     }
 
     @Test
@@ -2385,6 +2569,8 @@ class AppSessionTest {
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertTrue(fixture.localState.healthReconnectRequired)
         assertTrue(fixture.session.state.value.healthReconnectRequired)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
         assertEquals(
             "Health Connect needs to reconnect before syncing can resume.",
             fixture.session.state.value.healthMessage,
@@ -2409,6 +2595,47 @@ class AppSessionTest {
 
         assertFalse(fixture.localState.healthReconnectRequired)
         assertFalse(fixture.session.state.value.healthReconnectRequired)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+    }
+
+    @Test
+    fun friendlyNamesSurvivesTypedReconnectRevocationRestartAndCompletion() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.initialSetupStep = InitialSetupStep.FriendlyNames
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.signInError = CompanionApiException.ReconnectRequired
+
+        fixture.session.start()
+
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+        assertTrue(replacement.state.value.healthReconnectRequired)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.FriendlyNames, replacement.state.value.initialSetupStep)
+
+        fixture.api.signInError = null
+        assertTrue(replacement.prepareHealthConnection())
+        assertTrue(replacement.completeHealthPermissionFlow(true))
+        val requestId = requireNotNull(
+            replacement.state.value.pendingHealthHistoryPermissionRequestId,
+        )
+        assertTrue(replacement.consumeHealthHistoryPermissionLaunchRequest(requestId))
+        assertTrue(replacement.completeHealthHistoryPermissionFlow())
+
+        assertFalse(fixture.localState.healthReconnectRequired)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.FriendlyNames, replacement.state.value.initialSetupStep)
     }
 
     @Test
@@ -5346,10 +5573,11 @@ class AppSessionTest {
         var refreshGateOnCall: Int? = null
         val refreshEntered = CompletableDeferred<Unit>()
         var requireCurrentProcessSetupBeforeSync = false
+        var availabilityState = HealthConnectAvailability.Available
         private var identifiedInCurrentProcess = false
         private var configuredInCurrentProcess = false
 
-        override fun availability() = HealthConnectAvailability.Available
+        override fun availability() = availabilityState
         override fun openHealthConnectIntent(): Intent? = null
         override fun isSignedIn(): Boolean = signedIn
         override fun configure() {
@@ -5442,6 +5670,7 @@ class AppSessionTest {
     private class FakeLocalState : LocalState {
         override val installationId = "installation-id"
         override var memberKey: String? = null
+        override var initialSetupStep: InitialSetupStep? = null
         override var healthAccessRequestedAt: InstantValue? = null
         override var healthReceiptBaselineAt: InstantValue? = null
         override var lastKnownDataReceivedAt: InstantValue? = null
@@ -5452,12 +5681,23 @@ class AppSessionTest {
         var revokeHealthAuthorizationSucceeds = true
         var completeHealthAuthorizationSucceeds = true
         var requireHealthReconnectSucceeds = true
+        var advanceInitialSetupSucceeds = true
         var beginSignOutSucceeds = true
         var completeSignOutSucceeds = true
         private var storedAddressBookRevision: Int? = null
 
         override val addressBookRevision: Int?
             get() = storedAddressBookRevision
+
+        override fun advanceInitialSetupStep(
+            expected: InitialSetupStep,
+            next: InitialSetupStep,
+            abandonPendingAddressBookReplacement: Boolean,
+        ): Boolean {
+            if (!advanceInitialSetupSucceeds || initialSetupStep != expected) return false
+            initialSetupStep = next
+            return true
+        }
 
         override fun recordAddressBookRevision(revision: Int): Boolean {
             storedAddressBookRevision = revision
@@ -5471,13 +5711,20 @@ class AppSessionTest {
             requestedAt: InstantValue,
             receiptBaselineAt: InstantValue?,
             statusObservedAt: InstantValue,
+            completesInitialSetup: Boolean,
         ): Boolean {
             if (!completeHealthAuthorizationSucceeds) return false
+            if (completesInitialSetup && initialSetupStep != InitialSetupStep.HealthConnect) {
+                return false
+            }
             healthAccessRequestedAt = requestedAt
             healthReceiptBaselineAt = receiptBaselineAt
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = statusObservedAt
             healthReconnectRequired = false
+            if (completesInitialSetup) {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            }
             return true
         }
 
@@ -5509,6 +5756,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            initialSetupStep = null
             return true
         }
 
@@ -5526,6 +5774,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            initialSetupStep = null
             storedAddressBookRevision = null
         }
     }

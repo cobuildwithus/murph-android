@@ -40,6 +40,7 @@ fun SettingsScreen(
     onOpenSupport: () -> Unit,
     onDeleteAccount: () -> Unit,
     onSignOut: () -> Unit,
+    reserveStatusBarInset: Boolean = true,
 ) {
     val addressBook = addressBookSettingsModel(state)
     Column(
@@ -47,7 +48,7 @@ fun SettingsScreen(
             .fillMaxSize()
             .background(MurphColors.Cream)
             .verticalScroll(rememberScrollState())
-            .statusBarsPadding()
+            .then(if (reserveStatusBarInset) Modifier.statusBarsPadding() else Modifier)
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {

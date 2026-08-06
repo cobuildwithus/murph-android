@@ -3,6 +3,7 @@ package ai.withmurph.companion.storage
 import android.content.SharedPreferences
 import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,17 +12,68 @@ import org.junit.Test
 
 class SharedPreferencesLocalStateTest {
     @Test
+    fun initialSetupStepUsesStableValuesAndSurvivesReconstruction() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val expectedValues = listOf(
+            InitialSetupStep.HealthConnect to "health_connect",
+            InitialSetupStep.FriendlyNames to "friendly_names",
+            InitialSetupStep.Complete to "complete",
+        )
+
+        expectedValues.forEach { (step, wireValue) ->
+            assertEquals(wireValue, step.wireValue)
+            state.initialSetupStep = step
+            assertEquals(wireValue, preferences.getAll()["initial_setup_step"])
+        }
+
+        expectedValues.forEach { (step, wireValue) ->
+            preferences.edit().putString("initial_setup_step", wireValue).commit()
+            assertEquals(
+                step,
+                SharedPreferencesLocalState(preferences.recreated()).initialSetupStep,
+            )
+        }
+    }
+
+    @Test
+    fun malformedInitialSetupStepIsTreatedAsMissing() {
+        val preferences = FaultInjectedPreferences()
+        preferences.edit().putString("initial_setup_step", "unknown_step").commit()
+
+        assertNull(SharedPreferencesLocalState(preferences).initialSetupStep)
+    }
+
+    @Test
+    fun memberScopedClearRemovesInitialSetupStep() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val installationId = state.installationId
+        state.memberKey = "member-key"
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
+
+        state.clearMemberScopedState()
+
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertNull(reconstructed.memberKey)
+        assertNull(reconstructed.initialSetupStep)
+        assertEquals(installationId, reconstructed.installationId)
+    }
+
+    @Test
     fun healthSetupAuthorizationCommitsOneCompleteRestartSnapshot() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
         state.lastKnownDataReceivedAt = InstantValue(50)
         state.healthReconnectRequired = true
+        state.initialSetupStep = InitialSetupStep.HealthConnect
 
         assertTrue(
             state.completeHealthSetupAuthorization(
                 requestedAt = InstantValue(100),
                 receiptBaselineAt = InstantValue(75),
                 statusObservedAt = InstantValue(100),
+                completesInitialSetup = true,
             ),
         )
 
@@ -31,6 +83,7 @@ class SharedPreferencesLocalStateTest {
         assertNull(reconstructed.lastKnownDataReceivedAt)
         assertEquals(InstantValue(100), reconstructed.lastKnownStatusObservedAt)
         assertFalse(reconstructed.healthReconnectRequired)
+        assertEquals(InitialSetupStep.FriendlyNames, reconstructed.initialSetupStep)
     }
 
     @Test
@@ -46,6 +99,7 @@ class SharedPreferencesLocalStateTest {
         state.lastKnownDataReceivedAt = receivedAt
         state.lastKnownStatusObservedAt = observedAt
         state.healthReconnectRequired = true
+        state.initialSetupStep = InitialSetupStep.HealthConnect
         preferences.failCommits = true
 
         assertFalse(
@@ -53,6 +107,7 @@ class SharedPreferencesLocalStateTest {
                 requestedAt = InstantValue(300),
                 receiptBaselineAt = null,
                 statusObservedAt = InstantValue(300),
+                completesInitialSetup = true,
             ),
         )
 
@@ -61,12 +116,14 @@ class SharedPreferencesLocalStateTest {
         assertEquals(receivedAt, state.lastKnownDataReceivedAt)
         assertEquals(observedAt, state.lastKnownStatusObservedAt)
         assertTrue(state.healthReconnectRequired)
+        assertEquals(InitialSetupStep.HealthConnect, state.initialSetupStep)
         val reconstructed = SharedPreferencesLocalState(preferences.recreated())
         assertEquals(requestedAt, reconstructed.healthAccessRequestedAt)
         assertEquals(baselineAt, reconstructed.healthReceiptBaselineAt)
         assertEquals(receivedAt, reconstructed.lastKnownDataReceivedAt)
         assertEquals(observedAt, reconstructed.lastKnownStatusObservedAt)
         assertTrue(reconstructed.healthReconnectRequired)
+        assertEquals(InitialSetupStep.HealthConnect, reconstructed.initialSetupStep)
     }
 
     @Test
@@ -160,6 +217,7 @@ class SharedPreferencesLocalStateTest {
         state.lastKnownDataReceivedAt = receivedAt
         state.lastKnownStatusObservedAt = observedAt
         state.healthReconnectRequired = true
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
         preferences.failCommits = true
 
         assertFalse(state.beginSignOut())
@@ -170,6 +228,7 @@ class SharedPreferencesLocalStateTest {
         assertEquals(receivedAt, state.lastKnownDataReceivedAt)
         assertEquals(observedAt, state.lastKnownStatusObservedAt)
         assertTrue(state.healthReconnectRequired)
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
         val reconstructed = SharedPreferencesLocalState(preferences.recreated())
         assertFalse(reconstructed.signOutPending)
         assertEquals(requestedAt, reconstructed.healthAccessRequestedAt)
@@ -177,6 +236,7 @@ class SharedPreferencesLocalStateTest {
         assertEquals(receivedAt, reconstructed.lastKnownDataReceivedAt)
         assertEquals(observedAt, reconstructed.lastKnownStatusObservedAt)
         assertTrue(reconstructed.healthReconnectRequired)
+        assertEquals(InitialSetupStep.FriendlyNames, reconstructed.initialSetupStep)
     }
 
     @Test
@@ -309,6 +369,88 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
+    fun friendlyNamesDeferralAtomicallyClearsASettledReplacementRetry() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(8, MUTATION_ONE)
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
+        assertTrue(state.beginAddressBookReplacement(replacement))
+        preferences.failCommits = true
+
+        assertFalse(
+            state.advanceInitialSetupStep(
+                expected = InitialSetupStep.FriendlyNames,
+                next = InitialSetupStep.Complete,
+                abandonPendingAddressBookReplacement = true,
+            ),
+        )
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
+        assertEquals(replacement, state.pendingAddressBookReplacement)
+
+        preferences.failCommits = false
+        assertTrue(
+            state.advanceInitialSetupStep(
+                expected = InitialSetupStep.FriendlyNames,
+                next = InitialSetupStep.Complete,
+                abandonPendingAddressBookReplacement = true,
+            ),
+        )
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(InitialSetupStep.Complete, reconstructed.initialSetupStep)
+        assertNull(reconstructed.pendingAddressBookReplacement)
+    }
+
+    @Test
+    fun initialAddressBookSuccessCommitsRevisionAndSetupCompletionTogether() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(2, MUTATION_ONE)
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
+        assertTrue(state.recordAddressBookRevision(2))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+
+        assertTrue(
+            state.completeAddressBookReplacement(
+                mutationId = MUTATION_ONE,
+                revision = 3,
+                completesInitialSetup = true,
+            ),
+        )
+
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(3, reconstructed.addressBookRevision)
+        assertNull(reconstructed.pendingAddressBookReplacement)
+        assertEquals(InitialSetupStep.Complete, reconstructed.initialSetupStep)
+    }
+
+    @Test
+    fun failedInitialAddressBookCompletionRestoresTheWholeRestartSnapshot() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val replacement = AddressBookMutation(2, MUTATION_ONE)
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
+        assertTrue(state.recordAddressBookRevision(2))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+        preferences.failCommits = true
+
+        assertFalse(
+            state.completeAddressBookReplacement(
+                mutationId = MUTATION_ONE,
+                revision = 3,
+                completesInitialSetup = true,
+            ),
+        )
+
+        assertEquals(2, state.addressBookRevision)
+        assertEquals(replacement, state.pendingAddressBookReplacement)
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(2, reconstructed.addressBookRevision)
+        assertEquals(replacement, reconstructed.pendingAddressBookReplacement)
+        assertEquals(InitialSetupStep.FriendlyNames, reconstructed.initialSetupStep)
+    }
+
+    @Test
     fun failedAddressBookCommitRestoresLiveAndPersistedMetadata() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
@@ -333,11 +475,13 @@ class SharedPreferencesLocalStateTest {
         val deletion = AddressBookMutation(11, MUTATION_TWO)
         assertTrue(state.recordAddressBookRevision(11))
         assertTrue(state.beginAddressBookDeletion(deletion))
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
         preferences.failCommits = true
 
         assertFalse(state.beginSignOut())
         assertEquals(11, state.addressBookRevision)
         assertEquals(deletion, state.pendingAddressBookDeletion)
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
 
         preferences.failCommits = false
         assertTrue(state.beginSignOut())
@@ -345,6 +489,7 @@ class SharedPreferencesLocalStateTest {
         assertNull(state.addressBookRevision)
         assertNull(state.pendingAddressBookReplacement)
         assertNull(state.pendingAddressBookDeletion)
+        assertNull(state.initialSetupStep)
     }
 
     private class FaultInjectedPreferences(

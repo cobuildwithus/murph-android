@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.LocalState
 import java.util.UUID
 
@@ -28,6 +29,20 @@ class SharedPreferencesLocalState internal constructor(
         get() = preferences.getString(KEY_MEMBER_KEY, null)
         set(value) {
             preferences.edit().putString(KEY_MEMBER_KEY, value).apply()
+        }
+
+    override var initialSetupStep: InitialSetupStep?
+        get() = InitialSetupStep.fromWireValue(
+            preferences.getString(KEY_INITIAL_SETUP_STEP, null),
+        )
+        set(value) {
+            preferences.edit().apply {
+                if (value == null) {
+                    remove(KEY_INITIAL_SETUP_STEP)
+                } else {
+                    putString(KEY_INITIAL_SETUP_STEP, value.wireValue)
+                }
+            }.apply()
         }
 
     override var healthAccessRequestedAt: InstantValue?
@@ -78,6 +93,18 @@ class SharedPreferencesLocalState internal constructor(
             KEY_ADDRESS_BOOK_DELETION_MUTATION_ID,
         )
 
+    override fun advanceInitialSetupStep(
+        expected: InitialSetupStep,
+        next: InitialSetupStep,
+        abandonPendingAddressBookReplacement: Boolean,
+    ): Boolean {
+        if (initialSetupStep != expected) return false
+        return commitAddressBookChange {
+            writeInitialSetupStep(next)
+            if (abandonPendingAddressBookReplacement) removeAddressBookReplacement()
+        }
+    }
+
     override fun recordAddressBookRevision(revision: Int): Boolean {
         require(revision >= 0)
         return commitAddressBookChange {
@@ -104,13 +131,20 @@ class SharedPreferencesLocalState internal constructor(
     override fun completeAddressBookReplacement(
         mutationId: String,
         revision: Int,
+        completesInitialSetup: Boolean,
     ): Boolean {
         val pending = pendingAddressBookReplacement ?: return false
         if (pending.mutationId != mutationId || revision <= pending.baseRevision) return false
+        if (completesInitialSetup && initialSetupStep != InitialSetupStep.FriendlyNames) {
+            return false
+        }
         return commitAddressBookChange {
             putInt(KEY_ADDRESS_BOOK_REVISION, revision)
             removeAddressBookReplacement()
             removeAddressBookDeletion()
+            if (completesInitialSetup) {
+                writeInitialSetupStep(InitialSetupStep.Complete)
+            }
         }
     }
 
@@ -149,18 +183,26 @@ class SharedPreferencesLocalState internal constructor(
         requestedAt: InstantValue,
         receiptBaselineAt: InstantValue?,
         statusObservedAt: InstantValue,
+        completesInitialSetup: Boolean,
     ): Boolean {
         val previousRequestedAt = healthAccessRequestedAt
         val previousReceiptBaselineAt = healthReceiptBaselineAt
         val previousReceivedAt = lastKnownDataReceivedAt
         val previousStatusObservedAt = lastKnownStatusObservedAt
         val previousReconnectRequired = healthReconnectRequired
+        val previousSetupStep = initialSetupStep
+        if (completesInitialSetup && previousSetupStep != InitialSetupStep.HealthConnect) {
+            return false
+        }
         val committed = preferences.edit().apply {
             writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
             writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, receiptBaselineAt)
             remove(KEY_LAST_DATA_RECEIVED_AT)
             writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
             remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            if (completesInitialSetup) {
+                writeInitialSetupStep(InitialSetupStep.FriendlyNames)
+            }
         }.commit()
         if (!committed) {
             restoreAuthorizationSnapshot(
@@ -169,6 +211,7 @@ class SharedPreferencesLocalState internal constructor(
                 previousReceivedAt,
                 previousStatusObservedAt,
                 previousReconnectRequired,
+                setupStep = previousSetupStep,
             )
         }
         return committed
@@ -234,6 +277,7 @@ class SharedPreferencesLocalState internal constructor(
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
         val wasSignOutPending = signOutPending
+        val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
         // One durable boundary records the request and revokes member-scoped restoration.
         val committed = preferences.edit()
@@ -243,6 +287,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .remove(KEY_INITIAL_SETUP_STEP)
             .removeAddressBookMetadata()
             .commit()
         if (!committed) {
@@ -253,6 +298,7 @@ class SharedPreferencesLocalState internal constructor(
                 statusObservedAt,
                 reconnectRequired,
                 wasSignOutPending,
+                setupStep,
                 addressBookSnapshot,
             )
         }
@@ -268,6 +314,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .remove(KEY_INITIAL_SETUP_STEP)
             .remove(KEY_SIGN_OUT_PENDING)
             .removeAddressBookMetadata()
             .commit()
@@ -287,6 +334,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .remove(KEY_INITIAL_SETUP_STEP)
             .removeAddressBookMetadata()
             .apply()
     }
@@ -308,6 +356,7 @@ class SharedPreferencesLocalState internal constructor(
         statusObservedAt: InstantValue?,
         reconnectRequired: Boolean,
         pendingSignOut: Boolean? = null,
+        setupStep: InitialSetupStep? = initialSetupStep,
         addressBookSnapshot: AddressBookSnapshot? = null,
     ) {
         preferences.edit().apply {
@@ -316,6 +365,7 @@ class SharedPreferencesLocalState internal constructor(
             writeInstant(KEY_LAST_DATA_RECEIVED_AT, receivedAt)
             writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
             putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, reconnectRequired)
+            writeInitialSetupStep(setupStep)
             if (pendingSignOut != null) {
                 if (pendingSignOut) {
                     putBoolean(KEY_SIGN_OUT_PENDING, true)
@@ -332,9 +382,13 @@ class SharedPreferencesLocalState internal constructor(
         change: SharedPreferences.Editor.() -> Unit,
     ): Boolean {
         val snapshot = readAddressBookSnapshot()
+        val setupStep = initialSetupStep
         val committed = preferences.edit().apply(change).commit()
         if (!committed) {
-            preferences.edit().apply { writeAddressBookSnapshot(snapshot) }.commit()
+            preferences.edit().apply {
+                writeAddressBookSnapshot(snapshot)
+                writeInitialSetupStep(setupStep)
+            }.commit()
         }
         return committed
     }
@@ -393,9 +447,15 @@ class SharedPreferencesLocalState internal constructor(
         if (value == null) remove(key) else putLong(key, value.epochMilliseconds)
     }
 
+    private fun SharedPreferences.Editor.writeInitialSetupStep(value: InitialSetupStep?) {
+        if (value == null) remove(KEY_INITIAL_SETUP_STEP)
+        else putString(KEY_INITIAL_SETUP_STEP, value.wireValue)
+    }
+
     private companion object {
         const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_MEMBER_KEY = "member_key"
+        const val KEY_INITIAL_SETUP_STEP = "initial_setup_step"
         const val KEY_HEALTH_ACCESS_REQUESTED_AT = "health_access_requested_at"
         const val KEY_HEALTH_RECEIPT_BASELINE_AT = "health_receipt_baseline_at"
         const val KEY_LAST_DATA_RECEIVED_AT = "last_data_received_at"

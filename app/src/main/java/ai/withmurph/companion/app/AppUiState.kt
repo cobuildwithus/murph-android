@@ -3,6 +3,7 @@ package ai.withmurph.companion.app
 import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.LaunchConsentStatus
 import java.time.Instant
@@ -21,6 +22,7 @@ sealed interface AppPhase {
 
 data class AppUiState(
     val phase: AppPhase = AppPhase.Launching,
+    val initialSetupStep: InitialSetupStep = InitialSetupStep.HealthConnect,
     val healthAvailability: HealthConnectAvailability = HealthConnectAvailability.TemporarilyUnavailable,
     val healthSync: HealthSyncState = HealthSyncState.NotConnected,
     val healthStatusObservedAt: Instant? = null,

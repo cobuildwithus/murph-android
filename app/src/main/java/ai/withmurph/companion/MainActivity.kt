@@ -143,7 +143,13 @@ class MainActivity : ComponentActivity() {
                     actions = MurphActions(
                         onLoginMethodChanged = graph.login::setMethod,
                         onPhoneCountryChanged = graph.login::setPhoneCountry,
-                        onLoginDestinationChanged = graph.login::setDestination,
+                        onLoginDestinationChanged = { destination ->
+                            if (graph.login.setDestination(destination)) {
+                                graph.applicationScope.launch {
+                                    graph.login.sendCode(fromAutomaticPhoneFill = true)
+                                }
+                            }
+                        },
                         onLoginCodeChanged = graph.login::setCode,
                         onSendLoginCode = {
                             graph.applicationScope.launch { graph.login.sendCode() }
@@ -164,9 +170,24 @@ class MainActivity : ComponentActivity() {
                                 graph.session.prepareHealthConnection()
                             }
                         },
+                        onDeferHealthConnectInitialSetup = {
+                            graph.applicationScope.launch {
+                                graph.session.deferHealthConnectInitialSetup()
+                            }
+                        },
                         onOpenHealthConnect = ::openHealthConnect,
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
+                        },
+                        onPrepareInitialAddressBookSharing = {
+                            graph.applicationScope.launch {
+                                graph.session.prepareInitialAddressBookSharing()
+                            }
+                        },
+                        onDeferAddressBookSharingInitialSetup = {
+                            graph.applicationScope.launch {
+                                graph.session.deferAddressBookSharingInitialSetup()
+                            }
                         },
                         onShareAddressBook = {
                             graph.applicationScope.launch {

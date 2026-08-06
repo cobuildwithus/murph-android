@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.util.Locale
 
 data class LoginUiState(
     val method: LoginMethod = LoginMethod.Phone,
@@ -37,12 +38,19 @@ data class LoginUiState(
     }
 }
 
-class LoginCoordinator(private val auth: AuthProvider) {
+class LoginCoordinator(
+    private val auth: AuthProvider,
+    private val localeRegion: String? = Locale.getDefault().country,
+) {
     private val _state = MutableStateFlow(LoginUiState())
     val state: StateFlow<LoginUiState> = _state.asStateFlow()
+    private var automaticSendConsumed = false
+    private var destinationRevision = 0L
+    private var pendingAutomaticSendRevision: Long? = null
 
     fun setMethod(method: LoginMethod) {
         if (_state.value.isInFlight) return
+        advanceDestinationRevision()
         _state.value = LoginUiState(
             method = method,
             phoneCountry = _state.value.phoneCountry,
@@ -51,16 +59,61 @@ class LoginCoordinator(private val auth: AuthProvider) {
 
     fun setPhoneCountry(country: CountryDialCode) {
         if (_state.value.isInFlight || _state.value.codeSent) return
+        if (_state.value.phoneCountry == country) return
+        advanceDestinationRevision()
         _state.update { current ->
             current.copy(phoneCountry = country, errorMessage = null)
         }
     }
 
-    fun setDestination(destination: String) {
-        if (_state.value.isInFlight) return
-        _state.update { current ->
-            current.copy(destination = destination, errorMessage = null)
+    /** Returns true only when this whole-field update authorizes one automatic +1 send. */
+    fun setDestination(destination: String): Boolean {
+        val current = _state.value
+        if (current.isInFlight) return false
+
+        val compactInternational = if (current.method == LoginMethod.Phone) {
+            CountryDialCode.compactExplicitInternational(destination)
+        } else {
+            null
         }
+        val matchedCountry = compactInternational?.let(CountryDialCode::longestCuratedMatch)
+        val nextCountry = if (
+            matchedCountry != null && current.phoneCountry.dialCode != matchedCountry.dialCode
+        ) {
+            matchedCountry
+        } else {
+            current.phoneCountry
+        }
+        val nextDestination = when {
+            compactInternational == null -> destination
+            matchedCountry == null -> compactInternational
+            else -> compactInternational.drop(matchedCountry.dialCode.length)
+        }
+        val destinationChanged =
+            nextDestination != current.destination || nextCountry != current.phoneCountry
+        if (destinationChanged) advanceDestinationRevision()
+
+        val next = current.copy(
+            destination = nextDestination,
+            phoneCountry = nextCountry,
+            errorMessage = null,
+        )
+        _state.value = next
+
+        val automaticTarget = next.normalizedDestination
+        val shouldAutomaticallySend = current.destination.isEmpty() &&
+            next.method == LoginMethod.Phone &&
+            next.canSendCode &&
+            !automaticSendConsumed &&
+            isConservativeAutomaticFill(
+                input = destination,
+                compactInternational = compactInternational,
+                state = next,
+            )
+        if (shouldAutomaticallySend) {
+            pendingAutomaticSendRevision = destinationRevision
+        }
+        return shouldAutomaticallySend
     }
 
     fun setCode(code: String) {
@@ -73,9 +126,16 @@ class LoginCoordinator(private val auth: AuthProvider) {
         }
     }
 
-    suspend fun sendCode() {
+    suspend fun sendCode(fromAutomaticPhoneFill: Boolean = false) {
+        if (fromAutomaticPhoneFill) {
+            if (pendingAutomaticSendRevision != destinationRevision) return
+            pendingAutomaticSendRevision = null
+        } else {
+            pendingAutomaticSendRevision = null
+        }
         val snapshot = _state.value
         if (!snapshot.canSendCode) return
+        automaticSendConsumed = true
         _state.update { it.copy(isInFlight = true, errorMessage = null) }
         try {
             auth.sendCode(snapshot.method, snapshot.normalizedDestination)
@@ -136,12 +196,41 @@ class LoginCoordinator(private val auth: AuthProvider) {
 
     fun changeDestination() {
         if (_state.value.isInFlight) return
+        advanceDestinationRevision()
         _state.update { current ->
             current.copy(code = "", codeSent = false, errorMessage = null)
         }
     }
 
     fun reset() {
+        advanceDestinationRevision()
+        automaticSendConsumed = false
         _state.value = LoginUiState()
+    }
+
+    private fun isConservativeAutomaticFill(
+        input: String,
+        compactInternational: String?,
+        state: LoginUiState,
+    ): Boolean {
+        val target = state.normalizedDestination
+        if (compactInternational != null) {
+            return compactInternational == target &&
+                compactInternational.startsWith("+1") &&
+                compactInternational.drop(1).length == 11
+        }
+
+        val nationalDigits = CountryDialCode.compactNational(input) ?: return false
+        val isNanpLocale = localeRegion.equals("US", ignoreCase = true) ||
+            localeRegion.equals("CA", ignoreCase = true)
+        return isNanpLocale &&
+            state.phoneCountry.dialCode == "+1" &&
+            nationalDigits.length == 10 &&
+            target == "+1$nationalDigits"
+    }
+
+    private fun advanceDestinationRevision() {
+        destinationRevision += 1
+        pendingAutomaticSendRevision = null
     }
 }

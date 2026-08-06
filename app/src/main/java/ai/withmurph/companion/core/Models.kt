@@ -265,6 +265,18 @@ sealed interface AddressBookSharingState {
     ) : AddressBookSharingState
 }
 
+enum class InitialSetupStep(val wireValue: String) {
+    HealthConnect("health_connect"),
+    FriendlyNames("friendly_names"),
+    Complete("complete"),
+    ;
+
+    companion object {
+        fun fromWireValue(value: String?): InitialSetupStep? =
+            values().firstOrNull { it.wireValue == value }
+    }
+}
+
 enum class HealthConnectAvailability {
     Available,
     InstallOrUpdateRequired,

@@ -24,10 +24,12 @@ object MurphColors {
     val Amber = Color(0xFFC4A882)
     val Sage = Color(0xFF7A8C6E)
     val SageDark = Color(0xFF5A6E32)
+    val Ring = Color(0xFF5A6E3E)
     val Sienna = Color(0xFF8B5D3F)
     val BorderWarm = Color(0x40C4A882)
     val MutedSurface = Color(0x26C4A882)
     val MutedSurfaceOpaque = Color(0xFFF6EFE5)
+    val SelectedSurface = Color(0xFFE9E6DC)
     val NavigationSurface = Color(0xF7FFFCF6)
 }
 

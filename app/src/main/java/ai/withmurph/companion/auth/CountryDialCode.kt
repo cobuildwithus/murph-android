@@ -100,7 +100,13 @@ data class CountryDialCode(
                 digits.all { it in '0'..'9' }
         }
 
-        private fun compactExplicitInternational(value: String): String? {
+        internal fun longestCuratedMatch(explicitInternational: String): CountryDialCode? =
+            All
+                .asSequence()
+                .filter { explicitInternational.startsWith(it.dialCode) }
+                .maxByOrNull { it.dialCode.length }
+
+        internal fun compactExplicitInternational(value: String): String? {
             val result = StringBuilder()
             value.forEach { character ->
                 when {
@@ -113,7 +119,7 @@ data class CountryDialCode(
             return result.toString().takeIf { it.startsWith("+") }
         }
 
-        private fun compactNational(value: String): String? {
+        internal fun compactNational(value: String): String? {
             val result = StringBuilder()
             value.forEach { character ->
                 when {
@@ -125,7 +131,12 @@ data class CountryDialCode(
             return result.toString()
         }
 
-        private fun isPermittedFormatting(character: Char): Boolean =
-            character.isWhitespace() || character in setOf(' ', '-', '(', ')', '.')
+        private fun isPermittedFormatting(character: Char): Boolean {
+            val category = Character.getType(character)
+            return character.isWhitespace() ||
+                character in setOf(' ', '-', '(', ')', '.') ||
+                category == Character.FORMAT.toInt() ||
+                category == Character.DASH_PUNCTUATION.toInt()
+        }
     }
 }

@@ -18,6 +18,7 @@ import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.InitialOnboardingCompletionAction
 import ai.withmurph.companion.core.InitialOnboardingCompletionRequest
@@ -297,7 +298,6 @@ class AppSession(
             try {
                 val response = api.completeInitialOnboarding(memberKey, request)
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    releaseInitialOnboardingBusy(generation)
                     return@withLock
                 }
                 if (response.status != InitialOnboardingStatus.Completed) {
@@ -319,13 +319,11 @@ class AppSession(
                     clearInitialOnboardingState()
                 }
             } catch (error: CancellationException) {
-                releaseInitialOnboardingBusy(generation)
                 throw error
             } catch (_: CompanionApiException.ConsentRequired) {
                 val followUp = LaunchConsentFollowUp.CompleteInitialOnboarding(request)
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     prioritizeStaleInitialOnboardingConsent(memberKey, followUp)
-                    releaseInitialOnboardingBusy(generation)
                     return@withLock
                 }
                 releaseInitialOnboardingBusy(generation)
@@ -338,12 +336,9 @@ class AppSession(
             } catch (_: CompanionApiException.AccountConflict) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishAccountConflictFailure()
-                } else {
-                    releaseInitialOnboardingBusy(generation)
                 }
             } catch (error: CompanionApiException) {
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    releaseInitialOnboardingBusy(generation)
                     return@withLock
                 }
                 when (error) {
@@ -361,9 +356,9 @@ class AppSession(
                     publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
                     )
-                } else {
-                    releaseInitialOnboardingBusy(generation)
                 }
+            } finally {
+                releaseInitialOnboardingBusy(generation)
             }
         }
     }
@@ -395,7 +390,6 @@ class AppSession(
                     InitialOnboardingContactCardRequest(avatarId),
                 )
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    releaseInitialOnboardingBusy(generation)
                     return@withLock
                 }
                 val handoffId = nextInitialOnboardingContactCardHandoffId++
@@ -408,14 +402,12 @@ class AppSession(
                     )
                 }
             } catch (error: CancellationException) {
-                releaseInitialOnboardingBusy(generation)
                 throw error
             } catch (_: CompanionApiException.ConsentRequired) {
                 val followUp =
                     LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(avatarId)
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     prioritizeStaleInitialOnboardingConsent(memberKey, followUp)
-                    releaseInitialOnboardingBusy(generation)
                     return@withLock
                 }
                 releaseInitialOnboardingBusy(generation)
@@ -428,12 +420,9 @@ class AppSession(
             } catch (_: CompanionApiException.AccountConflict) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishAccountConflictFailure()
-                } else {
-                    releaseInitialOnboardingBusy(generation)
                 }
             } catch (error: CompanionApiException) {
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    releaseInitialOnboardingBusy(generation)
                     return@withLock
                 }
                 when (error) {
@@ -451,9 +440,9 @@ class AppSession(
                     publishInitialOnboardingFailure(
                         "We couldn't open the contact card. Check your connection and try again.",
                     )
-                } else {
-                    releaseInitialOnboardingBusy(generation)
                 }
+            } finally {
+                releaseInitialOnboardingBusy(generation)
             }
         }
     }
@@ -503,10 +492,65 @@ class AppSession(
         }
     }
 
-    suspend fun prepareAddressBookSharing(): Boolean = prepareAddressBookSharing(null)
+    suspend fun deferAddressBookSharingInitialSetup(): Boolean = addressBookMutex.withLock {
+        val current = _state.value
+        if (
+            current.phase != AppPhase.Ready ||
+            current.initialSetupStep != InitialSetupStep.FriendlyNames ||
+            current.isAddressBookBusy ||
+            pendingAddressBookPermissionFlow != null ||
+            hasActiveLaunchConsentRecovery()
+        ) {
+            return@withLock false
+        }
+        val memberKey = currentMemberKey ?: return@withLock false
+        val deferred = advanceInitialSetupStep(
+            expected = InitialSetupStep.FriendlyNames,
+            next = InitialSetupStep.Complete,
+            abandonPendingAddressBookReplacement = true,
+        )
+        if (!deferred) {
+            val hasSavedRetry = localState.pendingAddressBookReplacement != null
+            _state.update {
+                if (
+                    it.phase == AppPhase.Ready &&
+                    it.initialSetupStep == InitialSetupStep.FriendlyNames &&
+                    currentMemberKey == memberKey &&
+                    localState.memberKey == memberKey &&
+                    localState.initialSetupStep == InitialSetupStep.FriendlyNames &&
+                    !localState.signOutPending
+                ) {
+                    it.copy(
+                        addressBookMessage = if (hasSavedRetry) {
+                            "Murph couldn't safely clear the saved contact retry. Try again."
+                        } else {
+                            "Murph couldn't save that Friendly Names setup choice. Try again."
+                        },
+                    )
+                } else {
+                    it
+                }
+            }
+        } else {
+            _state.update {
+                it.copy(
+                    addressBookHasInterruptedReplacement = false,
+                    addressBookMessage = null,
+                )
+            }
+        }
+        deferred
+    }
+
+    suspend fun prepareInitialAddressBookSharing(): Boolean =
+        prepareAddressBookSharing(acceptedConsentOwner = null, completesInitialSetup = true)
+
+    suspend fun prepareAddressBookSharing(): Boolean =
+        prepareAddressBookSharing(acceptedConsentOwner = null, completesInitialSetup = false)
 
     private suspend fun prepareAddressBookSharing(
         acceptedConsentOwner: PendingLaunchConsentRecovery?,
+        completesInitialSetup: Boolean,
     ): Boolean {
         if (!allowsLaunchConsentWork(acceptedConsentOwner)) return false
         if (!contacts.isSupported) return false
@@ -516,6 +560,15 @@ class AppSession(
         var ownerEpoch: Int? = null
         try {
             if (pendingAddressBookPermissionFlow != null) return false
+            if (
+                completesInitialSetup &&
+                (
+                    _state.value.initialSetupStep != InitialSetupStep.FriendlyNames ||
+                        localState.initialSetupStep != InitialSetupStep.FriendlyNames
+                )
+            ) {
+                return false
+            }
             val memberKey = currentMemberKey ?: return false
             val epoch = sessionEpoch
             ownerMemberKey = memberKey
@@ -533,7 +586,9 @@ class AppSession(
             val status = fetchAddressBookStatusLocked(
                 memberKey = memberKey,
                 epoch = epoch,
-                consentFollowUp = LaunchConsentFollowUp.PrepareAddressBookPermission,
+                consentFollowUp = LaunchConsentFollowUp.PrepareAddressBookPermission(
+                    completesInitialSetup,
+                ),
             ) ?: return false
             if (!ownsAddressBookWork(memberKey, epoch)) return false
             if (status.writeCapability != AddressBookWriteCapability.Enabled) {
@@ -577,6 +632,7 @@ class AppSession(
                 memberKey = memberKey,
                 mutation = mutation,
                 preflightStatus = status,
+                completesInitialSetup = completesInitialSetup,
                 ownedRevisionForPermissionLoss = status.revision.takeIf {
                     status.enabled && localState.addressBookRevision == status.revision
                 },
@@ -782,7 +838,13 @@ class AppSession(
                         )
                         return@withLock false
                     }
-                    if (!localState.completeAddressBookReplacement(mutation.mutationId, status.revision)) {
+                    if (
+                        !localState.completeAddressBookReplacement(
+                            mutationId = mutation.mutationId,
+                            revision = status.revision,
+                            completesInitialSetup = pending.completesInitialSetup,
+                        )
+                    ) {
                         publishAddressBookStatus(
                             pending.memberKey,
                             pending.epoch,
@@ -790,6 +852,12 @@ class AppSession(
                             "The server saved this update, but Murph couldn't confirm it locally. Tap Retry.",
                         )
                         return@withLock false
+                    }
+                    if (pending.completesInitialSetup) {
+                        projectInitialSetupStep(
+                            expected = InitialSetupStep.FriendlyNames,
+                            next = InitialSetupStep.Complete,
+                        )
                     }
                     publishAddressBookStatus(pending.memberKey, pending.epoch, status, null)
                     true
@@ -1045,6 +1113,44 @@ class AppSession(
         }
     }
 
+    suspend fun deferHealthConnectInitialSetup(): Boolean = healthMutex.withLock {
+        val current = _state.value
+        if (
+            current.phase != AppPhase.Ready ||
+            current.initialSetupStep != InitialSetupStep.HealthConnect ||
+            current.isConnectingHealth ||
+            pendingHealthConnection != null ||
+            hasActiveLaunchConsentRecovery()
+        ) {
+            return@withLock false
+        }
+        val memberKey = currentMemberKey ?: return@withLock false
+        val deferred = advanceInitialSetupStep(
+            expected = InitialSetupStep.HealthConnect,
+            next = InitialSetupStep.FriendlyNames,
+        )
+        if (!deferred) {
+            _state.update {
+                if (
+                    it.phase == AppPhase.Ready &&
+                    it.initialSetupStep == InitialSetupStep.HealthConnect &&
+                    currentMemberKey == memberKey &&
+                    localState.memberKey == memberKey &&
+                    localState.initialSetupStep == InitialSetupStep.HealthConnect &&
+                    !localState.signOutPending
+                ) {
+                    it.copy(
+                        healthMessage =
+                            "Murph couldn't save that Health Connect setup choice. Try again.",
+                    )
+                } else {
+                    it
+                }
+            }
+        }
+        deferred
+    }
+
     suspend fun prepareHealthConnection(): Boolean = prepareHealthConnection(null)
 
     private suspend fun prepareHealthConnection(
@@ -1067,7 +1173,25 @@ class AppSession(
                 return false
             }
             val memberKey = currentMemberKey ?: return false
-            when (health.availability()) {
+            val availabilityEpoch = sessionEpoch
+            val availability = health.availability()
+            _state.update { current ->
+                if (
+                    availabilityEpoch == sessionEpoch &&
+                    memberKey == currentMemberKey &&
+                    memberKey == localState.memberKey &&
+                    current.phase == AppPhase.Ready &&
+                    !current.isConnectingHealth &&
+                    current.authVerifiedOnline &&
+                    !localState.signOutPending
+                ) {
+                    current.copy(healthAvailability = availability)
+                } else {
+                    current
+                }
+            }
+            if (!ownsHealthConnectionPreparation(memberKey, availabilityEpoch)) return false
+            when (availability) {
                 HealthConnectAvailability.Available -> {
                     val validatedEpoch = sessionEpoch
                     val receiptBeforePreflight = localState.lastKnownDataReceivedAt
@@ -1344,12 +1468,16 @@ class AppSession(
                 return@withLock false
             }
             val requestedAt = InstantValue(pending.requestedAt.toEpochMilli())
+            val completesInitialSetup =
+                _state.value.initialSetupStep == InitialSetupStep.HealthConnect &&
+                    localState.initialSetupStep == InitialSetupStep.HealthConnect
             val committed = localState.completeHealthSetupAuthorization(
                 requestedAt = requestedAt,
                 receiptBaselineAt = pending.receiptBaselineAt?.let {
                     InstantValue(it.toEpochMilli())
                 },
                 statusObservedAt = requestedAt,
+                completesInitialSetup = completesInitialSetup,
             )
             if (!committed) {
                 pendingHealthConnection = null
@@ -1366,6 +1494,12 @@ class AppSession(
                     )
                 }
                 return@withLock false
+            }
+            if (completesInitialSetup) {
+                projectInitialSetupStep(
+                    expected = InitialSetupStep.HealthConnect,
+                    next = InitialSetupStep.FriendlyNames,
+                )
             }
             pendingHealthConnection = null
             _state.update { current ->
@@ -1755,6 +1889,7 @@ class AppSession(
         }
         localState.memberKey = authState.memberKey
         currentMemberKey = authState.memberKey
+        val initialSetupStep = resolveInitialSetupStep()
         var epoch = sessionEpoch
         val requested = healthWasRequested()
         if (authState.verifiedOnline) {
@@ -1869,6 +2004,7 @@ class AppSession(
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
+                initialSetupStep = initialSetupStep,
                 authVerifiedOnline = authState.verifiedOnline,
                 healthAvailability = health.availability(),
                 healthSync = if (needsPermissionRecovery) {
@@ -1978,9 +2114,11 @@ class AppSession(
         currentMemberKey = memberKey
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
+        val initialSetupStep = resolveInitialSetupStep()
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
+                initialSetupStep = initialSetupStep,
                 authVerifiedOnline = false,
                 healthSync = if (needsPermissionRecovery) {
                     HealthSyncState.NotConnected
@@ -2985,9 +3123,11 @@ class AppSession(
             )
         }
         pendingLaunchConsentRecovery = pending
+        val initialSetupStep = resolveInitialSetupStep()
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
+                initialSetupStep = initialSetupStep,
                 authVerifiedOnline = true,
                 healthAvailability = health.availability(),
                 healthSync = deriveCachedHealthState(),
@@ -3515,8 +3655,11 @@ class AppSession(
                 syncNow(foregroundClaim = null, acceptedConsentOwner = pending)
             LaunchConsentFollowUp.PrepareHealthPermission ->
                 prepareHealthConnection(pending)
-            LaunchConsentFollowUp.PrepareAddressBookPermission ->
-                prepareAddressBookSharing(pending)
+            is LaunchConsentFollowUp.PrepareAddressBookPermission ->
+                prepareAddressBookSharing(
+                    acceptedConsentOwner = pending,
+                    completesInitialSetup = followUp.completesInitialSetup,
+                )
             LaunchConsentFollowUp.ReconcileAddressBook ->
                 reconcileAddressBookForeground(showBusy = false)
             LaunchConsentFollowUp.StopAddressBookSharing ->
@@ -3529,6 +3672,18 @@ class AppSession(
                     followUp.receiptBaselineAt,
                 )
             is LaunchConsentFollowUp.AddressBookReplacement -> {
+                if (
+                    followUp.pending.completesInitialSetup &&
+                    (
+                        _state.value.initialSetupStep != InitialSetupStep.FriendlyNames ||
+                            localState.initialSetupStep != InitialSetupStep.FriendlyNames
+                    )
+                ) {
+                    localState.abandonAddressBookReplacement(
+                        followUp.pending.mutation.mutationId,
+                    )
+                    return
+                }
                 val memberKey = currentMemberKey ?: return
                 val restored = followUp.pending.copy(
                     epoch = sessionEpoch,
@@ -3628,7 +3783,7 @@ class AppSession(
         LaunchConsentFollowUp.PrepareHealthPermission,
         is LaunchConsentFollowUp.CompleteHealthPermission,
         -> LaunchConsentHealthRestoreOrder.None
-        LaunchConsentFollowUp.PrepareAddressBookPermission,
+        is LaunchConsentFollowUp.PrepareAddressBookPermission,
         LaunchConsentFollowUp.ReconcileAddressBook,
         is LaunchConsentFollowUp.CompleteInitialOnboarding,
         is LaunchConsentFollowUp.PrepareInitialOnboardingContactCard,
@@ -4205,6 +4360,71 @@ class AppSession(
 
     private fun healthWasRequested(): Boolean = healthRequestedAt() != null
 
+    private fun resolveInitialSetupStep(): InitialSetupStep {
+        val stored = localState.initialSetupStep
+        val resolved = when {
+            stored == InitialSetupStep.HealthConnect && healthWasRequested() ->
+                InitialSetupStep.FriendlyNames
+            stored != null -> stored
+            healthWasRequested() || localState.healthReconnectRequired ->
+                InitialSetupStep.Complete
+            else -> InitialSetupStep.HealthConnect
+        }
+        if (stored != resolved) localState.initialSetupStep = resolved
+        return resolved
+    }
+
+    private fun advanceInitialSetupStep(
+        expected: InitialSetupStep,
+        next: InitialSetupStep,
+        abandonPendingAddressBookReplacement: Boolean = false,
+    ): Boolean {
+        val memberKey = currentMemberKey ?: return false
+        val current = _state.value
+        if (
+            current.phase != AppPhase.Ready ||
+            current.initialSetupStep != expected ||
+            memberKey != localState.memberKey ||
+            localState.signOutPending ||
+            localState.initialSetupStep != expected
+        ) {
+            return false
+        }
+        if (
+            !localState.advanceInitialSetupStep(
+                expected = expected,
+                next = next,
+                abandonPendingAddressBookReplacement =
+                    abandonPendingAddressBookReplacement,
+            )
+        ) {
+            return false
+        }
+        return projectInitialSetupStep(expected, next)
+    }
+
+    private fun projectInitialSetupStep(
+        expected: InitialSetupStep,
+        next: InitialSetupStep,
+    ): Boolean {
+        val memberKey = currentMemberKey ?: return false
+        if (localState.initialSetupStep != next) return false
+        _state.update { state ->
+            if (
+                state.phase == AppPhase.Ready &&
+                state.initialSetupStep == expected &&
+                memberKey == currentMemberKey &&
+                memberKey == localState.memberKey &&
+                !localState.signOutPending
+            ) {
+                state.copy(initialSetupStep = next)
+            } else {
+                state
+            }
+        }
+        return _state.value.initialSetupStep == next
+    }
+
     private fun healthReceiptBaselineAt(): Instant? =
         localState.healthReceiptBaselineAt?.epochMilliseconds?.let(Instant::ofEpochMilli)
 
@@ -4352,6 +4572,7 @@ class AppSession(
         val memberKey: String,
         val mutation: AddressBookMutation,
         val preflightStatus: AddressBookServerStatus,
+        val completesInitialSetup: Boolean,
         val ownedRevisionForPermissionLoss: Int?,
     )
 
@@ -4405,7 +4626,9 @@ class AppSession(
         data object Reconcile : LaunchConsentFollowUp
         data object SyncHealth : LaunchConsentFollowUp
         data object PrepareHealthPermission : LaunchConsentFollowUp
-        data object PrepareAddressBookPermission : LaunchConsentFollowUp
+        data class PrepareAddressBookPermission(
+            val completesInitialSetup: Boolean,
+        ) : LaunchConsentFollowUp
         data object ReconcileAddressBook : LaunchConsentFollowUp
         data object StopAddressBookSharing : LaunchConsentFollowUp
         data class AutomaticAddressBookDeletion(

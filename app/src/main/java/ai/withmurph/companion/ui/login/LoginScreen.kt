@@ -12,17 +12,20 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -49,6 +53,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -59,8 +64,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -87,18 +97,23 @@ fun LoginScreen(
     onOpenTerms: () -> Unit,
 ) {
     var showsCountryPicker by rememberSaveable { mutableStateOf(false) }
+    var hasFocusedOnce by remember { mutableStateOf(false) }
     val destinationFocus = remember { FocusRequester() }
     val codeFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
     LaunchedEffect(state.method, state.codeSent, showsCountryPicker) {
         if (showsCountryPicker) return@LaunchedEffect
-        delay(450)
+        delay(if (hasFocusedOnce) 80 else 450)
         if (state.codeSent) {
             codeFocus.requestFocus()
         } else {
             destinationFocus.requestFocus()
         }
+        hasFocusedOnce = true
         keyboard?.show()
     }
 
@@ -110,6 +125,16 @@ fun LoginScreen(
             .imePadding(),
     ) {
         val topSpacing = (maxHeight * 0.14f).coerceIn(40.dp, 112.dp)
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    }
+                },
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -126,16 +151,15 @@ fun LoginScreen(
 
                     if (state.codeSent) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text(
                                 text = "We sent a code to ${state.normalizedDestination}.",
                                 modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                 color = MurphColors.SlateMuted,
-                                maxLines = 2,
                             )
                             MurphLinkButton(
                                 text = "Resend",
@@ -150,14 +174,14 @@ fun LoginScreen(
                         ) {
                             Text(
                                 text = "Health challenges with friends.",
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                 color = MurphColors.SlateMuted,
                             )
                         }
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(28.dp))
 
                 if (state.codeSent) {
                     CodeStage(
@@ -174,30 +198,43 @@ fun LoginScreen(
                         onChooseCountry = { showsCountryPicker = true },
                         onDestinationChanged = onDestinationChanged,
                         onSendCode = onSendCode,
-                        onMethodChanged = onMethodChanged,
+                        onMethodChanged = {
+                            focusManager.clearFocus()
+                            onMethodChanged(it)
+                        },
                     )
                 }
 
                 if (state.errorMessage != null) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(20.dp))
                     Text(
                         text = state.errorMessage,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = MurphColors.SlateMuted,
                     )
                 }
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 48.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MurphLinkButton("Privacy", onOpenPrivacy)
-                Spacer(Modifier.width(18.dp))
-                MurphLinkButton("Terms", onOpenTerms)
+            if (!imeVisible) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 48.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MurphLinkButton(
+                        text = "Privacy",
+                        onClick = onOpenPrivacy,
+                        enabled = !state.isInFlight,
+                    )
+                    Spacer(Modifier.width(18.dp))
+                    MurphLinkButton(
+                        text = "Terms",
+                        onClick = onOpenTerms,
+                        enabled = !state.isInFlight,
+                    )
+                }
             }
         }
     }
@@ -224,43 +261,44 @@ private fun DestinationStage(
     onMethodChanged: (LoginMethod) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        if (state.method == LoginMethod.Phone) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (state.method == LoginMethod.Phone) {
                 CountryButton(
                     country = state.phoneCountry,
                     enabled = !state.isInFlight,
                     onClick = onChooseCountry,
                 )
-                MurphTextField(
-                    value = state.destination,
-                    onValueChange = onDestinationChanged,
-                    label = "Phone number",
-                    placeholder = "555 555 0100",
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Phone,
-                        imeAction = ImeAction.Send,
-                    ),
-                    keyboardActions = KeyboardActions(onSend = { onSendCode() }),
-                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                    enabled = !state.isInFlight,
-                )
             }
-        } else {
             MurphTextField(
                 value = state.destination,
                 onValueChange = onDestinationChanged,
-                label = "Email address",
-                placeholder = "you@example.com",
+                label = if (state.method == LoginMethod.Phone) "Phone number" else "Email address",
+                placeholder = if (state.method == LoginMethod.Phone) {
+                    "555 555 0100"
+                } else {
+                    "you@example.com"
+                },
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
+                    keyboardType = if (state.method == LoginMethod.Phone) {
+                        KeyboardType.Phone
+                    } else {
+                        KeyboardType.Email
+                    },
                     imeAction = ImeAction.Send,
                 ),
                 keyboardActions = KeyboardActions(onSend = { onSendCode() }),
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
                 enabled = !state.isInFlight,
+                autofillContentType = if (state.method == LoginMethod.Phone) {
+                    ContentType.PhoneNumberNational
+                } else {
+                    ContentType.EmailAddress
+                },
             )
         }
 
@@ -300,7 +338,15 @@ private fun CountryButton(
             .clip(shape)
             .background(MurphColors.Card.copy(alpha = 0.9f))
             .border(1.dp, MurphColors.BorderWarm, shape)
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics(mergeDescendants = true) {
+                contentDescription =
+                    "Country or region, ${country.localizedName}, ${country.dialCode}"
+            }
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -343,9 +389,10 @@ private fun CodeStage(
             onValueChange = onCodeChanged,
             focusRequester = focusRequester,
             onComplete = onConfirmCode,
+            enabled = !state.isInFlight,
         )
         MurphPrimaryButton(
-            text = if (state.isInFlight) "Continuing…" else "Continue",
+            text = if (state.isInFlight) "Signing in…" else "Sign in",
             onClick = onConfirmCode,
             enabled = state.canConfirmCode,
         )
@@ -368,6 +415,7 @@ private fun OtpInput(
     onValueChange: (String) -> Unit,
     focusRequester: FocusRequester,
     onComplete: () -> Unit,
+    enabled: Boolean,
 ) {
     var focused by remember { mutableStateOf(false) }
 
@@ -390,7 +438,7 @@ private fun OtpInput(
                         .background(MurphColors.Card.copy(alpha = 0.9f))
                         .border(
                             width = if (active) 2.dp else 1.dp,
-                            color = if (active) MurphColors.SageDark else MurphColors.BorderWarm,
+                            color = if (active) MurphColors.Ring else MurphColors.BorderWarm,
                             shape = RoundedCornerShape(12.dp),
                         ),
                     contentAlignment = Alignment.Center,
@@ -407,14 +455,24 @@ private fun OtpInput(
 
         BasicTextField(
             value = value,
-            onValueChange = { onValueChange(it.filter(Char::isDigit).take(6)) },
+            onValueChange = { input ->
+                val digits = input.filter(Char::isDigit).take(6)
+                onValueChange(digits)
+                if (value.length < 6 && digits.length == 6) {
+                    onComplete()
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
-                .semantics { contentDescription = "6-digit verification code" }
+                .semantics {
+                    contentDescription = "6-digit verification code"
+                    contentType = ContentType.SmsOtpCode
+                }
                 .focusRequester(focusRequester)
                 .onFocusChanged { focused = it.isFocused },
+            enabled = enabled,
             keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.NumberPassword,
+                keyboardType = KeyboardType.Number,
                 imeAction = ImeAction.Done,
             ),
             keyboardActions = KeyboardActions(onDone = { onComplete() }),
@@ -510,7 +568,11 @@ private fun CountryPicker(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSelect(country) }
+                            .selectable(
+                                selected = country == selection,
+                                role = Role.RadioButton,
+                                onClick = { onSelect(country) },
+                            )
                             .padding(horizontal = 4.dp, vertical = 20.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
