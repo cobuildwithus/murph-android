@@ -489,12 +489,14 @@ internal interface MealPhotoCredentialStoring {
     fun bindOwner(generationId: String, ownerDigest: String): Boolean
     fun ownerDigest(generationId: String): String?
     fun load(generationId: String): MealPhotoCredential?
+    fun loadPrepared(generationId: String): MealPhotoCredential?
     fun retainedIdempotencySecret(generationId: String): String?
     fun pendingRevocationToken(generationId: String): String?
     fun markEnrollmentPending(generationId: String): Boolean
     fun hasPendingEnrollment(generationId: String): Boolean
     fun clearPendingEnrollment(generationId: String): Boolean
-    fun save(credential: MealPhotoCredential): Boolean
+    fun savePrepared(credential: MealPhotoCredential): Boolean
+    fun activatePrepared(generationId: String): Boolean
     fun suspend(generationId: String): Boolean
     fun confirmRevoked(generationId: String): Boolean
     fun hasGenerationKey(generationId: String): Boolean
@@ -538,6 +540,17 @@ internal class KeystoreMealPhotoCredentialStore(context: Context) : MealPhotoCre
         return CredentialCodec.decode(clear)?.takeIf { it.generationId == generationId }
     }
 
+    @Synchronized
+    override fun loadPrepared(generationId: String): MealPhotoCredential? {
+        if (preferences.getString(GENERATION_KEY, null) != generationId) return null
+        val encoded = preferences.getString(PREPARED_CREDENTIAL_KEY, null) ?: return null
+        val encrypted = runCatching { Base64.decode(encoded, Base64.NO_WRAP) }.getOrNull()
+            ?: return null
+        val key = loadKey(generationId) ?: return null
+        val clear = decrypt(encrypted, preparedCredentialAad(generationId), key) ?: return null
+        return CredentialCodec.decode(clear)?.takeIf { it.generationId == generationId }
+    }
+
     override fun retainedIdempotencySecret(generationId: String): String? {
         if (preferences.getString(GENERATION_KEY, null) != generationId) return null
         val encoded = preferences.getString(IDEMPOTENCY_SECRET_KEY, null) ?: return null
@@ -577,13 +590,17 @@ internal class KeystoreMealPhotoCredentialStore(context: Context) : MealPhotoCre
         return preferences.edit().remove(ENROLLMENT_PENDING_KEY).commit()
     }
 
-    override fun save(credential: MealPhotoCredential): Boolean {
+    @Synchronized
+    override fun savePrepared(credential: MealPhotoCredential): Boolean {
         if (!credential.isValid) return false
         return runCatching {
             val clear = CredentialCodec.encode(credential) ?: return@runCatching false
             val key = getOrCreateKey(credential.generationId)
-            val encrypted = encrypt(clear, credentialAad(credential.generationId), key)
-                ?: return@runCatching false
+            val encrypted = encrypt(
+                clear,
+                preparedCredentialAad(credential.generationId),
+                key,
+            ) ?: return@runCatching false
             val encryptedIdempotencySecret = encrypt(
                 credential.idempotencySecret.toByteArray(Charsets.UTF_8),
                 idempotencyAad(credential.generationId),
@@ -591,37 +608,63 @@ internal class KeystoreMealPhotoCredentialStore(context: Context) : MealPhotoCre
             ) ?: return@runCatching false
             preferences.edit()
                 .putString(GENERATION_KEY, credential.generationId)
-                .putString(CREDENTIAL_KEY, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .putString(
+                    PREPARED_CREDENTIAL_KEY,
+                    Base64.encodeToString(encrypted, Base64.NO_WRAP),
+                )
                 .putString(
                     IDEMPOTENCY_SECRET_KEY,
                     Base64.encodeToString(encryptedIdempotencySecret, Base64.NO_WRAP),
                 )
+                .putBoolean(ENROLLMENT_PENDING_KEY, true)
+                .remove(CREDENTIAL_KEY)
+                .commit()
+        }.getOrDefault(false)
+    }
+
+    @Synchronized
+    override fun activatePrepared(generationId: String): Boolean {
+        val credential = loadPrepared(generationId) ?: return false
+        return runCatching {
+            val clear = CredentialCodec.encode(credential) ?: return@runCatching false
+            val key = loadKey(generationId) ?: return@runCatching false
+            val encrypted = encrypt(clear, credentialAad(generationId), key)
+                ?: return@runCatching false
+            preferences.edit()
+                .putString(CREDENTIAL_KEY, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .remove(PREPARED_CREDENTIAL_KEY)
                 .remove(PENDING_REVOCATION_TOKEN_KEY)
                 .remove(ENROLLMENT_PENDING_KEY)
                 .commit()
         }.getOrDefault(false)
     }
 
+    @Synchronized
     override fun suspend(generationId: String): Boolean {
         if (preferences.getString(GENERATION_KEY, null) != generationId) return false
-        val credential = load(generationId)
+        val credential = loadPrepared(generationId) ?: load(generationId)
         if (retainedIdempotencySecret(generationId) == null) {
             val idempotencySecret = credential?.idempotencySecret
-                ?: return hasPendingEnrollment(generationId)
-            val key = loadKey(generationId) ?: return false
-            val encryptedIdempotencySecret = encrypt(
-                idempotencySecret.toByteArray(Charsets.UTF_8),
-                idempotencyAad(generationId),
-                key,
-            ) ?: return false
-            if (
-                !preferences.edit().putString(
-                    IDEMPOTENCY_SECRET_KEY,
-                    Base64.encodeToString(encryptedIdempotencySecret, Base64.NO_WRAP),
-                ).commit()
-            ) return false
+            if (idempotencySecret == null) {
+                if (!hasPendingEnrollment(generationId)) return false
+            } else {
+                val key = loadKey(generationId) ?: return false
+                val encryptedIdempotencySecret = encrypt(
+                    idempotencySecret.toByteArray(Charsets.UTF_8),
+                    idempotencyAad(generationId),
+                    key,
+                ) ?: return false
+                if (
+                    !preferences.edit().putString(
+                        IDEMPOTENCY_SECRET_KEY,
+                        Base64.encodeToString(encryptedIdempotencySecret, Base64.NO_WRAP),
+                    ).commit()
+                ) return false
+            }
         }
-        val edit = preferences.edit().remove(CREDENTIAL_KEY)
+        val edit = preferences.edit()
+            .remove(CREDENTIAL_KEY)
+            .remove(PREPARED_CREDENTIAL_KEY)
         if (credential != null) {
             val key = loadKey(generationId) ?: return false
             val encryptedToken = encrypt(
@@ -639,15 +682,21 @@ internal class KeystoreMealPhotoCredentialStore(context: Context) : MealPhotoCre
 
     override fun confirmRevoked(generationId: String): Boolean {
         if (preferences.getString(GENERATION_KEY, null) != generationId) return false
-        return preferences.edit().remove(PENDING_REVOCATION_TOKEN_KEY).commit()
+        return preferences.edit()
+            .remove(PREPARED_CREDENTIAL_KEY)
+            .remove(PENDING_REVOCATION_TOKEN_KEY)
+            .remove(ENROLLMENT_PENDING_KEY)
+            .commit()
     }
 
     override fun hasGenerationKey(generationId: String): Boolean =
         runCatching { keyStore().containsAlias(alias(generationId)) }.getOrDefault(false)
 
+    @Synchronized
     override fun clear(generationId: String, preserveGenerationKey: Boolean): Boolean {
         val valuesCleared = preferences.edit()
             .remove(CREDENTIAL_KEY)
+            .remove(PREPARED_CREDENTIAL_KEY)
             .remove(IDEMPOTENCY_SECRET_KEY)
             .remove(PENDING_REVOCATION_TOKEN_KEY)
             .remove(ENROLLMENT_PENDING_KEY)
@@ -722,6 +771,9 @@ internal class KeystoreMealPhotoCredentialStore(context: Context) : MealPhotoCre
 
     private fun credentialAad(generationId: String): String = "$generationId:credential"
 
+    private fun preparedCredentialAad(generationId: String): String =
+        "$generationId:prepared-credential"
+
     private fun idempotencyAad(generationId: String): String = "$generationId:idempotency"
 
     private fun revocationAad(generationId: String): String = "$generationId:revocation"
@@ -735,6 +787,7 @@ internal class KeystoreMealPhotoCredentialStore(context: Context) : MealPhotoCre
         const val ALIAS_PREFIX = "ai.withmurph.meal-photo."
         const val PREFERENCES = "murph_meal_photo_credentials"
         const val CREDENTIAL_KEY = "credential_v1"
+        const val PREPARED_CREDENTIAL_KEY = "prepared_credential_v1"
         const val IDEMPOTENCY_SECRET_KEY = "idempotency_secret_v1"
         const val PENDING_REVOCATION_TOKEN_KEY = "pending_revocation_token_v1"
         const val ENROLLMENT_PENDING_KEY = "enrollment_pending_v1"

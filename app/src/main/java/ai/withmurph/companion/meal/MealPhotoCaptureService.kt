@@ -13,6 +13,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -139,20 +140,45 @@ internal class MealPhotoCaptureService(
             return@runExclusive MealPhotoCaptureState.NeedsFullAccess
         }
         val authorization = authorizationStore.snapshot()
+        val prepared = credentialStore.loadPrepared(configuration.generationId)
+        val credential = credentialStore.load(configuration.generationId)
         when {
             authorization.disposition == MealPhotoAuthorizationDisposition.Disabled ->
                 return@runExclusive MealPhotoCaptureState.Off
-            authorization.disposition != MealPhotoAuthorizationDisposition.Authorized ||
-                authorization.generationId != configuration.generationId ->
+            authorization.generationId != configuration.generationId ->
                 return@runExclusive MealPhotoCaptureState.NeedsAttention
+            authorization.disposition == MealPhotoAuthorizationDisposition.Authorized -> Unit
+            authorization.disposition ==
+                MealPhotoAuthorizationDisposition.CredentialSuspended &&
+                (prepared != null || credential != null) -> Unit
+            else -> return@runExclusive MealPhotoCaptureState.NeedsAttention
         }
         if (!credentialStore.hasGenerationKey(configuration.generationId)) {
             return@runExclusive MealPhotoCaptureState.NeedsAttention
         }
 
-        val credential = credentialStore.load(configuration.generationId)
-        val shouldRefresh = credential == null ||
-            credential.expiresAtEpochMillis <= now().plus(CREDENTIAL_REFRESH_WINDOW).toEpochMilli()
+        val recoveringPromotedCredential =
+            authorization.disposition ==
+            MealPhotoAuthorizationDisposition.CredentialSuspended &&
+                prepared == null &&
+                credential?.expiresAtEpochMillis?.let { it > now().toEpochMilli() } == true
+        if (
+            recoveringPromotedCredential &&
+            !authorizationStore.authorize(
+                generationId = configuration.generationId,
+                expectedEpoch = authorization.epoch,
+                allowedPrevious = setOf(
+                    MealPhotoAuthorizationDisposition.CredentialSuspended,
+                ),
+            )
+        ) return@runExclusive MealPhotoCaptureState.NeedsAttention
+        val shouldRefresh = !recoveringPromotedCredential &&
+            (
+                prepared != null ||
+                    credential == null ||
+                    credential.expiresAtEpochMillis <=
+                    now().plus(CREDENTIAL_REFRESH_WINDOW).toEpochMilli()
+                )
         if (shouldRefresh) {
             if (
                 rotateCredential(
@@ -168,7 +194,7 @@ internal class MealPhotoCaptureService(
                 !authorizationStore.authorize(
                     generationId = configuration.generationId,
                     expectedEpoch = authorization.epoch,
-                    allowedPrevious = setOf(MealPhotoAuthorizationDisposition.Authorized),
+                    allowedPrevious = setOf(authorization.disposition),
                 )
             ) {
                 val closed = closeLocal(configuration, preserveState = true)
@@ -234,6 +260,7 @@ internal class MealPhotoCaptureService(
             allowedAuthorization = setOf(
                 MealPhotoAuthorizationDisposition.Disabled,
                 MealPhotoAuthorizationDisposition.Authorized,
+                MealPhotoAuthorizationDisposition.CredentialSuspended,
             ),
             requiresExistingConfiguration = false,
             authorizationLease = authorizationLease,
@@ -643,6 +670,17 @@ internal class MealPhotoCaptureService(
         previous: MealPhotoCredential?,
         mayAdoptServerSecret: Boolean,
     ): MealPhotoCredential? {
+        credentialStore.loadPrepared(configuration.generationId)?.let { prepared ->
+            val recovered = activatePreparedCredential(
+                memberKey = memberKey,
+                configuration = configuration,
+                prepared = prepared,
+                hasAmbiguousEnrollment = true,
+                mayReplaceRejected = true,
+            )
+            recovered.credential?.let { return it }
+            if (!recovered.mayReplaceRejected) return null
+        }
         val wasPendingEnrollment = credentialStore.hasPendingEnrollment(
             configuration.generationId,
         )
@@ -653,6 +691,13 @@ internal class MealPhotoCaptureService(
             !mayAdoptServerSecret &&
             !wasPendingEnrollment
         ) return null
+        if (
+            previous != null &&
+            !runCatching { credentialStore.savePrepared(previous) }.getOrDefault(false)
+        ) {
+            closeAuthorizationForRejectedCredential()
+            return null
+        }
         if (!credentialStore.markEnrollmentPending(configuration.generationId)) return null
         val authorityRevision = authorizationStore.allocateAuthorityRevision()
         if (authorityRevision == null) {
@@ -680,30 +725,10 @@ internal class MealPhotoCaptureService(
             // exact consent continuation can resume the same future-only generation.
             throw error
         } catch (error: Exception) {
-            // A transport/response failure may occur after the server rotated the bearer. Strip
-            // local upload authority but retain the generation tombstone until identity cleanup
-            // succeeds or a later enrollment deterministically replaces the unknown token.
-            val retainedPrevious = withContext(NonCancellable) {
-                val identityRevocation = revokeIdentity(memberKey)
-                val authorization = authorizationStore.snapshot()
-                val stillValidPrevious = previous?.takeIf {
-                    identityRevocation != IdentityRevocationDisposition.Revoked &&
-                        authorization.disposition ==
-                        MealPhotoAuthorizationDisposition.Authorized &&
-                        authorization.generationId == configuration.generationId &&
-                        it.expiresAtEpochMillis > now().toEpochMilli()
-                }
-                if (stillValidPrevious == null) {
-                    credentialStore.suspend(configuration.generationId)
-                }
-                stillValidPrevious
-            }
-            // Renewal is best-effort while the previous bearer remains locally valid and the
-            // identity cleanup request could not prove it was revoked. Preserve the On state;
-            // an ambiguously rotated old bearer will be rejected by the upload endpoint and then
-            // fenced by the normal credential-rejection path.
-            if (retainedPrevious != null) return retainedPrevious
-            throw error
+            // The old exact bearer remains prepared locally. It is either still active or a newer
+            // server-prepared bearer made it invalid; relaunch proves which via bodyless PUT.
+            closeAuthorizationForRejectedCredential()
+            return null
         }
         val stableSecret = retainedIdempotencySecret ?: enrollment.idempotencySecret
         val issuedCredential = MealPhotoCredential(
@@ -732,7 +757,7 @@ internal class MealPhotoCaptureService(
             }
             return null
         }
-        if (!runCatching { credentialStore.save(refreshed) }.getOrDefault(false)) {
+        if (!runCatching { credentialStore.savePrepared(refreshed) }.getOrDefault(false)) {
             closeAuthorizationForRejectedCredential()
             retainIssuedRevocationTombstone(refreshed)
             withContext(NonCancellable) {
@@ -745,15 +770,83 @@ internal class MealPhotoCaptureService(
             }
             return null
         }
-        return refreshed
+        return activatePreparedCredential(
+            memberKey = memberKey,
+            configuration = configuration,
+            prepared = refreshed,
+            hasAmbiguousEnrollment = wasPendingEnrollment,
+            mayReplaceRejected = false,
+        ).credential
+    }
+
+    private suspend fun activatePreparedCredential(
+        memberKey: String,
+        configuration: MealPhotoCaptureConfiguration,
+        prepared: MealPhotoCredential,
+        hasAmbiguousEnrollment: Boolean,
+        mayReplaceRejected: Boolean,
+    ): PreparedActivationAttempt {
+        val activation = try {
+            uploader.activateScoped(prepared.uploadToken).also {
+                currentCoroutineContext().ensureActive()
+            }
+        } catch (error: CancellationException) {
+            withContext(NonCancellable) {
+                credentialStore.suspend(configuration.generationId)
+                val revoked = revokeKnownIssuedAuthority(
+                    memberKey = memberKey,
+                    uploadToken = prepared.uploadToken,
+                    hasAmbiguousEnrollment = hasAmbiguousEnrollment,
+                )
+                if (revoked) credentialStore.confirmRevoked(configuration.generationId)
+            }
+            throw error
+        } catch (_: Exception) {
+            MealPhotoActivationDisposition.Retry
+        }
+        return when (activation) {
+            MealPhotoActivationDisposition.Activated -> {
+                if (credentialStore.activatePrepared(configuration.generationId)) {
+                    PreparedActivationAttempt(credential = prepared)
+                } else {
+                    // The server may already be active. Keep the exact prepared bearer durable so
+                    // relaunch can retry the idempotent PUT before exposing it locally.
+                    closeAuthorizationForRejectedCredential()
+                    PreparedActivationAttempt()
+                }
+            }
+            MealPhotoActivationDisposition.CredentialRejected -> {
+                val discarded = withContext(NonCancellable) {
+                    credentialStore.suspend(configuration.generationId)
+                        && credentialStore.confirmRevoked(configuration.generationId)
+                }
+                if (!mayReplaceRejected || !discarded) {
+                    closeAuthorizationForRejectedCredential()
+                }
+                PreparedActivationAttempt(
+                    mayReplaceRejected = mayReplaceRejected && discarded,
+                )
+            }
+            MealPhotoActivationDisposition.Retry -> {
+                // Preserve the prepared credential. A lost 200 response is recovered by retrying
+                // the exact same idempotent activation after relaunch.
+                closeAuthorizationForRejectedCredential()
+                PreparedActivationAttempt()
+            }
+        }
     }
 
     private fun retainIssuedRevocationTombstone(credential: MealPhotoCredential): Boolean =
-        runCatching { credentialStore.save(credential) }.getOrDefault(false) &&
+        runCatching { credentialStore.savePrepared(credential) }.getOrDefault(false) &&
             credentialStore.suspend(credential.generationId)
 
     private suspend fun closeAuthorizationForRejectedCredential() {
-        authorizationStore.suspendForCredentialRepair()
+        if (
+            authorizationStore.snapshot().disposition ==
+            MealPhotoAuthorizationDisposition.Authorized
+        ) {
+            authorizationStore.suspendForCredentialRepair()
+        }
         withContext(NonCancellable) { scheduler.cancel() }
     }
 
@@ -844,6 +937,11 @@ internal class MealPhotoCaptureService(
         val generationId: String?,
         val uploadToken: String?,
         val closed: Boolean,
+    )
+
+    private data class PreparedActivationAttempt(
+        val credential: MealPhotoCredential? = null,
+        val mayReplaceRejected: Boolean = false,
     )
 
     private enum class IdentityRevocationDisposition {

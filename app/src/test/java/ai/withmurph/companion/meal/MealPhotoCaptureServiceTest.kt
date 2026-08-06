@@ -57,6 +57,258 @@ class MealPhotoCaptureServiceTest {
         assertEquals(2, fixture.scheduler.scheduleCalls)
         assertEquals(listOf(1L, 2L), fixture.api.enrollmentRequests.map { it.authorityRevision })
         assertTrue(fixture.api.enrollmentRequests.all { it.schemaVersion == 2 })
+        val secondWire = fixture.events.indexOf("enrollment-wire-2")
+        val demotion = fixture.events.subList(0, secondWire).lastIndexOf("credential-prepare")
+        assertTrue(demotion >= 0)
+        assertTrue(demotion > fixture.events.indexOf("scoped-activate"))
+    }
+
+    @Test
+    fun preparedCredentialIsPersistedBeforeActivationAndOnlyThenMadeUsable() = runTest {
+        val activationGate = CompletableDeferred<Unit>()
+        val fixture = fixture(activationGate = activationGate)
+
+        val enabling = async { fixture.service.enable(MEMBER) }
+        fixture.uploader.activationEntered.await()
+
+        assertTrue(fixture.credentials.preparedCredential != null)
+        assertNull(fixture.credentials.credential)
+        assertFalse(fixture.api.accepts(fixture.api.preparedToken))
+        assertEquals(0, fixture.scheduler.scheduleCalls)
+        assertEquals(0, fixture.processor.processCalls)
+        assertEquals(0, fixture.uploader.uploadCalls)
+        assertEquals(MealPhotoCaptureState.NeedsAttention, fixture.service.currentState(MEMBER))
+        assertBefore(fixture.events, "credential-prepare", "scoped-activate")
+
+        activationGate.complete(Unit)
+        assertEquals(MealPhotoCaptureState.On, enabling.await())
+
+        assertNull(fixture.credentials.preparedCredential)
+        assertTrue(fixture.api.accepts(fixture.credentials.credential?.uploadToken))
+        assertBefore(fixture.events, "scoped-activate", "credential-activate")
+        assertBefore(fixture.events, "credential-activate", "scheduler-schedule")
+    }
+
+    @Test
+    fun ambiguousActivationRecoversAfterRelaunchWithoutIssuingAnotherCredential() = runTest {
+        val fixture = fixture(
+            activationDispositions = listOf(
+                MealPhotoActivationDisposition.Retry,
+                MealPhotoActivationDisposition.Activated,
+            ),
+        )
+
+        assertEquals(MealPhotoCaptureState.NeedsAttention, fixture.service.enable(MEMBER))
+
+        assertEquals(1, fixture.api.issuance)
+        assertEquals(1, fixture.uploader.activatedTokens.size)
+        assertTrue(fixture.credentials.preparedCredential != null)
+        assertNull(fixture.credentials.credential)
+        assertEquals(
+            MealPhotoAuthorizationDisposition.CredentialSuspended,
+            fixture.authorization.snapshot().disposition,
+        )
+        assertEquals(0, fixture.scheduler.scheduleCalls)
+        assertEquals(0, fixture.processor.processCalls)
+
+        val relaunched = MealPhotoCaptureService(
+            api = fixture.api,
+            media = FakeMediaSource(),
+            processor = fixture.processor,
+            uploader = fixture.uploader,
+            stateStore = fixture.state,
+            credentialStore = fixture.credentials,
+            authorizationStore = fixture.authorization,
+            scheduler = fixture.scheduler,
+            installationId = INSTALLATION_ID,
+            appVersion = "0.1.0",
+            now = { NOW },
+            processorMutex = Mutex(),
+        )
+
+        assertEquals(MealPhotoCaptureState.On, relaunched.refresh(MEMBER))
+
+        assertEquals(1, fixture.api.issuance)
+        assertEquals(2, fixture.uploader.activatedTokens.size)
+        assertEquals(
+            fixture.uploader.activatedTokens.first(),
+            fixture.uploader.activatedTokens.last(),
+        )
+        assertNull(fixture.credentials.preparedCredential)
+        assertTrue(fixture.api.accepts(fixture.credentials.credential?.uploadToken))
+    }
+
+    @Test
+    fun renewalCrashBeforePostRecoversTheDemotedExactBearerWithoutAnotherPost() = runTest {
+        val fixture = fixture()
+        val configuration = configuration()
+        val demoted = credential(configuration.generationId)
+        fixture.state.state = configuration
+        fixture.credentials.restorePreparedCredential(demoted, configuration.ownerDigest)
+        fixture.authorization.restore(
+            MealPhotoAuthorizationSnapshot(
+                epoch = 4,
+                generationId = configuration.generationId,
+                disposition = MealPhotoAuthorizationDisposition.Authorized,
+            ),
+        )
+        fixture.api.activeToken = demoted.uploadToken
+        fixture.api.issuance = 1
+
+        assertEquals(MealPhotoCaptureState.NeedsAttention, fixture.service.currentState(MEMBER))
+        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+
+        assertEquals(0, fixture.api.enrollmentAttempts)
+        assertEquals(listOf(demoted.uploadToken), fixture.uploader.activatedTokens)
+        assertEquals(demoted, fixture.credentials.credential)
+        assertEquals(0, fixture.uploader.uploadCalls)
+    }
+
+    @Test
+    fun renewalCrashAfterPostResponseBeforeSaveUsesARevisionedReplacement() = runTest {
+        val fixture = fixture()
+        val configuration = configuration()
+        val demoted = credential(configuration.generationId)
+        fixture.state.state = configuration
+        fixture.credentials.restorePreparedCredential(demoted, configuration.ownerDigest)
+        fixture.authorization.restore(
+            MealPhotoAuthorizationSnapshot(
+                epoch = 6,
+                generationId = configuration.generationId,
+                disposition = MealPhotoAuthorizationDisposition.Authorized,
+            ),
+        )
+        fixture.authorization.restoreAuthorityRevision(5)
+        fixture.api.activeToken = null
+        fixture.api.preparedToken = "murph_meal_photo_${"U".repeat(43)}"
+        fixture.api.issuance = 1
+
+        assertEquals(MealPhotoCaptureState.NeedsAttention, fixture.service.currentState(MEMBER))
+        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+
+        assertEquals(1, fixture.api.enrollmentAttempts)
+        assertEquals(listOf(6L), fixture.api.enrollmentRequests.map { it.authorityRevision })
+        assertEquals(2, fixture.uploader.activatedTokens.size)
+        assertEquals(demoted.uploadToken, fixture.uploader.activatedTokens.first())
+        assertTrue(fixture.api.accepts(fixture.uploader.activatedTokens.last()))
+        assertEquals(0, fixture.uploader.uploadCalls)
+        assertBefore(fixture.events, "scoped-activate", "authority-revision-6")
+        assertBefore(fixture.events, "authority-revision-6", "enrollment-wire-6")
+    }
+
+    @Test
+    fun renewalCrashAfterPreparedSaveActivatesThatExactBearerWithoutAnotherPost() = runTest {
+        val fixture = fixture()
+        val configuration = configuration()
+        val prepared = credential(configuration.generationId)
+        fixture.state.state = configuration
+        fixture.credentials.restorePreparedCredential(prepared, configuration.ownerDigest)
+        fixture.authorization.restore(
+            MealPhotoAuthorizationSnapshot(
+                epoch = 8,
+                generationId = configuration.generationId,
+                disposition = MealPhotoAuthorizationDisposition.Authorized,
+            ),
+        )
+        fixture.api.preparedToken = prepared.uploadToken
+        fixture.api.issuance = 1
+
+        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+
+        assertEquals(0, fixture.api.enrollmentAttempts)
+        assertEquals(listOf(prepared.uploadToken), fixture.uploader.activatedTokens)
+        assertEquals(prepared, fixture.credentials.credential)
+        assertEquals(0, fixture.uploader.uploadCalls)
+    }
+
+    @Test
+    fun renewalCrashAfterPutBeforePromotionRetriesTheSameActiveBearer() = runTest {
+        val fixture = fixture()
+        val configuration = configuration()
+        val prepared = credential(configuration.generationId)
+        fixture.state.state = configuration
+        fixture.credentials.restorePreparedCredential(prepared, configuration.ownerDigest)
+        fixture.authorization.restore(
+            MealPhotoAuthorizationSnapshot(
+                epoch = 10,
+                generationId = configuration.generationId,
+                disposition = MealPhotoAuthorizationDisposition.Authorized,
+            ),
+        )
+        fixture.api.activeToken = prepared.uploadToken
+        fixture.api.issuance = 1
+
+        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+
+        assertEquals(0, fixture.api.enrollmentAttempts)
+        assertEquals(listOf(prepared.uploadToken), fixture.uploader.activatedTokens)
+        assertEquals(prepared, fixture.credentials.credential)
+        assertEquals(0, fixture.uploader.uploadCalls)
+    }
+
+    @Test
+    fun relaunchAfterPromotionBeforeReauthorizationUsesTheProvenActiveCredential() = runTest {
+        val fixture = fixture()
+        val configuration = configuration()
+        val promoted = credential(configuration.generationId)
+        fixture.state.state = configuration
+        fixture.credentials.restoreCredential(promoted, configuration.ownerDigest)
+        fixture.authorization.restore(
+            MealPhotoAuthorizationSnapshot(
+                epoch = 12,
+                generationId = configuration.generationId,
+                disposition = MealPhotoAuthorizationDisposition.CredentialSuspended,
+            ),
+        )
+        fixture.api.activeToken = promoted.uploadToken
+        fixture.api.issuance = 1
+
+        assertEquals(MealPhotoCaptureState.NeedsAttention, fixture.service.currentState(MEMBER))
+        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+
+        assertEquals(0, fixture.api.enrollmentAttempts)
+        assertTrue(fixture.uploader.activatedTokens.isEmpty())
+        assertEquals(promoted, fixture.credentials.credential)
+        assertEquals(
+            MealPhotoAuthorizationDisposition.Authorized,
+            fixture.authorization.snapshot().disposition,
+        )
+    }
+
+    @Test
+    fun disableDuringActivationCannotPublishOrUseThePreparedCredential() = runTest {
+        val activationGate = CompletableDeferred<Unit>()
+        val fixture = fixture(activationGate = activationGate)
+        val enabling = async { fixture.service.enable(MEMBER) }
+        fixture.uploader.activationEntered.await()
+
+        val disabling = async { fixture.service.disable(MEMBER) }
+        fixture.scheduler.cancelEntered.await()
+        runCurrent()
+
+        assertEquals(
+            MealPhotoAuthorizationDisposition.Disabled,
+            fixture.authorization.snapshot().disposition,
+        )
+        assertFalse(disabling.isCompleted)
+        assertNull(fixture.credentials.credential)
+        assertEquals(0, fixture.scheduler.scheduleCalls)
+        assertEquals(0, fixture.processor.processCalls)
+        assertEquals(0, fixture.uploader.uploadCalls)
+
+        activationGate.complete(Unit)
+        enabling.join()
+        assertTrue(disabling.await())
+
+        assertNull(fixture.state.state)
+        assertNull(fixture.credentials.credential)
+        assertNull(fixture.credentials.preparedCredential)
+        assertNull(fixture.api.activeToken)
+        assertNull(fixture.api.preparedToken)
+        assertEquals(0, fixture.scheduler.scheduleCalls)
+        assertEquals(0, fixture.processor.processCalls)
+        assertEquals(0, fixture.uploader.uploadCalls)
+        assertEquals(MealPhotoCaptureState.Off, fixture.service.currentState(MEMBER))
     }
 
     @Test
@@ -447,23 +699,28 @@ class MealPhotoCaptureServiceTest {
     }
 
     @Test
-    fun proactiveRenewalFailureKeepsAStillValidCredentialWhenIdentityRevokeIsOffline() = runTest {
+    fun renewalFailureKeepsThePreviousBearerPreparedUntilExactActivationRecovery() = runTest {
         val fixture = fixture(
             enrollmentFailureCall = 2,
-            identityRevocationFails = true,
         )
         assertEquals(MealPhotoCaptureState.On, fixture.service.enable(MEMBER))
         val previous = fixture.credentials.credential
 
-        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+        assertEquals(MealPhotoCaptureState.NeedsAttention, fixture.service.refresh(MEMBER))
 
-        assertEquals(previous, fixture.credentials.credential)
+        assertNull(fixture.credentials.credential)
+        assertEquals(previous, fixture.credentials.preparedCredential)
         assertEquals(2, fixture.api.enrollmentAttempts)
         assertEquals(1, fixture.api.issuance)
         assertEquals(
-            MealPhotoAuthorizationDisposition.Authorized,
+            MealPhotoAuthorizationDisposition.CredentialSuspended,
             fixture.authorization.snapshot().disposition,
         )
+
+        assertEquals(MealPhotoCaptureState.On, fixture.service.refresh(MEMBER))
+        assertEquals(previous, fixture.credentials.credential)
+        assertEquals(2, fixture.api.enrollmentAttempts)
+        assertEquals(1, fixture.api.issuance)
     }
 
     @Test
@@ -540,6 +797,8 @@ class MealPhotoCaptureServiceTest {
         cancelResult: Boolean = true,
         consentFailures: Int = 0,
         enrollmentGate: CompletableDeferred<Unit>? = null,
+        activationGate: CompletableDeferred<Unit>? = null,
+        activationDispositions: List<MealPhotoActivationDisposition> = emptyList(),
         scopedRevocation: MealPhotoRevocationDisposition = MealPhotoRevocationDisposition.Revoked,
         enrollmentFailureCall: Int? = null,
         identityRevocationFails: Boolean = false,
@@ -565,7 +824,13 @@ class MealPhotoCaptureServiceTest {
             scheduleResult = scheduleResult,
             cancelResult = cancelResult,
         )
-        val uploader = FakeUploader(api, events, scopedRevocation)
+        val uploader = FakeUploader(
+            api = api,
+            events = events,
+            scopedRevocation = scopedRevocation,
+            activationGate = activationGate,
+            activationDispositions = activationDispositions,
+        )
         val service = MealPhotoCaptureService(
             api = api,
             media = FakeMediaSource(),
@@ -614,6 +879,7 @@ class MealPhotoCaptureServiceTest {
         private val identityRevocationResult: Boolean,
     ) : CompanionApi {
         var activeToken: String? = null
+        var preparedToken: String? = null
         var issuance = 0
         var enrollmentAttempts = 0
         private var remainingConsentFailures = consentFailures
@@ -639,10 +905,10 @@ class MealPhotoCaptureServiceTest {
                 throw CompanionApiException.ConsentRequired
             }
             issuance += 1
-            activeToken = "murph_meal_photo_${"T".repeat(42)}$issuance"
+            preparedToken = "murph_meal_photo_${"T".repeat(42)}$issuance"
             events += "enrollment-$issuance"
             return MealPhotoCaptureEnrollment(
-                uploadToken = checkNotNull(activeToken),
+                uploadToken = checkNotNull(preparedToken),
                 idempotencySecret = if (issuance == 1) "S".repeat(43) else "Q".repeat(43),
                 expiresAt = NOW.plusSeconds(2 * 24 * 60 * 60),
             )
@@ -656,11 +922,29 @@ class MealPhotoCaptureServiceTest {
             revokedMembers += memberKey
             revocationRequests += request
             if (identityRevocationFails) throw IllegalStateException("identity revoke unavailable")
-            if (identityRevocationResult) activeToken = null
+            if (identityRevocationResult) {
+                activeToken = null
+                preparedToken = null
+            }
             return identityRevocationResult
         }
 
         fun accepts(token: String?): Boolean = token != null && token == activeToken
+
+        fun activate(token: String): Boolean {
+            if (token == activeToken) return true
+            if (token != preparedToken) return false
+            activeToken = token
+            preparedToken = null
+            return true
+        }
+
+        fun revoke(token: String): Boolean {
+            if (token != activeToken && token != preparedToken) return false
+            activeToken = null
+            preparedToken = null
+            return true
+        }
 
         override suspend fun createJunctionSignInToken(
             request: SignInTokenRequest,
@@ -744,6 +1028,7 @@ class MealPhotoCaptureServiceTest {
         saveResults: List<Boolean>,
     ) : MealPhotoCredentialStoring {
         var credential: MealPhotoCredential? = null
+        var preparedCredential: MealPhotoCredential? = null
         var retainedSecret: String? = null
         private var pendingToken: String? = null
         private var generationId: String? = null
@@ -766,6 +1051,10 @@ class MealPhotoCaptureServiceTest {
             boundOwnerDigest?.takeIf { this.generationId == generationId }
 
         override fun load(generationId: String) = credential?.takeIf {
+            it.generationId == generationId
+        }
+
+        override fun loadPrepared(generationId: String) = preparedCredential?.takeIf {
             it.generationId == generationId
         }
 
@@ -792,28 +1081,39 @@ class MealPhotoCaptureServiceTest {
             return true
         }
 
-        override fun save(credential: MealPhotoCredential): Boolean {
+        override fun savePrepared(credential: MealPhotoCredential): Boolean {
             if (saveResults.removeFirstOrNull() == false) {
-                events += "credential-save-failed"
+                events += "credential-prepare-failed"
                 return false
             }
-            this.credential = credential
+            preparedCredential = credential
+            this.credential = null
             generationId = credential.generationId
             retainedSecret = credential.idempotencySecret
+            pendingEnrollment = true
+            generationKeys += credential.generationId
+            events += "credential-prepare"
+            return true
+        }
+
+        override fun activatePrepared(generationId: String): Boolean {
+            val prepared = loadPrepared(generationId) ?: return false
+            credential = prepared
+            preparedCredential = null
             pendingToken = null
             pendingEnrollment = false
-            generationKeys += credential.generationId
-            events += "credential-save"
+            events += "credential-activate"
             return true
         }
 
         override fun suspend(generationId: String): Boolean {
             if (this.generationId != generationId) return false
-            credential?.let {
+            (preparedCredential ?: credential)?.let {
                 retainedSecret = it.idempotencySecret
                 pendingToken = it.uploadToken
             }
             credential = null
+            preparedCredential = null
             events += "credential-suspend"
             return pendingEnrollment || retainedSecret != null
         }
@@ -821,6 +1121,7 @@ class MealPhotoCaptureServiceTest {
         override fun confirmRevoked(generationId: String): Boolean {
             if (this.generationId != generationId) return false
             pendingToken = null
+            pendingEnrollment = false
             return true
         }
 
@@ -829,6 +1130,7 @@ class MealPhotoCaptureServiceTest {
         override fun clear(generationId: String, preserveGenerationKey: Boolean): Boolean {
             if (this.generationId != null && this.generationId != generationId) return false
             credential = null
+            preparedCredential = null
             retainedSecret = null
             pendingToken = null
             pendingEnrollment = false
@@ -856,6 +1158,20 @@ class MealPhotoCaptureServiceTest {
             retainedSecret = credential.idempotencySecret
             generationKeys += credential.generationId
             this.pendingEnrollment = pendingEnrollment
+        }
+
+        fun restorePreparedCredential(
+            credential: MealPhotoCredential,
+            ownerDigest: String?,
+        ) {
+            this.credential = null
+            preparedCredential = credential
+            generationId = credential.generationId
+            boundOwnerDigest = ownerDigest
+            retainedSecret = credential.idempotencySecret
+            pendingToken = null
+            pendingEnrollment = true
+            generationKeys += credential.generationId
         }
     }
 
@@ -953,6 +1269,10 @@ class MealPhotoCaptureServiceTest {
             lastGenerationId = snapshot.generationId.orEmpty()
         }
 
+        fun restoreAuthorityRevision(revision: Long) {
+            authorityRevision = revision
+        }
+
         private fun advance(
             disposition: MealPhotoAuthorizationDisposition,
             event: String,
@@ -996,25 +1316,46 @@ class MealPhotoCaptureServiceTest {
         private val api: FakeApi,
         private val events: MutableList<String>,
         private val scopedRevocation: MealPhotoRevocationDisposition,
+        private val activationGate: CompletableDeferred<Unit>?,
+        activationDispositions: List<MealPhotoActivationDisposition>,
     ) : MealPhotoUploading {
         val revokedTokens = mutableListOf<String>()
+        val activatedTokens = mutableListOf<String>()
+        val activationEntered = CompletableDeferred<Unit>()
+        private val activationDispositions = ArrayDeque(activationDispositions)
+        var uploadCalls = 0
 
         override suspend fun upload(
             jpeg: ByteArray,
             credential: MealPhotoCredential,
             captureId: String,
             capturedAt: Instant,
-        ) = MealPhotoUploadDisposition.Uploaded
+        ): MealPhotoUploadDisposition {
+            uploadCalls += 1
+            return MealPhotoUploadDisposition.Uploaded
+        }
+
+        override suspend fun activateScoped(
+            uploadToken: String,
+        ): MealPhotoActivationDisposition {
+            events += "scoped-activate"
+            activatedTokens += uploadToken
+            activationEntered.complete(Unit)
+            activationGate?.let { gate -> withContext(NonCancellable) { gate.await() } }
+            val disposition = activationDispositions.removeFirstOrNull()
+                ?: MealPhotoActivationDisposition.Activated
+            if (disposition == MealPhotoActivationDisposition.Activated && !api.activate(uploadToken)) {
+                return MealPhotoActivationDisposition.CredentialRejected
+            }
+            return disposition
+        }
 
         override suspend fun revokeScoped(
             uploadToken: String,
         ): MealPhotoRevocationDisposition {
             events += "scoped-revoke"
             revokedTokens += uploadToken
-            if (
-                scopedRevocation == MealPhotoRevocationDisposition.Revoked &&
-                api.accepts(uploadToken)
-            ) api.activeToken = null
+            if (scopedRevocation == MealPhotoRevocationDisposition.Revoked) api.revoke(uploadToken)
             return scopedRevocation
         }
     }

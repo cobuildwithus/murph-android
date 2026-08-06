@@ -761,6 +761,12 @@ internal enum class MealPhotoRevocationDisposition {
     Retry,
 }
 
+internal enum class MealPhotoActivationDisposition {
+    Activated,
+    CredentialRejected,
+    Retry,
+}
+
 internal object MealPhotoUploadStatusPolicy {
     fun disposition(status: Int?): MealPhotoUploadDisposition = when {
         status == null -> MealPhotoUploadDisposition.Retry
@@ -772,6 +778,14 @@ internal object MealPhotoUploadStatusPolicy {
     }
 }
 
+internal object MealPhotoActivationStatusPolicy {
+    fun disposition(status: Int?, activated: Any?): MealPhotoActivationDisposition = when {
+        status == 401 -> MealPhotoActivationDisposition.CredentialRejected
+        status == 200 && activated == true -> MealPhotoActivationDisposition.Activated
+        else -> MealPhotoActivationDisposition.Retry
+    }
+}
+
 internal interface MealPhotoUploading {
     suspend fun upload(
         jpeg: ByteArray,
@@ -780,10 +794,17 @@ internal interface MealPhotoUploading {
         capturedAt: Instant,
     ): MealPhotoUploadDisposition
 
+    suspend fun activateScoped(uploadToken: String): MealPhotoActivationDisposition
+
     suspend fun revokeScoped(uploadToken: String): MealPhotoRevocationDisposition
 }
 
-internal class HttpMealPhotoUploader(baseUrl: String) : MealPhotoUploading {
+internal class HttpMealPhotoUploader(
+    baseUrl: String,
+    private val openConnection: (URI) -> HttpURLConnection = { uri ->
+        uri.toURL().openConnection() as HttpURLConnection
+    },
+) : MealPhotoUploading {
     private val baseUri = URI(baseUrl.trimEnd('/')).also { uri ->
         require(uri.scheme == "https" && uri.host != null && uri.userInfo == null)
         require(uri.query == null && uri.fragment == null)
@@ -813,8 +834,28 @@ internal class HttpMealPhotoUploader(baseUrl: String) : MealPhotoUploading {
                 "Idempotency-Key" to captureId,
                 "X-Murph-Captured-At" to capturedAt.toString(),
             ),
-        )
+        )?.status
         return MealPhotoUploadStatusPolicy.disposition(status)
+    }
+
+    override suspend fun activateScoped(uploadToken: String): MealPhotoActivationDisposition {
+        if (!uploadToken.startsWith("murph_meal_photo_")) {
+            return MealPhotoActivationDisposition.Retry
+        }
+        val response = request(
+            uri = enrollmentUri,
+            method = "PUT",
+            authorization = uploadToken,
+            body = null,
+            contentType = null,
+            readResponseBody = true,
+        )
+        val activated = if (response?.status == 200) {
+            response.body?.let(::parseActivationFlag)
+        } else {
+            null
+        }
+        return MealPhotoActivationStatusPolicy.disposition(response?.status, activated)
     }
 
     override suspend fun revokeScoped(uploadToken: String): MealPhotoRevocationDisposition {
@@ -827,7 +868,7 @@ internal class HttpMealPhotoUploader(baseUrl: String) : MealPhotoUploading {
             authorization = uploadToken,
             body = null,
             contentType = null,
-        )
+        )?.status
         return when {
             status in 200..299 -> MealPhotoRevocationDisposition.Revoked
             status == 401 || status == 403 -> MealPhotoRevocationDisposition.AlreadyInvalid
@@ -842,14 +883,15 @@ internal class HttpMealPhotoUploader(baseUrl: String) : MealPhotoUploading {
         body: ByteArray?,
         contentType: String?,
         headers: Map<String, String> = emptyMap(),
-    ): Int? = withContext(Dispatchers.IO) {
+        readResponseBody: Boolean = false,
+    ): MealPhotoHttpResponse? = withContext(Dispatchers.IO) {
         currentCoroutineContext().ensureActive()
         val connection = try {
-            uri.toURL().openConnection() as HttpURLConnection
+            openConnection(uri)
         } catch (_: IOException) {
             return@withContext null
         }
-        val status = suspendCancellableCoroutine<Int?> { continuation ->
+        val response = suspendCancellableCoroutine<MealPhotoHttpResponse?> { continuation ->
             continuation.invokeOnCancellation { connection.disconnect() }
             try {
                 connection.requestMethod = method
@@ -867,7 +909,14 @@ internal class HttpMealPhotoUploader(baseUrl: String) : MealPhotoUploading {
                     connection.outputStream.use { it.write(body) }
                 }
                 val responseCode = connection.responseCode
-                if (continuation.isActive) continuation.resume(responseCode)
+                val responseBody = if (readResponseBody && responseCode == 200) {
+                    readBoundedResponseBody(connection)
+                } else {
+                    null
+                }
+                if (continuation.isActive) {
+                    continuation.resume(MealPhotoHttpResponse(responseCode, responseBody))
+                }
             } catch (_: IOException) {
                 if (continuation.isActive) continuation.resume(null)
             } finally {
@@ -875,14 +924,39 @@ internal class HttpMealPhotoUploader(baseUrl: String) : MealPhotoUploading {
             }
         }
         currentCoroutineContext().ensureActive()
-        status
+        response
     }
+
+    private fun readBoundedResponseBody(connection: HttpURLConnection): String? =
+        connection.inputStream.use { stream ->
+            val bytes = ByteArrayOutputStream()
+            val buffer = ByteArray(1_024)
+            var total = 0
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > MAX_ACTIVATION_RESPONSE_BYTES) return null
+                bytes.write(buffer, 0, count)
+            }
+            String(bytes.toByteArray(), StandardCharsets.UTF_8)
+        }
+
+    private fun parseActivationFlag(body: String): Any? =
+        true.takeIf { ACTIVATED_RESPONSE.matches(body) }
 
     private companion object {
         const val UPLOAD_PATH = "/api/device-sync/companion/meal-photo-capture/photos"
         const val ENROLLMENT_PATH = "/api/device-sync/companion/meal-photo-capture/enrollment"
+        const val MAX_ACTIVATION_RESPONSE_BYTES = 4_096
+        val ACTIVATED_RESPONSE = Regex("""\A\s*\{\s*"activated"\s*:\s*true\s*}\s*\z""")
     }
 }
+
+private data class MealPhotoHttpResponse(
+    val status: Int,
+    val body: String?,
+)
 
 internal enum class MealPhotoProcessingResult {
     Inactive,

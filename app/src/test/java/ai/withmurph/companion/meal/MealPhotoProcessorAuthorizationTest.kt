@@ -345,6 +345,10 @@ class MealPhotoProcessorAuthorizationTest {
             return disposition
         }
 
+        override suspend fun activateScoped(
+            uploadToken: String,
+        ): MealPhotoActivationDisposition = MealPhotoActivationDisposition.Retry
+
         override suspend fun revokeScoped(
             uploadToken: String,
         ): MealPhotoRevocationDisposition = MealPhotoRevocationDisposition.Revoked
@@ -388,6 +392,8 @@ class MealPhotoProcessorAuthorizationTest {
             it.generationId == generationId
         }
 
+        override fun loadPrepared(generationId: String): MealPhotoCredential? = null
+
         override fun retainedIdempotencySecret(generationId: String) =
             load(generationId)?.idempotencySecret
 
@@ -396,11 +402,9 @@ class MealPhotoProcessorAuthorizationTest {
         override fun hasPendingEnrollment(generationId: String): Boolean = false
         override fun clearPendingEnrollment(generationId: String): Boolean = true
 
-        override fun save(credential: MealPhotoCredential): Boolean {
-            this.credential = credential
-            generationId = credential.generationId
-            return true
-        }
+        override fun savePrepared(credential: MealPhotoCredential): Boolean = false
+
+        override fun activatePrepared(generationId: String): Boolean = false
 
         override fun suspend(generationId: String): Boolean {
             if (this.generationId != generationId) return false
