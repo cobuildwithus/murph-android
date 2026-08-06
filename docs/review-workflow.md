@@ -1,12 +1,16 @@
 # Android review workflow
 
-The repository has two independent hosted checks:
+The repository has three independent hosted checks:
 
 - **Android CI** runs the full unit-test, Debug/Release lint, and Debug/Release
   assembly surface on every pull-request head and on `main`.
 - **Review Tooling** installs the lockfile-pinned `@cobuild/review-gpt` package
   without lifecycle scripts, verifies the local packaging/response contract,
   and lists the registered presets on the same heads.
+- **Android Visual Proof** runs the trusted default-branch workflow revision of
+  the screenshot verifier against the candidate's exact Git objects and
+  rendered PR body.
+  Candidate code is inspected as data only in the privileged workflow.
 
 These checks complement local verification. They do not replace physical
 Health Connect, WHOOP, Contacts, or OEM-device proof.
@@ -49,15 +53,16 @@ finding count, or incomplete response.
 
 Any PR-specific commit requires a fresh response for the new head. A moved
 base also requires a fresh response because the reviewed comparison changed.
-Merge readiness requires a validated `PASS` with zero accepted findings, both
-hosted checks green on that head, required device evidence recorded, and a
+Merge readiness requires a validated `PASS` with zero accepted findings, all
+three hosted checks green on that head, required device evidence recorded, and a
 conflict-free PR.
 
 ## Review control changes
 
 A PR that changes the ReviewGPT prompt, fixed PR runner, packager, validator,
-contract tests, tool pin, hosted review workflow, Android CI workflow,
-`scripts/verify.sh`, or this policy cannot use its changed copy of ReviewGPT to
-certify itself. Use a fresh independent local review against the fixed
-checklist from the base revision. Keep review control changes separate from
-product behavior so later product PRs inherit a trusted gate.
+contract tests, tool pin, hosted review workflow, Android CI workflow, Android
+visual-proof workflow, visual-proof checker or tests, `scripts/verify.sh`, or
+this policy cannot use its changed copy of ReviewGPT to certify itself. Use a
+fresh independent local review against the fixed checklist from the base
+revision. Keep review control changes separate from product behavior so later
+product PRs inherit a trusted gate.

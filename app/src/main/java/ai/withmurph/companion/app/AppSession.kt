@@ -76,6 +76,8 @@ class AppSession(
     private var nextHealthHistoryPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
     private var nextInitialOnboardingContactCardHandoffId = 1
+    private var pendingInitialOnboardingContactCardHandoff:
+        PendingInitialOnboardingContactCardHandoffRequest? = null
     private var initialOnboardingGeneration = 0
 
     private val _state = MutableStateFlow(
@@ -145,7 +147,6 @@ class AppSession(
             } else {
                 loadLaunchConsentStatus(
                     pending,
-                    healthLockHeld = false,
                     onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
                 null
@@ -263,18 +264,114 @@ class AppSession(
         prepareInitialOnboardingContactCard(avatarId)
     }
 
-    fun consumeInitialOnboardingContactCardHandoff(id: Int): String? {
-        while (true) {
-            val current = _state.value
-            val handoff = current.initialOnboardingContactCardHandoff
-                ?.takeIf { it.id == id } ?: return null
-            if (
-                _state.compareAndSet(
-                    current,
-                    current.copy(initialOnboardingContactCardHandoff = null),
+    suspend fun launchInitialOnboardingContactCardHandoff(
+        id: Int,
+        launch: (String) -> Boolean,
+    ): Boolean {
+        var authoritativeLocalAuth: AuthSessionState? = null
+        val launched = initialOnboardingMutex.withLock {
+            val pending = pendingInitialOnboardingContactCardHandoff
+                ?.takeIf { it.id == id }
+                ?: return@withLock false
+            if (!ownsInitialOnboardingContactCardHandoff(pending)) {
+                clearInitialOnboardingContactCardHandoff(pending)
+                return@withLock false
+            }
+            val authBeforeMint = currentAuthStateForHandoff()
+            if (!ownsInitialOnboardingContactCardAuth(pending, authBeforeMint)) {
+                rejectInitialOnboardingContactCardAuth(
+                    pending,
+                    authBeforeMint,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
-            ) return handoff.url
+                return@withLock false
+            }
+            val response = try {
+                api.prepareInitialOnboardingContactCard(
+                    pending.memberKey,
+                    InitialOnboardingContactCardRequest(pending.avatarId),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                rejectInitialOnboardingContactCardAuth(
+                    pending,
+                    error.observedState,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
+                return@withLock false
+            } catch (_: CompanionApiException.ConsentRequired) {
+                clearInitialOnboardingContactCardHandoff(pending)
+                beginLaunchConsentRecovery(
+                    expectedEpoch = pending.epoch,
+                    memberKey = pending.memberKey,
+                    followUp = LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(
+                        pending.avatarId,
+                    ),
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
+                return@withLock false
+            } catch (_: CompanionApiException.AccountConflict) {
+                clearInitialOnboardingContactCardHandoff(pending)
+                publishAccountConflictFailure()
+                return@withLock false
+            } catch (error: CompanionApiException) {
+                clearInitialOnboardingContactCardHandoff(pending)
+                if (isTerminalMemberBoundaryError(error)) {
+                    publishTerminalMemberBoundaryFailure(error)
+                } else {
+                    publishInitialOnboardingFailure(
+                        "We couldn't open the contact card. Check your connection and try again.",
+                    )
+                }
+                return@withLock false
+            } catch (_: Exception) {
+                clearInitialOnboardingContactCardHandoff(pending)
+                publishInitialOnboardingFailure(
+                    "We couldn't open the contact card. Check your connection and try again.",
+                )
+                return@withLock false
+            }
+            if (!ownsInitialOnboardingContactCardHandoff(pending)) {
+                return@withLock false
+            }
+            val authAfterMint = currentAuthStateForHandoff()
+            if (!ownsInitialOnboardingContactCardAuth(pending, authAfterMint)) {
+                rejectInitialOnboardingContactCardAuth(
+                    pending,
+                    authAfterMint,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
+                return@withLock false
+            }
+            if (!ownsInitialOnboardingContactCardHandoff(pending)) {
+                return@withLock false
+            }
+            val didLaunch = try {
+                launch(response.url)
+            } catch (_: Exception) {
+                false
+            }
+            if (!didLaunch) {
+                clearInitialOnboardingContactCardHandoff(pending)
+                return@withLock false
+            }
+            pendingInitialOnboardingContactCardHandoff = null
+            _state.update { current ->
+                if (current.initialOnboardingContactCardHandoff?.id != pending.id) {
+                    current
+                } else {
+                    current.copy(
+                        initialOnboardingStage = InitialOnboardingStage.MainPersona,
+                        isInitialOnboardingSaving = false,
+                        initialOnboardingContactCardHandoff = null,
+                    )
+                }
+            }
+            true
         }
+        authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
+        return launched
     }
 
     fun dismissCompletedInitialOnboarding() {
@@ -373,7 +470,6 @@ class AppSession(
                     expectedEpoch = epoch,
                     memberKey = memberKey,
                     followUp = followUp,
-                    healthLockHeld = false,
                     onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
             } catch (_: CompanionApiException.AccountConflict) {
@@ -384,13 +480,10 @@ class AppSession(
                 if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     return@withLock
                 }
-                when (error) {
-                    CompanionApiException.Unauthorized,
-                    CompanionApiException.NoAccount ->
-                        publishInitialOnboardingMemberBoundaryFailure(
-                            "Your Murph session changed. Try a different sign-in.",
-                        )
-                    else -> publishInitialOnboardingFailure(
+                if (isTerminalMemberBoundaryError(error)) {
+                    publishTerminalMemberBoundaryFailure(error)
+                } else {
+                    publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
                     )
                 }
@@ -413,7 +506,6 @@ class AppSession(
     ) {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
-        var authoritativeLocalAuth: AuthSessionState? = null
         initialOnboardingMutex.withLock {
             val current = _state.value
             if (
@@ -426,83 +518,24 @@ class AppSession(
             ) return@withLock
             initialOnboardingGeneration += 1
             val generation = initialOnboardingGeneration
-            _state.update {
-                it.copy(isInitialOnboardingSaving = true, initialOnboardingMessage = null)
-            }
-            try {
-                val response = api.prepareInitialOnboardingContactCard(
-                    memberKey,
-                    InitialOnboardingContactCardRequest(avatarId),
-                )
-                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    return@withLock
-                }
-                val handoffId = nextInitialOnboardingContactCardHandoffId++
-                _state.update {
-                    it.copy(
-                        isInitialOnboardingSaving = false,
-                        initialOnboardingStage = InitialOnboardingStage.MainPersona,
-                        initialOnboardingContactCardHandoff =
-                            PendingInitialOnboardingContactCardHandoff(handoffId, response.url),
-                    )
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: CompanionApiException.LocalAuthUnavailable) {
-                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    return@withLock
-                }
-                if (isAuthoritativeLocalAuthObservation(error.observedState)) {
-                    authoritativeLocalAuth = error.observedState
-                } else {
-                    publishInitialOnboardingFailure(
-                        "We couldn't open the contact card. Check your connection and try again.",
-                    )
-                }
-            } catch (_: CompanionApiException.ConsentRequired) {
-                val followUp =
-                    LaunchConsentFollowUp.PrepareInitialOnboardingContactCard(avatarId)
-                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    prioritizeStaleInitialOnboardingConsent(memberKey, followUp)
-                    return@withLock
-                }
-                releaseInitialOnboardingBusy(generation)
-                beginLaunchConsentRecovery(
-                    expectedEpoch = epoch,
+            val handoffId = nextInitialOnboardingContactCardHandoffId++
+            pendingInitialOnboardingContactCardHandoff =
+                PendingInitialOnboardingContactCardHandoffRequest(
+                    id = handoffId,
                     memberKey = memberKey,
-                    followUp = followUp,
-                    healthLockHeld = false,
-                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                    epoch = epoch,
+                    generation = generation,
+                    avatarId = avatarId,
                 )
-            } catch (_: CompanionApiException.AccountConflict) {
-                if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    publishAccountConflictFailure()
-                }
-            } catch (error: CompanionApiException) {
-                if (!ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    return@withLock
-                }
-                when (error) {
-                    CompanionApiException.Unauthorized,
-                    CompanionApiException.NoAccount ->
-                        publishInitialOnboardingMemberBoundaryFailure(
-                            "Your Murph session changed. Try a different sign-in.",
-                        )
-                    else -> publishInitialOnboardingFailure(
-                        "We couldn't open the contact card. Check your connection and try again.",
-                    )
-                }
-            } catch (_: Exception) {
-                if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
-                    publishInitialOnboardingFailure(
-                        "We couldn't open the contact card. Check your connection and try again.",
-                    )
-                }
-            } finally {
-                releaseInitialOnboardingBusy(generation)
+            _state.update {
+                it.copy(
+                    isInitialOnboardingSaving = true,
+                    initialOnboardingMessage = null,
+                    initialOnboardingContactCardHandoff =
+                        PendingInitialOnboardingContactCardHandoff(handoffId),
+                )
             }
         }
-        authoritativeLocalAuth?.let { handleAuthoritativeLocalAuthObservation(it) }
     }
 
     fun consumeHealthPermissionLaunchRequest(requestId: Int): Boolean {
@@ -896,7 +929,6 @@ class AppSession(
                                 expectedEpoch = pending.epoch,
                                 memberKey = pending.memberKey,
                                 followUp = LaunchConsentFollowUp.AddressBookReplacement(pending),
-                                healthLockHeld = false,
                                 onAuthoritativeLocalAuth = {
                                     deferredBoundary = deferredBoundary
                                         ?: DeferredSessionBoundary.LocalAuth(it)
@@ -919,22 +951,25 @@ class AppSession(
                             )
                         }
                         return@withLock false
-                    } catch (error: CompanionApiException.Unauthorized) {
-                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
-                            deferredBoundary = deferredBoundary
-                                ?: DeferredSessionBoundary.BackendRejected(error)
-                        }
-                        return@withLock false
-                    } catch (error: CompanionApiException.NoAccount) {
-                        if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
-                            deferredBoundary = deferredBoundary
-                                ?: DeferredSessionBoundary.BackendRejected(error)
-                        }
-                        return@withLock false
                     } catch (_: CompanionApiException.AccountConflict) {
                         if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
                             deferredBoundary = deferredBoundary
                                 ?: DeferredSessionBoundary.AccountConflict
+                        }
+                        return@withLock false
+                    } catch (error: CompanionApiException) {
+                        if (
+                            ownsAddressBookWork(pending.memberKey, pending.epoch) &&
+                            isTerminalMemberBoundaryError(error)
+                        ) {
+                            deferredBoundary = deferredBoundary
+                                ?: DeferredSessionBoundary.BackendRejected(error)
+                        } else {
+                            publishAddressBookMessage(
+                                pending.memberKey,
+                                pending.epoch,
+                                "Murph couldn't finish the address-book update. Tap Retry to use the saved mutation safely.",
+                            )
                         }
                         return@withLock false
                     } catch (_: Exception) {
@@ -1189,7 +1224,6 @@ class AppSession(
                         expectedEpoch = epoch,
                         memberKey = memberKey,
                         followUp = LaunchConsentFollowUp.StopAddressBookSharing,
-                        healthLockHeld = false,
                         onAuthoritativeLocalAuth = {
                             deferredBoundary = deferredBoundary
                                 ?: DeferredSessionBoundary.LocalAuth(it)
@@ -1211,22 +1245,25 @@ class AppSession(
                         )
                     }
                     return
-                } catch (error: CompanionApiException.Unauthorized) {
-                    if (ownsAddressBookWork(memberKey, epoch)) {
-                        deferredBoundary = deferredBoundary
-                            ?: DeferredSessionBoundary.BackendRejected(error)
-                    }
-                    return
-                } catch (error: CompanionApiException.NoAccount) {
-                    if (ownsAddressBookWork(memberKey, epoch)) {
-                        deferredBoundary = deferredBoundary
-                            ?: DeferredSessionBoundary.BackendRejected(error)
-                    }
-                    return
                 } catch (_: CompanionApiException.AccountConflict) {
                     if (ownsAddressBookWork(memberKey, epoch)) {
                         deferredBoundary = deferredBoundary
                             ?: DeferredSessionBoundary.AccountConflict
+                    }
+                    return
+                } catch (error: CompanionApiException) {
+                    if (
+                        ownsAddressBookWork(memberKey, epoch) &&
+                        isTerminalMemberBoundaryError(error)
+                    ) {
+                        deferredBoundary = deferredBoundary
+                            ?: DeferredSessionBoundary.BackendRejected(error)
+                    } else {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't delete the shared names yet. It will keep the exact deletion retry marker.",
+                        )
                     }
                     return
                 } catch (_: Exception) {
@@ -1398,6 +1435,7 @@ class AppSession(
             reconcile(force = true, acceptedConsentOwner = acceptedConsentOwner)
         }
         var authStateToReconcile: AuthSessionState? = null
+        var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
         val prepared = healthMutex.withLock {
             if (
                 _state.value.phase != AppPhase.Ready ||
@@ -1435,7 +1473,8 @@ class AppSession(
                             validatedEpoch,
                             LaunchConsentFollowUp.PrepareHealthPermission,
                             onAuthoritativeLocalAuth = { authStateToReconcile = it },
-                        ) ?: return false
+                            onConsentRequired = { deferredConsentRecovery = it },
+                        ) ?: return@withLock false
                     if (validatedEpoch != sessionEpoch) return false
                     currentAuthOwnershipLoss(memberKey)?.let { authState ->
                         localState.lastKnownDataReceivedAt = receiptBeforePreflight
@@ -1549,6 +1588,12 @@ class AppSession(
                 }
             }
         }
+        deferredConsentRecovery?.let { deferred ->
+            beginLaunchConsentRecovery(
+                deferred,
+                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+            )
+        }
         authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
         if (prepared) requestHealthPermissionLaunch()
         return prepared
@@ -1557,6 +1602,7 @@ class AppSession(
     suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean {
         _state.update { it.copy(pendingHealthPermissionRequestId = null) }
         var authStateToReconcile: AuthSessionState? = null
+        var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
         val completed = healthMutex.withLock {
             val pending = pendingHealthConnection
             if (
@@ -1588,11 +1634,12 @@ class AppSession(
                         pending.receiptBaselineAt,
                     ),
                     onAuthoritativeLocalAuth = { authStateToReconcile = it },
+                    onConsentRequired = { deferredConsentRecovery = it },
                 )
                 if (finalPreConnectStatus == null) {
                     pendingHealthConnection = null
                     _state.update { it.copy(isConnectingHealth = false) }
-                    return false
+                    return@withLock false
                 }
                 val refreshedPending = pending.copy(
                     requestedAt = finalPreConnectStatus.observedAt,
@@ -1623,15 +1670,13 @@ class AppSession(
                     throw error
                 } catch (error: CompanionApiException.ConsentRequired) {
                     if (epoch == sessionEpoch) {
-                        beginLaunchConsentRecovery(
+                        deferredConsentRecovery = DeferredLaunchConsentRecovery(
                             expectedEpoch = epoch,
                             memberKey = refreshedPending.memberKey,
                             followUp = LaunchConsentFollowUp.CompleteHealthPermission(
                                 refreshedPending.requestedAt,
                                 refreshedPending.receiptBaselineAt,
                             ),
-                            healthLockHeld = true,
-                            onAuthoritativeLocalAuth = { authStateToReconcile = it },
                         )
                     }
                     pendingHealthConnection = null
@@ -1680,8 +1725,19 @@ class AppSession(
                 false
             } catch (error: Exception) {
                 pendingHealthConnection = null
-                val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
-                if (epoch == sessionEpoch) {
+                if (
+                    epoch == sessionEpoch &&
+                    error is CompanionApiException &&
+                    isTerminalMemberBoundaryError(error)
+                ) {
+                    failCurrentSessionWhileHealthLocked(
+                        message = terminalMemberBoundaryMessage(error),
+                        canRetry = false,
+                        signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                    )
+                } else {
+                    val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
+                    if (epoch != sessionEpoch) return@withLock false
                     _state.update { current ->
                         current.copy(
                             isConnectingHealth = false,
@@ -1695,6 +1751,12 @@ class AppSession(
                 }
                 false
             }
+        }
+        deferredConsentRecovery?.let { deferred ->
+            beginLaunchConsentRecovery(
+                deferred,
+                onAuthoritativeLocalAuth = { authStateToReconcile = it },
+            )
         }
         authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
         return completed
@@ -1813,6 +1875,7 @@ class AppSession(
             return
         }
         var authoritativeLocalAuth: AuthSessionState? = null
+        var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
         val needsHealthReconciliation = healthMutex.withLock {
             if (
                 foregroundClaim != null &&
@@ -1822,6 +1885,13 @@ class AppSession(
             syncAndRefresh(
                 epoch,
                 foregroundClaim,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                onConsentRequired = { deferredConsentRecovery = it },
+            )
+        }
+        deferredConsentRecovery?.let { deferred ->
+            beginLaunchConsentRecovery(
+                deferred,
                 onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             )
         }
@@ -1989,7 +2059,6 @@ class AppSession(
                         expectedEpoch = epoch,
                         memberKey = memberKey,
                         followUp = LaunchConsentFollowUp.Reconcile,
-                        healthLockHeld = false,
                         onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                     )
                 }
@@ -2002,12 +2071,9 @@ class AppSession(
             } catch (error: CompanionApiException) {
                 if (
                     ownsInitialOnboardingRefresh(memberKey, epoch, generation) &&
-                    (error == CompanionApiException.Unauthorized ||
-                        error == CompanionApiException.NoAccount)
+                    isTerminalMemberBoundaryError(error)
                 ) {
-                    publishInitialOnboardingMemberBoundaryFailure(
-                        "Your Murph session changed. Try a different sign-in.",
-                    )
+                    publishTerminalMemberBoundaryFailure(error)
                 }
                 return null
             } catch (_: Exception) {
@@ -2043,7 +2109,6 @@ class AppSession(
             if (ownsLaunchConsentRecovery(pending)) {
                 loadLaunchConsentStatus(
                     pending,
-                    healthLockHeld = false,
                     onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
                 )
             }
@@ -2273,20 +2338,6 @@ class AppSession(
                 if (epoch != sessionEpoch) return
                 reconcileObservedAuthState(authState.memberKey, error.observedState)
                 return
-            } catch (error: CompanionApiException.Unauthorized) {
-                if (epoch != sessionEpoch) return
-                publishAuthoritativeResumeFailure(
-                    message = connectionErrorMessage(error),
-                    canRetry = false,
-                )
-                return
-            } catch (error: CompanionApiException.NoAccount) {
-                if (epoch != sessionEpoch) return
-                publishAuthoritativeResumeFailure(
-                    message = connectionErrorMessage(error),
-                    canRetry = false,
-                )
-                return
             } catch (_: CompanionApiException.AccountConflict) {
                 if (epoch != sessionEpoch) return
                 publishAccountConflictFailure()
@@ -2298,11 +2349,26 @@ class AppSession(
                     expectedEpoch = epoch,
                     memberKey = authState.memberKey,
                     followUp = LaunchConsentFollowUp.Reconcile,
-                    healthLockHeld = false,
                     onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
                 )
                 authoritativeLocalAuth?.let {
                     reconcileObservedAuthState(authState.memberKey, it)
+                }
+                return
+            } catch (error: CompanionApiException) {
+                if (epoch != sessionEpoch) return
+                if (isTerminalMemberBoundaryError(error)) {
+                    publishTerminalMemberBoundaryFailure(error)
+                } else {
+                    _state.update {
+                        it.copy(
+                            phase = AppPhase.Failed(
+                                message = connectionErrorMessage(error),
+                                canRetry = true,
+                                canSignOut = true,
+                            ),
+                        )
+                    }
                 }
                 return
             } catch (error: CancellationException) {
@@ -2402,14 +2468,22 @@ class AppSession(
             grantedResourceCount > 0
         ) {
             var authoritativeLocalAuth: AuthSessionState? = null
+            var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
             val needsHealthReconciliation =
                 healthMutex.withLock {
                     syncAndRefresh(
                         epoch,
                         foregroundClaim,
                         onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                        onConsentRequired = { deferredConsentRecovery = it },
                     )
                 }
+            deferredConsentRecovery?.let { deferred ->
+                beginLaunchConsentRecovery(
+                    deferred,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                )
+            }
             authoritativeLocalAuth?.let {
                 reconcileObservedAuthState(authState.memberKey, it)
                 return
@@ -2540,10 +2614,7 @@ class AppSession(
             is DeferredSessionBoundary.LocalAuth ->
                 handleAuthoritativeLocalAuthObservation(boundary.observedState)
             is DeferredSessionBoundary.BackendRejected ->
-                publishAuthoritativeResumeFailure(
-                    message = connectionErrorMessage(boundary.error),
-                    canRetry = false,
-                )
+                publishTerminalMemberBoundaryFailure(boundary.error)
             DeferredSessionBoundary.AccountConflict -> publishAccountConflictFailure()
         }
     }
@@ -2561,10 +2632,7 @@ class AppSession(
                 reconcileObservedAuthState(expectedMemberKey, boundary.observedState)
             }
             is DeferredSessionBoundary.BackendRejected ->
-                publishAuthoritativeResumeFailure(
-                    message = connectionErrorMessage(boundary.error),
-                    canRetry = false,
-                )
+                publishTerminalMemberBoundaryFailure(boundary.error)
             DeferredSessionBoundary.AccountConflict -> publishAccountConflictFailure()
         }
     }
@@ -2828,6 +2896,7 @@ class AppSession(
         epoch: Int,
         foregroundClaim: ForegroundRefreshClaim? = null,
         onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+        onConsentRequired: (DeferredLaunchConsentRecovery) -> Unit,
     ): Boolean {
         if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
         if (
@@ -2842,6 +2911,7 @@ class AppSession(
                     epoch,
                     LaunchConsentFollowUp.SyncHealth,
                     onAuthoritativeLocalAuth,
+                    onConsentRequired,
                 ) == null
             ) return false
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
@@ -2873,6 +2943,7 @@ class AppSession(
                     epoch,
                     LaunchConsentFollowUp.SyncHealth,
                     onAuthoritativeLocalAuth,
+                    onConsentRequired,
                 ) == null
             ) return false
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
@@ -2949,6 +3020,7 @@ class AppSession(
         epoch: Int,
         consentFollowUp: LaunchConsentFollowUp,
         onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+        onConsentRequired: (DeferredLaunchConsentRecovery) -> Unit,
     ): CompanionSyncStatus? {
         if (epoch != sessionEpoch || _state.value.phase != AppPhase.Ready) return null
         val authState = try {
@@ -2973,29 +3045,33 @@ class AppSession(
                 )
             }
             return null
-        } catch (error: CompanionApiException.Unauthorized) {
-            failCurrentSessionWhileHealthLocked(
-                message = "Your session needs a refresh. Sign in again.",
-                canRetry = false,
-            )
-            return null
-        } catch (error: CompanionApiException.NoAccount) {
-            failCurrentSessionWhileHealthLocked(
-                message = "This sign-in isn't linked to an active Murph account.",
-                canRetry = false,
-            )
-            return null
         } catch (_: CompanionApiException.AccountConflict) {
             publishAccountConflictFailureWhileHealthLocked()
             return null
         } catch (error: CompanionApiException.ConsentRequired) {
-            beginLaunchConsentRecovery(
-                expectedEpoch = epoch,
-                memberKey = memberKey,
-                followUp = consentFollowUp,
-                healthLockHeld = true,
-                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
+            onConsentRequired(
+                DeferredLaunchConsentRecovery(
+                    expectedEpoch = epoch,
+                    memberKey = memberKey,
+                    followUp = consentFollowUp,
+                ),
             )
+            return null
+        } catch (error: CompanionApiException) {
+            if (isTerminalMemberBoundaryError(error)) {
+                failCurrentSessionWhileHealthLocked(
+                    message = terminalMemberBoundaryMessage(error),
+                    canRetry = false,
+                    signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                )
+            } else {
+                publishPermissionAwareHealthState(
+                    status = cachedHealthStatus(),
+                    message = "Murph couldn't verify your account. Saved status is still shown.",
+                    healthStatusIsStale = true,
+                    clearSyncing = true,
+                )
+            }
             return null
         } catch (_: Exception) {
             publishPermissionAwareHealthState(
@@ -3131,8 +3207,10 @@ class AppSession(
     private suspend fun failCurrentSessionWhileHealthLocked(
         message: String,
         canRetry: Boolean,
+        signOutLabel: String = "Sign out and start fresh",
         retainedConsentOwner: PendingLaunchConsentRecovery? = null,
     ): Boolean {
+        closeProductAuthorityForBoundary()
         invalidateSessionEpoch(retainedConsentOwner)
         val resetSucceeded = try {
             health.signOutSdk()
@@ -3154,6 +3232,7 @@ class AppSession(
                     },
                     canRetry = canRetry && resetSucceeded,
                     canSignOut = true,
+                    signOutLabel = signOutLabel,
                 ),
             )
         }
@@ -3171,13 +3250,6 @@ class AppSession(
             if (epoch != sessionEpoch) return false
             reconcileObservedAuthState(memberKey, error.observedState)
             false
-        } catch (error: CompanionApiException.NoAccount) {
-            if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
-                message = "Murph couldn't verify this account after setup. Contact support.",
-                canRetry = false,
-            )
-            false
         } catch (error: CompanionApiException.AccountConflict) {
             if (epoch != sessionEpoch) return false
             publishAccountConflictFailure()
@@ -3190,17 +3262,20 @@ class AppSession(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.Reconcile,
-                healthLockHeld = false,
                 onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             )
             authoritativeLocalAuth?.let { reconcileObservedAuthState(memberKey, it) }
             false
-        } catch (error: CompanionApiException.Unauthorized) {
+        } catch (error: CompanionApiException) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
-                message = "Your session needs a refresh. Sign in again.",
-                canRetry = false,
-            )
+            if (isTerminalMemberBoundaryError(error)) {
+                publishTerminalMemberBoundaryFailure(error)
+            } else {
+                publishBackendBootstrapFailure(
+                    message = "Murph couldn't verify your account. Check your connection and try again.",
+                    canRetry = true,
+                )
+            }
             false
         } catch (_: Exception) {
             if (epoch != sessionEpoch) return false
@@ -3236,7 +3311,6 @@ class AppSession(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.Reconcile,
-                healthLockHeld = false,
                 onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
             )
             authoritativeLocalAuth?.let { reconcileObservedAuthState(memberKey, it) }
@@ -3247,13 +3321,10 @@ class AppSession(
             return false
         } catch (error: CompanionApiException) {
             if (epoch != sessionEpoch) return false
-            when (error) {
-                CompanionApiException.Unauthorized,
-                CompanionApiException.NoAccount ->
-                    publishInitialOnboardingMemberBoundaryFailure(
-                        "Your Murph session changed. Try a different sign-in.",
-                    )
-                else -> publishBackendBootstrapFailure(
+            if (isTerminalMemberBoundaryError(error)) {
+                publishTerminalMemberBoundaryFailure(error)
+            } else {
+                publishBackendBootstrapFailure(
                     message = "We couldn't load account setup. Check your connection and try again.",
                     canRetry = true,
                 )
@@ -3305,6 +3376,7 @@ class AppSession(
             ?.takeIf { selected -> catalog.tones.any { it.id == selected } }
             ?: mainPersona.defaultTone
         initialOnboardingGeneration += 1
+        pendingInitialOnboardingContactCardHandoff = null
         _state.update {
             it.copy(
                 initialOnboarding = projection,
@@ -3346,6 +3418,7 @@ class AppSession(
 
     private fun clearInitialOnboardingState() {
         initialOnboardingGeneration += 1
+        pendingInitialOnboardingContactCardHandoff = null
         _state.update {
             it.copy(
                 initialOnboarding = null,
@@ -3372,6 +3445,66 @@ class AppSession(
         generation: Int,
     ): Boolean = ownsInitialOnboardingWork(memberKey, epoch) &&
         generation == initialOnboardingGeneration
+
+    private fun ownsInitialOnboardingContactCardHandoff(
+        pending: PendingInitialOnboardingContactCardHandoffRequest,
+    ): Boolean =
+        pendingInitialOnboardingContactCardHandoff === pending &&
+            _state.value.initialOnboardingContactCardHandoff?.id == pending.id &&
+            ownsInitialOnboardingRequest(
+                pending.memberKey,
+                pending.epoch,
+                pending.generation,
+            )
+
+    private fun ownsInitialOnboardingContactCardAuth(
+        pending: PendingInitialOnboardingContactCardHandoffRequest,
+        observed: AuthSessionState,
+    ): Boolean =
+        observed is AuthSessionState.SignedIn &&
+            observed.verifiedOnline &&
+            observed.memberKey == pending.memberKey &&
+            ownsInitialOnboardingContactCardHandoff(pending)
+
+    private suspend fun currentAuthStateForHandoff(): AuthSessionState = try {
+        auth.currentState()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        AuthSessionState.TemporarilyUnavailable
+    }
+
+    private fun rejectInitialOnboardingContactCardAuth(
+        pending: PendingInitialOnboardingContactCardHandoffRequest,
+        observed: AuthSessionState,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+    ) {
+        clearInitialOnboardingContactCardHandoff(pending)
+        if (isAuthoritativeLocalAuthObservation(observed)) {
+            onAuthoritativeLocalAuth(observed)
+        } else {
+            publishInitialOnboardingFailure(
+                "We couldn't verify your session. Check your connection and try again.",
+            )
+        }
+    }
+
+    private fun clearInitialOnboardingContactCardHandoff(
+        pending: PendingInitialOnboardingContactCardHandoffRequest,
+    ) {
+        if (pendingInitialOnboardingContactCardHandoff !== pending) return
+        pendingInitialOnboardingContactCardHandoff = null
+        _state.update { current ->
+            if (current.initialOnboardingContactCardHandoff?.id != pending.id) {
+                current
+            } else {
+                current.copy(
+                    isInitialOnboardingSaving = false,
+                    initialOnboardingContactCardHandoff = null,
+                )
+            }
+        }
+    }
 
     private fun releaseInitialOnboardingBusy(generation: Int) {
         if (generation != initialOnboardingGeneration) return
@@ -3402,23 +3535,6 @@ class AppSession(
         }
     }
 
-    private suspend fun publishInitialOnboardingMemberBoundaryFailure(message: String) {
-        if (!resetHealthSdkAtTrustBoundary()) return
-        currentMemberKey = null
-        localState.clearMemberScopedState()
-        clearInitialOnboardingState()
-        _state.update {
-            it.copy(
-                phase = AppPhase.Failed(
-                    message = message,
-                    canRetry = false,
-                    canSignOut = true,
-                    signOutLabel = "Try a different sign-in",
-                ),
-            )
-        }
-    }
-
     private suspend fun admitBackendMember(
         memberKey: String,
         epoch: Int,
@@ -3446,7 +3562,6 @@ class AppSession(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.Reconcile,
-                healthLockHeld = false,
                 memberOwnership = if (allowUnboundMember) {
                     LaunchConsentMemberOwnership.AdmissionCandidate
                 } else {
@@ -3524,6 +3639,7 @@ class AppSession(
 
     /** Called only while [healthMutex] is held. */
     private suspend fun publishAccountConflictFailureWhileHealthLocked() {
+        closeProductAuthorityForBoundary()
         invalidateSessionEpoch()
         try {
             health.signOutSdk()
@@ -3593,6 +3709,7 @@ class AppSession(
     private suspend fun publishAuthoritativeResumeFailure(
         message: String,
         canRetry: Boolean,
+        signOutLabel: String = "Sign out and start fresh",
     ) {
         closeProductAuthorityForBoundary()
         if (!resetHealthSdkAtTrustBoundary()) return
@@ -3602,9 +3719,20 @@ class AppSession(
                     message = message,
                     canRetry = canRetry,
                     canSignOut = true,
+                    signOutLabel = signOutLabel,
                 ),
             )
         }
+    }
+
+    private suspend fun publishTerminalMemberBoundaryFailure(
+        error: CompanionApiException,
+    ) {
+        publishAuthoritativeResumeFailure(
+            message = terminalMemberBoundaryMessage(error),
+            canRetry = false,
+            signOutLabel = terminalMemberBoundarySignOutLabel(error),
+        )
     }
 
     private fun closeProductAuthorityForBoundary() {
@@ -3659,6 +3787,8 @@ class AppSession(
             is AuthSessionState.SignedIn -> {
                 if (observed.memberKey == expectedMemberKey) {
                     restoreOfflineIfPossible()
+                } else if (isUnverifiedDifferentMemberCandidate(observed)) {
+                    reconcileSignedIn(observed)
                 } else {
                     abandonUnboundMemberCandidateForAuthBoundary(expectedMemberKey)
                     reconcileSignedIn(observed)
@@ -3750,12 +3880,43 @@ class AppSession(
     }
 
     private suspend fun beginLaunchConsentRecovery(
+        deferred: DeferredLaunchConsentRecovery,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+    ) {
+        beginLaunchConsentRecovery(
+            expectedEpoch = deferred.expectedEpoch,
+            memberKey = deferred.memberKey,
+            followUp = deferred.followUp,
+            memberOwnership = deferred.memberOwnership,
+            onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
+        )
+    }
+
+    private suspend fun beginLaunchConsentRecovery(
         expectedEpoch: Int,
         memberKey: String,
         followUp: LaunchConsentFollowUp,
-        healthLockHeld: Boolean,
         memberOwnership: LaunchConsentMemberOwnership =
             LaunchConsentMemberOwnership.Bound,
+        onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
+    ) {
+        launchConsentMutex.withLock {
+            beginLaunchConsentRecoveryLocked(
+                expectedEpoch = expectedEpoch,
+                memberKey = memberKey,
+                followUp = followUp,
+                memberOwnership = memberOwnership,
+                onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
+            )
+        }
+    }
+
+    /** Called only while [launchConsentMutex] is held. */
+    private suspend fun beginLaunchConsentRecoveryLocked(
+        expectedEpoch: Int,
+        memberKey: String,
+        followUp: LaunchConsentFollowUp,
+        memberOwnership: LaunchConsentMemberOwnership,
         onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         val ownsExpectedMember =
@@ -3831,14 +3992,11 @@ class AppSession(
                 ),
             )
         }
-        launchConsentMutex.withLock {
-            if (!ownsLaunchConsentRecovery(pending)) return@withLock
-            loadLaunchConsentStatus(
-                pending,
-                healthLockHeld,
-                onAuthoritativeLocalAuth,
-            )
-        }
+        if (!ownsLaunchConsentRecovery(pending)) return
+        loadLaunchConsentStatus(
+            pending,
+            onAuthoritativeLocalAuth,
+        )
     }
 
     private fun prioritizeActiveLaunchConsentFollowUp(
@@ -3890,7 +4048,6 @@ class AppSession(
 
     private suspend fun loadLaunchConsentStatus(
         pending: PendingLaunchConsentRecovery,
-        healthLockHeld: Boolean,
         onAuthoritativeLocalAuth: (AuthSessionState) -> Unit,
     ) {
         if (!ownsLaunchConsentRecovery(pending)) return
@@ -3908,11 +4065,7 @@ class AppSession(
             )
         }
         val teardownSucceeded = try {
-            if (healthLockHeld) {
-                health.signOutSdk()
-            } else {
-                healthMutex.withLock { health.signOutSdk() }
-            }
+            healthMutex.withLock { health.signOutSdk() }
             true
         } catch (error: CancellationException) {
             throw error
@@ -3953,23 +4106,19 @@ class AppSession(
                 )
             }
             return
-        } catch (_: CompanionApiException.Unauthorized) {
-            publishLaunchConsentMemberBoundaryFailure(
-                pending = pending,
-                message = "Your session needs a refresh. Sign in again.",
-                canRetry = false,
-            )
-            return
-        } catch (_: CompanionApiException.NoAccount) {
-            publishLaunchConsentMemberBoundaryFailure(
-                pending = pending,
-                message = "This sign-in isn't linked to an active Murph account.",
-                canRetry = false,
-            )
-            return
         } catch (_: CompanionApiException.AccountConflict) {
             if (ownsLaunchConsentRecovery(pending)) {
                 publishAccountConflictFailure()
+            }
+            return
+        } catch (error: CompanionApiException) {
+            if (isTerminalMemberBoundaryError(error)) {
+                publishLaunchConsentTerminalBoundaryFailure(pending, error)
+            } else {
+                publishLaunchConsentLoadFailure(
+                    pending,
+                    "Murph couldn't load the latest consent documents. Check your connection and try again.",
+                )
             }
             return
         } catch (_: Exception) {
@@ -4054,23 +4203,20 @@ class AppSession(
                     onAuthoritativeLocalAuth,
                 )
                 return null
-            } catch (_: CompanionApiException.Unauthorized) {
-                publishLaunchConsentMemberBoundaryFailure(
-                    pending = pending,
-                    message = "Your session needs a refresh. Sign in again.",
-                    canRetry = false,
-                )
-                return null
-            } catch (_: CompanionApiException.NoAccount) {
-                publishLaunchConsentMemberBoundaryFailure(
-                    pending = pending,
-                    message = "This sign-in isn't linked to an active Murph account.",
-                    canRetry = false,
-                )
-                return null
             } catch (_: CompanionApiException.AccountConflict) {
                 if (ownsLaunchConsentRecovery(pending)) {
                     publishAccountConflictFailure()
+                }
+                return null
+            } catch (error: CompanionApiException) {
+                if (isTerminalMemberBoundaryError(error)) {
+                    publishLaunchConsentTerminalBoundaryFailure(pending, error)
+                } else {
+                    publishLaunchConsentRequired(
+                        pending = pending,
+                        status = latest,
+                        message = "Murph couldn't save consent. Check your connection and try again.",
+                    )
                 }
                 return null
             } catch (_: Exception) {
@@ -4179,23 +4325,20 @@ class AppSession(
                 )
             }
             return
-        } catch (_: CompanionApiException.Unauthorized) {
-            publishLaunchConsentMemberBoundaryFailure(
-                pending = pending,
-                message = "Your session needs a refresh. Sign in again.",
-                canRetry = false,
-            )
-            return
-        } catch (_: CompanionApiException.NoAccount) {
-            publishLaunchConsentMemberBoundaryFailure(
-                pending = pending,
-                message = "This sign-in isn't linked to an active Murph account.",
-                canRetry = false,
-            )
-            return
         } catch (_: CompanionApiException.AccountConflict) {
             if (ownsLaunchConsentRecovery(pending)) {
                 publishAccountConflictFailure()
+            }
+            return
+        } catch (error: CompanionApiException) {
+            if (isTerminalMemberBoundaryError(error)) {
+                publishLaunchConsentTerminalBoundaryFailure(pending, error)
+            } else {
+                publishLaunchConsentRequired(
+                    pending = pending,
+                    status = retainedStatus,
+                    message = "Consent documents changed, but Murph couldn't reload them. Try again.",
+                )
             }
             return
         } catch (_: Exception) {
@@ -4252,6 +4395,7 @@ class AppSession(
         pending: PendingLaunchConsentRecovery,
         message: String,
         canRetry: Boolean,
+        signOutLabel: String = "Sign out and start fresh",
     ) {
         if (!ownsLaunchConsentRecovery(pending)) return
         val clearsAdmissionCandidate =
@@ -4266,9 +4410,22 @@ class AppSession(
                     message = message,
                     canRetry = canRetry,
                     canSignOut = true,
+                    signOutLabel = signOutLabel,
                 ),
             )
         }
+    }
+
+    private fun publishLaunchConsentTerminalBoundaryFailure(
+        pending: PendingLaunchConsentRecovery,
+        error: CompanionApiException,
+    ) {
+        publishLaunchConsentMemberBoundaryFailure(
+            pending = pending,
+            message = terminalMemberBoundaryMessage(error),
+            canRetry = false,
+            signOutLabel = terminalMemberBoundarySignOutLabel(error),
+        )
     }
 
     private suspend fun resumeLaunchConsentFollowUp(
@@ -4844,22 +5001,26 @@ class AppSession(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = LaunchConsentFollowUp.AutomaticAddressBookDeletion(mutation),
-                healthLockHeld = false,
                 onAuthoritativeLocalAuth = {
                     onSessionBoundary(DeferredSessionBoundary.LocalAuth(it))
                 },
             )
-        } catch (error: CompanionApiException.Unauthorized) {
-            if (ownsAddressBookWork(memberKey, epoch)) {
-                onSessionBoundary(DeferredSessionBoundary.BackendRejected(error))
-            }
-        } catch (error: CompanionApiException.NoAccount) {
-            if (ownsAddressBookWork(memberKey, epoch)) {
-                onSessionBoundary(DeferredSessionBoundary.BackendRejected(error))
-            }
         } catch (_: CompanionApiException.AccountConflict) {
             if (ownsAddressBookWork(memberKey, epoch)) {
                 onSessionBoundary(DeferredSessionBoundary.AccountConflict)
+            }
+        } catch (error: CompanionApiException) {
+            if (
+                ownsAddressBookWork(memberKey, epoch) &&
+                isTerminalMemberBoundaryError(error)
+            ) {
+                onSessionBoundary(DeferredSessionBoundary.BackendRejected(error))
+            } else {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Contacts access is off. Murph will retry deleting the exact shared revision on the next foreground check.",
+                )
             }
         } catch (_: Exception) {
             publishAddressBookMessage(
@@ -4982,25 +5143,28 @@ class AppSession(
                 expectedEpoch = epoch,
                 memberKey = memberKey,
                 followUp = consentFollowUp,
-                healthLockHeld = false,
                 onAuthoritativeLocalAuth = {
                     onSessionBoundary(DeferredSessionBoundary.LocalAuth(it))
                 },
             )
             return null
-        } catch (error: CompanionApiException.Unauthorized) {
-            if (ownsAddressBookWork(memberKey, epoch)) {
-                onSessionBoundary(DeferredSessionBoundary.BackendRejected(error))
-            }
-            return null
-        } catch (error: CompanionApiException.NoAccount) {
-            if (ownsAddressBookWork(memberKey, epoch)) {
-                onSessionBoundary(DeferredSessionBoundary.BackendRejected(error))
-            }
-            return null
         } catch (_: CompanionApiException.AccountConflict) {
             if (ownsAddressBookWork(memberKey, epoch)) {
                 onSessionBoundary(DeferredSessionBoundary.AccountConflict)
+            }
+            return null
+        } catch (error: CompanionApiException) {
+            if (
+                ownsAddressBookWork(memberKey, epoch) &&
+                isTerminalMemberBoundaryError(error)
+            ) {
+                onSessionBoundary(DeferredSessionBoundary.BackendRejected(error))
+            } else {
+                publishAddressBookUnavailable(
+                    memberKey,
+                    epoch,
+                    "Murph couldn't refresh address-book sharing. Try again.",
+                )
             }
             return null
         } catch (_: Exception) {
@@ -5382,6 +5546,7 @@ class AppSession(
         }
         pendingHealthConnection = null
         pendingAddressBookPermissionFlow = null
+        pendingInitialOnboardingContactCardHandoff = null
         pendingLaunchConsentRecovery = preservedConsentOwner
         synchronized(pendingAddressBookReconcileLock) {
             pendingAddressBookReconcile = null
@@ -5390,6 +5555,8 @@ class AppSession(
             it.copy(
                 isConnectingHealth = false,
                 isAddressBookBusy = false,
+                isInitialOnboardingSaving = false,
+                initialOnboardingContactCardHandoff = null,
                 launchConsentRecovery = if (preservedConsentOwner == null) {
                     null
                 } else {
@@ -5402,15 +5569,49 @@ class AppSession(
         }
     }
 
-    private fun connectionErrorMessage(error: Exception): String = when (error) {
-        CompanionApiException.Network -> "Murph couldn't reach the network. Check your connection and try again."
+    private fun connectionErrorMessage(error: Exception): String = when {
+        error is CompanionApiException && isTerminalMemberBoundaryError(error) ->
+            terminalMemberBoundaryMessage(error)
+        else -> when (error) {
+            CompanionApiException.Network ->
+                "Murph couldn't reach the network. Check your connection and try again."
+            CompanionApiException.AccountConflict ->
+                "This sign-in conflicts with another Murph account. Try a different sign-in."
+            CompanionApiException.ConsentRequired -> CONSENT_REQUIRED_MESSAGE
+            CompanionApiException.ReconnectRequired ->
+                "Reconnect Health Connect to resume syncing."
+            else -> "Murph couldn't finish connecting Health Connect. Try again in a moment."
+        }
+    }
+
+    private fun isTerminalMemberBoundaryError(error: CompanionApiException): Boolean =
+        when (error) {
+            CompanionApiException.Unauthorized,
+            CompanionApiException.NoAccount,
+            CompanionApiException.AccessRequired,
+            CompanionApiException.MemberSuspended,
+            CompanionApiException.AdmissionSupportRequired -> true
+            else -> false
+        }
+
+    private fun terminalMemberBoundaryMessage(error: CompanionApiException): String = when (error) {
         CompanionApiException.Unauthorized -> "Your session needs a refresh. Sign in again."
         CompanionApiException.NoAccount -> "This sign-in isn't linked to an active Murph account."
-        CompanionApiException.AccountConflict ->
-            "This sign-in conflicts with another Murph account. Try a different sign-in."
-        CompanionApiException.ConsentRequired -> CONSENT_REQUIRED_MESSAGE
-        CompanionApiException.ReconnectRequired -> "Reconnect Health Connect to resume syncing."
-        else -> "Murph couldn't finish connecting Health Connect. Try again in a moment."
+        CompanionApiException.AccessRequired ->
+            "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support."
+        CompanionApiException.MemberSuspended ->
+            "This Murph account is paused. Try a different sign-in or contact Murph support."
+        CompanionApiException.AdmissionSupportRequired ->
+            "Murph support needs to finish setting up this account. Try a different sign-in or contact support."
+        else -> kotlin.error("Non-terminal member boundary error")
+    }
+
+    private fun terminalMemberBoundarySignOutLabel(error: CompanionApiException): String = if (
+        error == CompanionApiException.Unauthorized
+    ) {
+        "Sign in again"
+    } else {
+        "Try a different sign-in"
     }
 
     private data class ForegroundRefreshClaim(
@@ -5440,6 +5641,22 @@ class AppSession(
         val memberKey: String?,
         val epoch: Int,
         val showBusy: Boolean,
+    )
+
+    private data class PendingInitialOnboardingContactCardHandoffRequest(
+        val id: Int,
+        val memberKey: String,
+        val epoch: Int,
+        val generation: Int,
+        val avatarId: String,
+    )
+
+    private data class DeferredLaunchConsentRecovery(
+        val expectedEpoch: Int,
+        val memberKey: String,
+        val followUp: LaunchConsentFollowUp,
+        val memberOwnership: LaunchConsentMemberOwnership =
+            LaunchConsentMemberOwnership.Bound,
     )
 
     private sealed interface DeferredSessionBoundary {

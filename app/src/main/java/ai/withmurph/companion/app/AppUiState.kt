@@ -55,7 +55,6 @@ data class AppUiState(
 
 data class PendingInitialOnboardingContactCardHandoff(
     val id: Int,
-    val url: String,
 )
 
 enum class InitialOnboardingStage {

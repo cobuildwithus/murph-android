@@ -1,12 +1,12 @@
 # Murph Android Companion
 
-A native Kotlin + Jetpack Compose companion that creates or restores a Murph account, completes the shared first-run setup, and bridges Health Connect into Murph through Junction.
+A native Kotlin + Jetpack Compose companion that signs an existing Murph member in and bridges Health Connect into Murph through Junction.
 
 This repository is intentionally narrow. It is not a general Murph mobile client.
 
 ## Included
 
-- Privy phone and email OTP account entry for new and returning members.
+- Privy phone and email OTP sign-in.
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
@@ -15,8 +15,6 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
-- Server-owned first-run contact-card, persona, voice, tone, and welcome setup.
-- A forward-only native Health Connect → Friendly Names setup sequence with explicit **Not now** choices.
 - WHOOP → Health Connect setup guidance.
 - Optional, server-backed familiar-name projection for unregistered phone participants in groups.
 - Settings, legal links, deletion, support, and sign-out.
@@ -65,10 +63,7 @@ Never put the Privy app secret in this app. The Android Privy app client must al
 - release package: `ai.withmurph.app`
 - debug package: `ai.withmurph.app.dev`
 
-Deploy the companion backend from Murph PRs #1296 and #1341 before testing
-account creation or first-run setup. Android deliberately reuses the backend's
-canonical account-admission and onboarding owners; it does not create a second
-signup or catalog source in the app.
+Apply the accompanying backend patch before testing. Current Murph `main` rejects `platform: "android"`; the patch also makes sync status source-scoped so an Apple Health receipt cannot make the Android app report Health Connect as synced.
 
 ## Build and test
 
@@ -82,27 +77,22 @@ identifier is blank or the production backend URL is not absolute HTTPS.
 
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
-values are `login`, `email`, `otp`, `setup`, `disconnected`,
-`disconnectedUnavailable`, `awaiting`,
-`synced`, `delayed`,
-`savedStatus`, `attention`, `reconnectRequired`, `consentRequired`, `consentBanner`,
-`consentLoadFailure`, `onboardingLoading`, `onboardingContact`,
-`onboardingPersona`,
-`onboardingSupporting`, `onboardingVoice`, `onboardingTone`,
-`onboardingError`, `onboardingSaving`, `onboardingWelcome`, `friendlyNames`,
-and `failure`.
+values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
+`attention`, `consentRequired`, `consentLoadFailure`, and `failure`.
 
-Every PR that changes shipped Compose UI or visible Android resources must
-include current emulator PNGs for each materially changed state. Keep them
-under `app-store-assets/review-evidence/<feature>/`, embed their exact-head
-raw GitHub URLs in the PR's `Android visual proof` section, and name any
-physical-device-only gaps. Capture durable evidence only from debug synthetic
-fixtures, inspect every image before commit, and never use real account,
-health, or contact data. `Android Visual Proof / verify` uses a base-owned
-`pull_request_target` workflow to run only the trusted base revision of the
-verifier while inspecting the candidate as data, so a PR cannot weaken the
-check and then certify itself. The bootstrap PR needs independent review
-because its base does not contain the workflow. Test the verifier locally with:
+Every PR that changes a shipped path under `app/src/main/` or
+`app/src/release/` must include current emulator PNGs from the exact pushed
+head. Keep them under `app-store-assets/review-evidence/<feature>/`, embed their
+exact-head raw GitHub URLs in the PR's `Android visual proof` section, and name
+physical-device-only gaps. Use only debug synthetic fixtures and raw 8-bit RGBA
+emulator screenshots. Inspect the pixels and keep no text, profile, Exif, or
+private metadata.
+
+`Android Visual Proof / verify` uses a base-owned `pull_request_target`
+workflow that executes only the trusted base verifier while inspecting the
+candidate as data. A PR cannot weaken the gate and certify itself. The bootstrap
+PR needs independent review because its base does not yet contain the workflow.
+Run its contract tests locally with:
 
 ```bash
 node --test scripts/check-android-visual-proof.test.mjs
@@ -170,52 +160,16 @@ message.
 
 ## Connection lifecycle
 
-- One neutral OTP flow serves new and returning members. After Privy verifies
-  the destination, the app calls the member-fenced companion admission endpoint
-  before status, onboarding, or health work. Admission creates or restores only
-  the Murph account; it does not mint a Junction token or grant device-sync
-  authority. Junction remains untouched until the member explicitly grants
-  Health Connect access.
-- Every member-bound bootstrap, token, status, consent, onboarding, contact,
-  and sync continuation is fenced to the current Privy member. Canonical
-  account-conflict responses tear down local member and Junction authority and
-  require a different sign-in.
-- Pending first-run setup is loaded from the server after admission. Contact
-  card, persona, supporting persona, voice, and tone choices remain local draft
-  state until one exact save; Skip completes without preferences. First-writer
-  completion shows Welcome only to the request that completed setup, while a
-  stale completion closes quietly. Foreground refresh can remove completed
-  onboarding but never replace an in-progress draft.
-- After account onboarding, a member-scoped local navigation step presents
-  optional Health Connect as step 1 of 2 and Friendly Names as step 2 of 2.
-  Each step advances only after its existing durable completion boundary or an
-  explicit **Not now** choice. The step is not permission, sync, or server
-  truth; it clears on member trust boundaries and never regresses after setup.
 - The app does not create a Junction connection merely because a member signs in.
-- Before showing setup, the app completes admission and then uses the read-only
-  status endpoint to confirm the Privy identity maps to an active, consented
-  Murph member.
+- Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
 - A session restored while offline repeats that validation when Privy becomes
   online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
   After at least one category is granted, the app revalidates the member and
-  refreshes the server receipt baseline immediately before requesting a backend
-  token with `connectionIntent: "connect"`. If launch consent interrupts that
-  continuation, Murph refreshes Health Connect grants and the receipt baseline
-  again before connecting, and aborts when either check cannot complete.
-- The application session then owns the optional history-permission prompt
-  across Activity recreation. It records completed setup and starts the first
-  sync only after that prompt resolves or is unavailable. The setup marker,
-  receipt baseline, observation time, and reconnect clearance commit as one
-  restart snapshot; a failed commit rolls back the live Junction identity.
+  requests a backend token with `connectionIntent: "connect"`. If launch
+  consent interrupts that continuation, Murph refreshes Health Connect grants
+  again before connecting and aborts when none remain.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
-- If omitted or passive `resume` receives
-  `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and
-  shows **Reconnect Health Connect**. Ordinary refresh remains read-only; only
-  that visible action can reach a `connectionIntent: "connect"` request after
-  the Health Connect permission flow. Setup revocation and the typed reconnect
-  marker commit together, and the marker remains authoritative through token,
-  identify, connection, and history-permission work until final setup commits.
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a
   fresh `connect` transaction can begin.
@@ -227,8 +181,7 @@ message.
 - When the backend returns structured launch consent required, Murph keeps the
   Privy member session, signs out only the local Junction SDK, strictly loads
   same-origin HTTPS legal and health-data documents in native UI, and posts at
-  most the two canonical missing scopes with every canonical document and its
-  exact returned version for each accepted scope.
+  most the two canonical missing scopes with exact returned document versions.
   `CONSENT_DOCUMENT_VERSIONS_STALE` reloads server truth, partial success is
   retained, and a valid response must make monotonic progress.
 - Consent recovery resumes the exact blocked startup, connect, sync, Health
@@ -242,13 +195,8 @@ message.
 - Returning from a consent document or account-control page reloads consent and
   rechecks the Privy member/account boundary before any paused action resumes.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
-- If that status cannot be refreshed, Android labels the cached projection
-  **Last checked online** and never presents its frozen relative time or sync
-  classification as a current result.
-- A source-scoped receipt must be strictly newer than both the final
-  pre-connect receipt baseline and that response's server observation time;
-  an older or equal Health Connect receipt cannot prove the fresh connection
-  worked, including when the pre-connect response had no receipt.
+- A source-scoped receipt must also be at or after the current setup boundary;
+  an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online
   account verification is temporarily unavailable.
 - Login destinations and OTP digits are protected from Android task snapshots,
@@ -273,9 +221,6 @@ message.
 - Sign-out and member switches invalidate contact work and clear the local
   revision/replay metadata so a late completion cannot mutate the next member's
   state.
-- Initial setup shows the complete Friendly Names disclosure once. After Share
-  or **Not now**, Settings remains the discoverable opt-in owner and reuses the
-  same explicit foreground consent and one-shot projection.
 
 ## Release requirements
 

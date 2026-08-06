@@ -7,13 +7,39 @@ import { inflateSync } from "node:zlib";
 
 const EVIDENCE_PREFIX = "app-store-assets/review-evidence/";
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
+const ALLOWED_RENDERED_IMAGE_ATTRIBUTES = new Set([
+  "alt",
+  "data-canonical-src",
+  "src",
+  "style",
+]);
 const MAX_DECODED_BYTES = 128 * 1024 * 1024;
 const MAX_SCREENSHOT_DIMENSION = 20_000;
 const MIN_SCREENSHOT_WIDTH = 320;
 const MIN_SCREENSHOT_HEIGHT = 568;
-const SHIPPED_SOURCE_PATH = /^app\/src\/(?:main|release)\//u;
-const VISIBLE_RESOURCE_PATH =
-  /^app\/src\/(?:main|release)\/res\/(?:anim|animator|color|drawable|font|interpolator|layout|menu|mipmap|navigation|transition|values)(?:-[^/]+)?\//u;
+const NON_VISIBLE_EVIDENCE_CONTAINERS = new Set([
+  "audio",
+  "canvas",
+  "datalist",
+  "details",
+  "dialog",
+  "iframe",
+  "math",
+  "noscript",
+  "object",
+  "picture",
+  "script",
+  "select",
+  "source",
+  "style",
+  "svg",
+  "template",
+  "themed-picture",
+  "textarea",
+  "video",
+]);
+const SHIPPED_APP_PATH = /^app\/src\/(?:main|release)\//u;
+const URL_SAFE_EVIDENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 export function parseNameStatus(raw) {
   const fields = raw.split("\0");
@@ -34,16 +60,8 @@ export function parseNameStatus(raw) {
   return records;
 }
 
-export function isVisibleResourcePath(path) {
-  return VISIBLE_RESOURCE_PATH.test(path);
-}
-
-export function isComposePath(path, contents) {
-  return SHIPPED_SOURCE_PATH.test(path)
-    && path.endsWith(".kt")
-    && /androidx\.(?:[A-Za-z_][\w]*\.)*compose(?:\.|\b)/m.test(
-      contents,
-    );
+export function isShippedAppPath(path) {
+  return SHIPPED_APP_PATH.test(path);
 }
 
 function isProtectedGatePath(path) {
@@ -63,36 +81,14 @@ export function changedProtectedPaths(records) {
   return [...paths].sort();
 }
 
-export function changedUiPaths(records, readRevisionFile) {
+export function changedShippedAppPaths(records) {
   const paths = new Set();
 
   for (const record of records) {
-    const basePath = record.status.startsWith("R")
-      ? record.oldPath
-      : record.path;
-    if (
-      !record.status.startsWith("A")
-      && !record.status.startsWith("C")
-      && basePath
-      && (
-        isVisibleResourcePath(basePath)
-        || isComposePath(
-          basePath,
-          readRevisionFile("base", basePath),
-        )
-      )
-    ) {
-      paths.add(record.path);
-    }
-    if (record.status.startsWith("D")) {
-      continue;
-    }
-
-    if (
-      isVisibleResourcePath(record.path)
-      || isComposePath(record.path, readRevisionFile("head", record.path))
-    ) {
-      paths.add(record.path);
+    for (const path of [record.oldPath, record.path]) {
+      if (path && isShippedAppPath(path)) {
+        paths.add(path);
+      }
     }
   }
 
@@ -116,19 +112,10 @@ export function readPngDimensions(path, bytes) {
     throw new Error(`${path} is not a valid PNG.`);
   }
 
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = -1;
-  let compressionMethod = -1;
-  let filterMethod = -1;
   const idatChunks = [];
-  let interlaceMethod = -1;
+  let height = 0;
   let offset = 8;
-  let paletteEntries = 0;
-  let sawPlte = false;
-  let sawIdat = false;
-  let sawIend = false;
-  let idatEnded = false;
+  let stage = "header";
   let width = 0;
 
   while (offset < bytes.length) {
@@ -157,139 +144,179 @@ export function readPngDimensions(path, bytes) {
       throw new Error(`${path} has an invalid PNG chunk checksum.`);
     }
 
-    if (offset === 8) {
-      if (type !== "IHDR" || length !== 13) {
-        throw new Error(`${path} is missing its required PNG header.`);
-      }
-      width = bytes.readUInt32BE(dataStart);
-      height = bytes.readUInt32BE(dataStart + 4);
-      bitDepth = bytes[dataStart + 8];
-      colorType = bytes[dataStart + 9];
-      compressionMethod = bytes[dataStart + 10];
-      filterMethod = bytes[dataStart + 11];
-      interlaceMethod = bytes[dataStart + 12];
-    } else if (type === "IHDR") {
-      throw new Error(`${path} contains more than one PNG header.`);
-    }
     if (
-      type[0] === type[0].toUpperCase()
-      && !["IHDR", "PLTE", "IDAT", "IEND"].includes(type)
+      !["IHDR", "sRGB", "sBIT", "IDAT", "IEND"].includes(type)
     ) {
-      throw new Error(`${path} contains an unknown critical PNG chunk.`);
+      throw new Error(`${path} contains disallowed PNG chunk ${type}.`);
     }
-    if (type === "PLTE") {
-      if (sawPlte || sawIdat || length === 0 || length % 3 !== 0) {
-        throw new Error(`${path} has an invalid PNG palette.`);
+
+    switch (type) {
+      case "IHDR": {
+        if (stage !== "header" || offset !== 8 || length !== 13) {
+          throw new Error(`${path} has an invalid PNG header.`);
+        }
+        width = bytes.readUInt32BE(dataStart);
+        height = bytes.readUInt32BE(dataStart + 4);
+        const bitDepth = bytes[dataStart + 8];
+        const colorType = bytes[dataStart + 9];
+        const compressionMethod = bytes[dataStart + 10];
+        const filterMethod = bytes[dataStart + 11];
+        const interlaceMethod = bytes[dataStart + 12];
+        if (
+          width < 1
+          || height < 1
+          || width > MAX_SCREENSHOT_DIMENSION
+          || height > MAX_SCREENSHOT_DIMENSION
+        ) {
+          throw new Error(`${path} has unreasonable PNG dimensions.`);
+        }
+        if (
+          bitDepth !== 8
+          || colorType !== 6
+          || compressionMethod !== 0
+          || filterMethod !== 0
+          || interlaceMethod !== 0
+        ) {
+          throw new Error(
+            `${path} is not an 8-bit non-interlaced RGBA emulator PNG.`,
+          );
+        }
+        stage = "srgb";
+        break;
       }
-      sawPlte = true;
-      paletteEntries = length / 3;
-    }
-    if (type === "IDAT") {
-      if (idatEnded) {
-        throw new Error(`${path} has non-consecutive PNG image data.`);
-      }
-      sawIdat = true;
-      idatChunks.push(bytes.subarray(dataStart, crcOffset));
-    } else if (sawIdat && type !== "IEND") {
-      idatEnded = true;
-    }
-    if (type === "IEND") {
-      if (length !== 0 || nextOffset !== bytes.length) {
-        throw new Error(`${path} has an invalid PNG terminator.`);
-      }
-      sawIend = true;
+      case "sRGB":
+        if (stage !== "srgb" || length !== 1 || bytes[dataStart] !== 0) {
+          throw new Error(`${path} has an invalid emulator PNG sRGB chunk.`);
+        }
+        stage = "sbit";
+        break;
+      case "sBIT":
+        if (
+          stage !== "sbit"
+          || length !== 4
+          || !bytes.subarray(dataStart, crcOffset).every((value) => value === 8)
+        ) {
+          throw new Error(`${path} has an invalid emulator PNG sBIT chunk.`);
+        }
+        stage = "idat";
+        break;
+      case "IDAT":
+        if (
+          !["idat", "idat-data"].includes(stage)
+          || length === 0
+        ) {
+          throw new Error(`${path} has invalid PNG image-data ordering.`);
+        }
+        idatChunks.push(bytes.subarray(dataStart, crcOffset));
+        stage = "idat-data";
+        break;
+      case "IEND":
+        if (
+          stage !== "idat-data"
+          || length !== 0
+          || nextOffset !== bytes.length
+        ) {
+          throw new Error(`${path} has an invalid PNG terminator.`);
+        }
+        stage = "complete";
+        break;
+      default:
+        throw new Error(`${path} contains an unexpected PNG chunk.`);
     }
 
     offset = nextOffset;
   }
 
-  if (!sawIdat || !sawIend) {
+  if (stage !== "complete") {
     throw new Error(`${path} is not a structurally complete PNG.`);
   }
   validateDecodedPixels({
-    bitDepth,
-    colorType,
-    compressionMethod,
-    filterMethod,
     height,
     idatChunks,
-    interlaceMethod,
-    paletteEntries,
     path,
-    sawPlte,
     width,
   });
   return { height, width };
 }
 
 function validateDecodedPixels({
-  bitDepth,
-  colorType,
-  compressionMethod,
-  filterMethod,
   height,
   idatChunks,
-  interlaceMethod,
-  paletteEntries,
   path,
-  sawPlte,
   width,
 }) {
-  const formats = new Map([
-    [0, { channels: 1, depths: [1, 2, 4, 8, 16] }],
-    [2, { channels: 3, depths: [8, 16] }],
-    [3, { channels: 1, depths: [1, 2, 4, 8] }],
-    [4, { channels: 2, depths: [8, 16] }],
-    [6, { channels: 4, depths: [8, 16] }],
-  ]);
-  const format = formats.get(colorType);
-  if (
-    !format
-    || !format.depths.includes(bitDepth)
-    || compressionMethod !== 0
-    || filterMethod !== 0
-    || interlaceMethod !== 0
-    || (colorType === 3 && (!sawPlte || paletteEntries > 2 ** bitDepth))
-    || ([0, 4].includes(colorType) && sawPlte)
-    || (sawPlte && paletteEntries > 256)
-  ) {
-    throw new Error(`${path} uses an unsupported PNG pixel format.`);
-  }
-  if (
-    width < 1
-    || height < 1
-    || width > MAX_SCREENSHOT_DIMENSION
-    || height > MAX_SCREENSHOT_DIMENSION
-  ) {
-    throw new Error(`${path} has unreasonable PNG dimensions.`);
-  }
-
-  const rowBytes = (
-    BigInt(width) * BigInt(format.channels) * BigInt(bitDepth) + 7n
-  ) / 8n;
+  const rowBytes = BigInt(width) * 4n;
   const expectedBytes = BigInt(height) * (rowBytes + 1n);
   if (expectedBytes > BigInt(MAX_DECODED_BYTES)) {
     throw new Error(`${path} expands beyond the PNG evidence limit.`);
   }
 
+  const encoded = Buffer.concat(idatChunks);
   let decoded;
+  let consumedBytes;
   try {
-    decoded = inflateSync(Buffer.concat(idatChunks), {
+    const inflated = inflateSync(encoded, {
+      info: true,
       maxOutputLength: Number(expectedBytes),
     });
+    decoded = inflated.buffer;
+    consumedBytes = inflated.engine.bytesWritten;
   } catch {
     throw new Error(`${path} does not contain decodable PNG pixel data.`);
+  }
+  if (consumedBytes !== encoded.length) {
+    throw new Error(`${path} contains trailing PNG image data.`);
   }
   if (decoded.length !== Number(expectedBytes)) {
     throw new Error(`${path} has an invalid PNG pixel-data length.`);
   }
 
   const rowStride = Number(rowBytes) + 1;
+  let previousAlpha = new Uint8Array(width);
   for (let row = 0; row < height; row += 1) {
-    if (decoded[row * rowStride] > 4) {
+    const filter = decoded[row * rowStride];
+    if (filter > 4) {
       throw new Error(`${path} contains an invalid PNG row filter.`);
     }
+    const currentAlpha = new Uint8Array(width);
+    for (let pixel = 0; pixel < width; pixel += 1) {
+      const filteredAlpha = decoded[
+        row * rowStride + 1 + pixel * 4 + 3
+      ];
+      const left = pixel > 0 ? currentAlpha[pixel - 1] : 0;
+      const above = row > 0 ? previousAlpha[pixel] : 0;
+      const upperLeft = row > 0 && pixel > 0
+        ? previousAlpha[pixel - 1]
+        : 0;
+      let predictor = 0;
+      if (filter === 1) {
+        predictor = left;
+      } else if (filter === 2) {
+        predictor = above;
+      } else if (filter === 3) {
+        predictor = Math.floor((left + above) / 2);
+      } else if (filter === 4) {
+        predictor = pngPaethPredictor(left, above, upperLeft);
+      }
+      const alpha = (filteredAlpha + predictor) & 0xFF;
+      if (alpha !== 0xFF) {
+        throw new Error(`${path} contains non-opaque PNG pixels.`);
+      }
+      currentAlpha[pixel] = alpha;
+    }
+    previousAlpha = currentAlpha;
   }
+}
+
+function pngPaethPredictor(left, above, upperLeft) {
+  const estimate = left + above - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const aboveDistance = Math.abs(estimate - above);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) {
+    return left;
+  }
+  return aboveDistance <= upperLeftDistance ? above : upperLeft;
 }
 
 function pngCrc32(bytes) {
@@ -308,6 +335,14 @@ export function validateScreenshotBlobs(entries) {
 
   for (const { bytes, mode, path } of entries) {
     try {
+      const evidenceSegments = path.split("/");
+      if (evidenceSegments.some((segment) =>
+        !URL_SAFE_EVIDENCE_SEGMENT.test(segment)
+      )) {
+        throw new Error(
+          "Screenshot evidence paths must use URL-safe ASCII letters, numbers, dots, dashes, and underscores.",
+        );
+      }
       if (mode !== "100644") {
         throw new Error(`${path} is not a regular, non-executable Git file.`);
       }
@@ -364,16 +399,72 @@ function listItemText(section, label) {
   return null;
 }
 
-function imageUrls(html) {
-  const urls = new Set();
+function renderedTag(tag) {
+  const name = /^<([A-Za-z][^\s/>]*)/u.exec(tag)?.[1].toLowerCase() ?? "";
+  const attributes = new Map();
+  for (const attribute of tag.matchAll(
+    /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/gu,
+  )) {
+    attributes.set(
+      attribute[1].toLowerCase(),
+      decodeHtml(attribute[2] ?? attribute[3] ?? attribute[4] ?? ""),
+    );
+  }
+  return { attributes, name, tag };
+}
+
+function renderedImages(html) {
+  const images = [];
   for (const image of html.matchAll(/<img\b[^>]*>/gi)) {
-    for (const attribute of image[0].matchAll(
-      /\b(?:src|data-canonical-src)=["']([^"']+)["']/gi,
-    )) {
-      urls.add(decodeHtml(attribute[1]));
+    const rendered = renderedTag(image[0]);
+    const effectiveUrl = rendered.attributes.get("data-canonical-src")
+      ?? rendered.attributes.get("src");
+    if (effectiveUrl) {
+      images.push({
+        ...rendered,
+        url: effectiveUrl,
+      });
     }
   }
-  return urls;
+  return images;
+}
+
+function hasHiddenEvidencePresentation(section, images) {
+  for (const match of section.matchAll(/<[A-Za-z][^>]*>/g)) {
+    const { attributes, name } = renderedTag(match[0]);
+    const className = attributes.get("class");
+    if (
+      NON_VISIBLE_EVIDENCE_CONTAINERS.has(name)
+      || attributes.has("hidden")
+      || attributes.has("inert")
+      || (className != null && !(name === "code" && className === "notranslate"))
+      || attributes.has("width")
+      || attributes.has("height")
+      || attributes.get("aria-hidden")?.toLowerCase() === "true"
+      || (name !== "img" && attributes.has("style"))
+    ) {
+      return true;
+    }
+  }
+  return images.some(({ attributes }) => {
+    if (
+      !attributes.has("src")
+      || [...attributes.keys()].some((name) =>
+        !ALLOWED_RENDERED_IMAGE_ATTRIBUTES.has(name)
+      )
+    ) {
+      return true;
+    }
+    if (
+      attributes.has("data-canonical-src")
+      && !attributes.get("src")?.startsWith("https://camo.githubusercontent.com/")
+    ) return true;
+    const style = attributes.get("style");
+    if (style == null) {
+      return false;
+    }
+    return !/^max-width\s*:\s*100%\s*;?$/iu.test(style.trim());
+  });
 }
 
 function hasCompletedListValue(section, label) {
@@ -381,8 +472,9 @@ function hasCompletedListValue(section, label) {
   if (!item) {
     return false;
   }
-  const value = item.slice(label.length + 1).trim();
-  return value.length > 0
+  const value = item.slice(label.length + 1).trim().normalize("NFKC");
+  return /[\p{L}\p{N}]/u.test(value)
+    && !/[\p{Cc}\p{Cf}]/u.test(value)
     && !/^<.*>$/u.test(value)
     && !/^(?:tbd|todo|placeholder)$/iu.test(value);
 }
@@ -411,12 +503,27 @@ export function validateRenderedProof({
     );
   }
 
-  const urls = imageUrls(section);
-  for (const path of screenshotPaths) {
-    const expected =
-      `https://raw.githubusercontent.com/${repository}/${head}/${path}`;
+  const images = renderedImages(section);
+  const urls = new Set(images.map(({ url }) => url));
+  if (hasHiddenEvidencePresentation(section, images)) {
+    errors.push(
+      "The visual-proof section must render evidence at its normal visible size.",
+    );
+  }
+  const expectedUrls = new Map(screenshotPaths.map((path) => [
+    `https://raw.githubusercontent.com/${repository}/${head}/${path}`,
+    path,
+  ]));
+  for (const [expected, path] of expectedUrls) {
     if (!urls.has(expected)) {
       errors.push(`${path} must be embedded with its exact-head raw GitHub URL.`);
+    }
+  }
+  for (const url of urls) {
+    if (!expectedUrls.has(url)) {
+      errors.push(
+        "The visual-proof section contains an image that is not exact-head evidence.",
+      );
     }
   }
 
@@ -476,18 +583,6 @@ export function comparisonRecords(base, head, runGit = git) {
   return { comparisonBase, records };
 }
 
-export function changedUiPathsAtRevisions(
-  records,
-  comparisonBase,
-  head,
-  runGit = git,
-) {
-  return changedUiPaths(records, (revision, path) => {
-    const commit = revision === "base" ? comparisonBase : head;
-    return runGit(["show", `${commit}:${path}`]);
-  });
-}
-
 export function readGitBlobEntry(
   revision,
   path,
@@ -539,7 +634,7 @@ export async function main(environment = process.env) {
     );
   }
 
-  const { comparisonBase, records } = comparisonRecords(base, head);
+  const { records } = comparisonRecords(base, head);
   const protectedPaths = changedProtectedPaths(records);
   if (protectedPaths.length > 0) {
     throw new Error(
@@ -547,13 +642,9 @@ export async function main(environment = process.env) {
       + `and cannot self-certify: ${protectedPaths.join(", ")}`,
     );
   }
-  const uiPaths = changedUiPathsAtRevisions(
-    records,
-    comparisonBase,
-    head,
-  );
-  if (uiPaths.length === 0) {
-    console.log("No user-visible Android UI changes detected.");
+  const shippedAppPaths = changedShippedAppPaths(records);
+  if (shippedAppPaths.length === 0) {
+    console.log("No shipped Android app changes detected.");
     return;
   }
 
@@ -561,7 +652,9 @@ export async function main(environment = process.env) {
   const errors = [];
   if (screenshotPaths.length === 0) {
     errors.push(
-      `UI changed (${uiPaths.join(", ")}) but no PNG changed under ${EVIDENCE_PREFIX}.`,
+      "Shipped Android app changed "
+      + `(${shippedAppPaths.join(", ")}) but no PNG changed under `
+      + `${EVIDENCE_PREFIX}.`,
     );
   } else {
     const entries = screenshotPaths.map((path) => readGitBlobEntry(head, path));
@@ -586,7 +679,7 @@ export async function main(environment = process.env) {
   }
   console.log(
     `Verified ${screenshotPaths.length} exact-head screenshot(s) `
-    + `for ${uiPaths.length} changed UI path(s).`,
+    + `for ${shippedAppPaths.length} changed shipped app path(s).`,
   );
 }
 

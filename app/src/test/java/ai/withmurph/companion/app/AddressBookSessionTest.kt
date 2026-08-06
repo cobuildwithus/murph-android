@@ -48,6 +48,36 @@ import java.util.concurrent.TimeUnit
 @OptIn(ExperimentalCoroutinesApi::class)
 class AddressBookSessionTest {
     @Test
+    fun terminalReplacementFailuresCloseRuntimeAndPreserveTheExactMutation() = runTest {
+        val cases = listOf(
+            CompanionApiException.Unauthorized to "Sign in again",
+            CompanionApiException.NoAccount to "Try a different sign-in",
+            CompanionApiException.AccessRequired to "Try a different sign-in",
+            CompanionApiException.MemberSuspended to "Try a different sign-in",
+            CompanionApiException.AdmissionSupportRequired to "Try a different sign-in",
+        )
+
+        cases.forEach { (rejection, signOutLabel) ->
+            val fixture = fixture()
+            fixture.session.start()
+            fixture.contacts.permissionGranted = true
+            fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+            fixture.health.signedIn = true
+            assertTrue(fixture.session.prepareAddressBookSharing())
+            fixture.api.replaceHandler = { _, _ -> throw rejection }
+
+            assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+            val failure = fixture.session.state.value.phase as AppPhase.Failed
+            assertFalse(failure.canRetry)
+            assertEquals(signOutLabel, failure.signOutLabel)
+            assertEquals(MEMBER_ONE, fixture.localState.memberKey)
+            assertTrue(fixture.localState.pendingAddressBookReplacement != null)
+            assertFalse(fixture.health.signedIn)
+        }
+    }
+
+    @Test
     fun accountConflictDuringAddressBookStatusClosesMemberAuthority() = runTest {
         val fixture = fixture()
         fixture.api.beforeStatusReturn = { _, _ ->
