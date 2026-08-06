@@ -76,6 +76,58 @@ class AddressBookSessionTest {
     }
 
     @Test
+    fun terminalStatusFailuresCloseMemberAndHealthAuthority() = runTest {
+        listOf(
+            CompanionApiException.Unauthorized,
+            CompanionApiException.NoAccount,
+        ).forEach { rejection ->
+            val fixture = connectedFixture()
+            fixture.session.start()
+            fixture.api.beforeStatusReturn = { _, _ -> throw rejection }
+
+            assertFalse(fixture.session.prepareAddressBookSharing())
+
+            assertTerminalBoundaryClosed(fixture)
+        }
+    }
+
+    @Test
+    fun terminalExplicitDeletionFailuresCloseMemberAndHealthAuthority() = runTest {
+        listOf(
+            CompanionApiException.Unauthorized,
+            CompanionApiException.NoAccount,
+        ).forEach { rejection ->
+            val fixture = connectedFixture()
+            fixture.session.start()
+            fixture.api.deleteHandler = { _, _ -> throw rejection }
+
+            fixture.session.stopAddressBookSharing()
+
+            assertTerminalBoundaryClosed(fixture)
+            assertNull(fixture.localState.pendingAddressBookDeletion)
+        }
+    }
+
+    @Test
+    fun terminalAutomaticDeletionFailuresCloseMemberAndHealthAuthority() = runTest {
+        listOf(
+            CompanionApiException.Unauthorized,
+            CompanionApiException.NoAccount,
+        ).forEach { rejection ->
+            val fixture = connectedFixture()
+            fixture.session.start()
+            fixture.contacts.permissionGranted = false
+            fixture.api.deleteHandler = { _, _ -> throw rejection }
+
+            fixture.session.didEnterBackground()
+            fixture.session.didBecomeActive()
+
+            assertTerminalBoundaryClosed(fixture)
+            assertNull(fixture.localState.pendingAddressBookDeletion)
+        }
+    }
+
+    @Test
     fun accountConflictDuringAddressBookStatusClosesMemberAuthority() = runTest {
         val fixture = fixture()
         fixture.api.beforeStatusReturn = { _, _ ->
@@ -1350,6 +1402,26 @@ class AddressBookSessionTest {
             },
         )
         return Fixture(session, auth, api, contacts, localState, health, events)
+    }
+
+    private fun connectedFixture(): Fixture = fixture(
+        initialStatus = enabledStatus(revision = 5, count = 2),
+        permissionGranted = true,
+        initializeLocal = {
+            memberKey = MEMBER_ONE
+            revision = 5
+            healthAccessRequestedAt = InstantValue(1)
+        },
+    ).also { fixture ->
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+    }
+
+    private fun assertTerminalBoundaryClosed(fixture: Fixture) {
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertNull(fixture.localState.memberKey)
+        assertFalse(fixture.health.signedIn)
     }
 
     private data class Fixture(

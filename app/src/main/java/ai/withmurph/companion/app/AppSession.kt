@@ -895,23 +895,8 @@ class AppSession(
                         return@withLock false
                     } catch (error: CompanionApiException) {
                         if (ownsAddressBookWork(pending.memberKey, pending.epoch)) {
-                            when (error) {
-                                CompanionApiException.Unauthorized ->
-                                    publishTerminalMemberBoundaryFailure(
-                                        message = "Your session needs a refresh. Sign in again.",
-                                        signOutLabel = "Sign in again",
-                                    )
-                                CompanionApiException.NoAccount ->
-                                    publishTerminalMemberBoundaryFailure(
-                                        "This sign-in isn't linked to an active Murph account.",
-                                    )
-                                CompanionApiException.AccessRequired ->
-                                    publishTerminalMemberBoundaryFailure(accessRequiredMessage())
-                                CompanionApiException.MemberSuspended ->
-                                    publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
-                                CompanionApiException.AdmissionSupportRequired ->
-                                    publishTerminalMemberBoundaryFailure(admissionSupportMessage())
-                                else -> publishAddressBookMessage(
+                            if (!handleTerminalMemberBoundaryFailure(error)) {
+                                publishAddressBookMessage(
                                     pending.memberKey,
                                     pending.epoch,
                                     "Murph couldn't finish the address-book update. Tap Retry to use the saved mutation safely.",
@@ -1187,16 +1172,21 @@ class AppSession(
                         )
                     }
                     return
-                } catch (_: CompanionApiException.Unauthorized) {
-                    publishAddressBookMessage(
-                        memberKey,
-                        epoch,
-                        "Your session needs a refresh before deleting shared names. Try again.",
-                    )
-                    return
                 } catch (_: CompanionApiException.AccountConflict) {
                     if (ownsAddressBookWork(memberKey, epoch)) {
                         publishAccountConflictFailure()
+                    }
+                    return
+                } catch (error: CompanionApiException) {
+                    if (
+                        ownsAddressBookWork(memberKey, epoch) &&
+                        !handleTerminalMemberBoundaryFailure(error)
+                    ) {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't delete the shared names yet. It will keep the exact deletion retry marker.",
+                        )
                     }
                     return
                 } catch (_: Exception) {
@@ -3393,6 +3383,30 @@ class AppSession(
         }
     }
 
+    private suspend fun handleTerminalMemberBoundaryFailure(
+        error: CompanionApiException,
+    ): Boolean {
+        when (error) {
+            CompanionApiException.Unauthorized ->
+                publishTerminalMemberBoundaryFailure(
+                    message = "Your session needs a refresh. Sign in again.",
+                    signOutLabel = "Sign in again",
+                )
+            CompanionApiException.NoAccount ->
+                publishTerminalMemberBoundaryFailure(
+                    "This sign-in isn't linked to an active Murph account.",
+                )
+            CompanionApiException.AccessRequired ->
+                publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+            CompanionApiException.MemberSuspended ->
+                publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+            CompanionApiException.AdmissionSupportRequired ->
+                publishTerminalMemberBoundaryFailure(admissionSupportMessage())
+            else -> return false
+        }
+        return true
+    }
+
     /** Called only while [healthMutex] is held. */
     private suspend fun publishAccountConflictFailureWhileHealthLocked() {
         invalidateSessionEpoch()
@@ -4636,15 +4650,20 @@ class AppSession(
                 healthLockHeld = false,
                 onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             )
-        } catch (_: CompanionApiException.Unauthorized) {
-            publishAddressBookMessage(
-                memberKey,
-                epoch,
-                "Contacts access is off. Murph will retry exact deletion after your session is refreshed.",
-            )
         } catch (_: CompanionApiException.AccountConflict) {
             if (ownsAddressBookWork(memberKey, epoch)) {
                 publishAccountConflictFailure()
+            }
+        } catch (error: CompanionApiException) {
+            if (
+                ownsAddressBookWork(memberKey, epoch) &&
+                !handleTerminalMemberBoundaryFailure(error)
+            ) {
+                publishAddressBookMessage(
+                    memberKey,
+                    epoch,
+                    "Contacts access is off. Murph will retry deleting the exact shared revision on the next foreground check.",
+                )
             }
         } catch (_: Exception) {
             publishAddressBookMessage(
@@ -4771,23 +4790,21 @@ class AppSession(
                 onAuthoritativeLocalAuth = onAuthoritativeLocalAuth,
             )
             return null
-        } catch (_: CompanionApiException.Unauthorized) {
-            publishAddressBookUnavailable(
-                memberKey,
-                epoch,
-                "Your session needs a refresh before Murph can check address-book sharing.",
-            )
-            return null
-        } catch (_: CompanionApiException.NoAccount) {
-            publishAddressBookUnavailable(
-                memberKey,
-                epoch,
-                "Address-book sharing isn't available for this Murph account.",
-            )
-            return null
         } catch (_: CompanionApiException.AccountConflict) {
             if (ownsAddressBookWork(memberKey, epoch)) {
                 publishAccountConflictFailure()
+            }
+            return null
+        } catch (error: CompanionApiException) {
+            if (
+                ownsAddressBookWork(memberKey, epoch) &&
+                !handleTerminalMemberBoundaryFailure(error)
+            ) {
+                publishAddressBookUnavailable(
+                    memberKey,
+                    epoch,
+                    "Murph couldn't refresh address-book sharing. Try again.",
+                )
             }
             return null
         } catch (_: Exception) {
