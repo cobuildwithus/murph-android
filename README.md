@@ -92,17 +92,20 @@ values are `login`, `email`, `otp`, `setup`, `disconnected`,
 `onboardingError`, `onboardingSaving`, `onboardingWelcome`, `friendlyNames`,
 and `failure`.
 
-Every PR that changes shipped Compose UI or visible Android resources must
-include current emulator PNGs for each materially changed state. Keep them
-under `app-store-assets/review-evidence/<feature>/`, embed their exact-head
-raw GitHub URLs in the PR's `Android visual proof` section, and name any
-physical-device-only gaps. Capture durable evidence only from debug synthetic
-fixtures, inspect every image before commit, and never use real account,
-health, or contact data. `Android Visual Proof / verify` uses a base-owned
-`pull_request_target` workflow to run only the trusted base revision of the
-verifier while inspecting the candidate as data, so a PR cannot weaken the
-check and then certify itself. The bootstrap PR needs independent review
-because its base does not contain the workflow. Test the verifier locally with:
+Every PR that changes a shipped path under `app/src/main/` or
+`app/src/release/` must include current emulator PNGs from the exact pushed
+head. Keep them under `app-store-assets/review-evidence/<feature>/`, embed their
+exact-head raw GitHub URLs in the PR's `Android visual proof` section, and name
+physical-device-only gaps. Use only debug synthetic fixtures. Inspect the
+pixels and keep no text, profile, Exif, or private metadata.
+
+`Android Visual Proof / verify` uses a base-owned `pull_request_target`
+workflow that executes only the trusted base verifier while inspecting the
+candidate as data. A PR cannot weaken the gate and certify itself. The bootstrap
+PR needs independent review because its base predates the workflow. The check
+validates exact-head linkage and reusable-pixel freshness; capture provenance
+remains an independent-review responsibility.
+Run its contract tests locally with:
 
 ```bash
 node --test scripts/check-android-visual-proof.test.mjs

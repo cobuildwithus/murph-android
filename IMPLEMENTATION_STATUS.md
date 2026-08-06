@@ -30,9 +30,9 @@
   setup, explicit reconnect, waiting, synced, saved status (`savedStatus`),
   delayed, attention, consent required, consent load failure, all first-run
   onboarding stages, and failure states.
-- Exact-head Android visual-proof validation for changed shipped Compose
-  surfaces and visible resources, backed by durable emulator PNGs, a trusted
-  base verifier, and a required physical-device gap declaration.
+- Exact-head Android visual-proof validation for every changed shipped
+  `main` or `release` app path, backed by durable emulator PNGs, a trusted base
+  verifier, and a required physical-device gap declaration.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.

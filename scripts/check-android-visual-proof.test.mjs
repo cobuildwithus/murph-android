@@ -3,6 +3,7 @@ import test from "node:test";
 import { deflateSync } from "node:zlib";
 
 import {
+  changedShippedAppPaths,
   changedUiPathsAtRevisions,
   changedProtectedPaths,
   changedScreenshotPaths,
@@ -10,6 +11,7 @@ import {
   comparisonRecords,
   isComposePath,
   isExplicitVisibleOwnerPath,
+  isShippedAppPath,
   isVisibleResourcePath,
   parseNameStatus,
   readGitBlobEntry,
@@ -102,6 +104,32 @@ test("detects changed Compose sources and visible Android resources", () => {
     "app/src/release/res/values/strings.xml",
     "scripts/Old.kt",
   ]);
+});
+
+test("every shipped app path triggers proof, including rename and delete", () => {
+  const records = parseNameStatus(
+    "M\0app/src/main/java/example/AppSession.kt\0"
+    + "M\0app/src/main/res/raw/onboarding.json\0"
+    + "M\0app/src/main/assets/hero.png\0"
+    + "A\0app/src/release/java/example/Release.kt\0"
+    + "D\0app/src/main/java/example/Removed.kt\0"
+    + "R100\0app/src/main/java/example/Old.kt\0scripts/Old.kt\0"
+    + "R100\0scripts/New.kt\0app/src/main/java/example/New.kt\0"
+    + "M\0app/src/debug/java/example/ScreenshotActivity.kt\0",
+  );
+
+  assert.deepEqual(changedShippedAppPaths(records), [
+    "app/src/main/assets/hero.png",
+    "app/src/main/java/example/AppSession.kt",
+    "app/src/main/java/example/New.kt",
+    "app/src/main/java/example/Old.kt",
+    "app/src/main/java/example/Removed.kt",
+    "app/src/main/res/raw/onboarding.json",
+    "app/src/release/java/example/Release.kt",
+  ]);
+  assert.equal(isShippedAppPath("app/src/main/assets/hero.png"), true);
+  assert.equal(isShippedAppPath("app/src/release/res/values/strings.xml"), true);
+  assert.equal(isShippedAppPath("app/src/debug/java/example/Debug.kt"), false);
 });
 
 test("recognizes non-Compose owners of shipped Android copy and presentation", () => {
@@ -377,7 +405,7 @@ test("accepts exact-head rendered proof with every changed image", () => {
     "<ul>",
     `<li>Evidence head: <code>${head}</code></li>`,
     "<li>States covered: reconnect and saved status</li>",
-    `<li>Screenshots:<img src="https://camo.invalid/proxy" data-canonical-src="${url}"></li>`,
+    `<li>Screenshots:<img src="https://camo.githubusercontent.com/proxy" data-canonical-src="${url}" alt="Ready" style="max-width: 100%;"></li>`,
     "<li>Physical-device gaps: Health Connect authorization</li>",
     "</ul>",
     "<h2>Verification</h2>",
@@ -389,6 +417,43 @@ test("accepts exact-head rendered proof with every changed image", () => {
     repository,
     screenshotPaths: [path],
   }), []);
+});
+
+test("rejects unexpected, hidden, and resized proof images", () => {
+  const head = "c".repeat(40);
+  const repository = "example/murph-android";
+  const path = "app-store-assets/review-evidence/onboarding/01-ready.png";
+  const expected =
+    `https://raw.githubusercontent.com/${repository}/${head}/${path}`;
+  const proof = (images) => [
+    "<h2>Android visual proof</h2>",
+    "<ul>",
+    `<li>Evidence head: <code>${head}</code></li>`,
+    "<li>States covered: ready</li>",
+    `<li>Screenshots:${images}</li>`,
+    "<li>Physical-device gaps: None</li>",
+    "</ul>",
+  ].join("");
+  const validate = (images) => validateRenderedProof({
+    head,
+    renderedHtml: proof(images),
+    repository,
+    screenshotPaths: [path],
+  });
+
+  assert.deepEqual(
+    validate(`<img src="${expected}"><img src="https://example.invalid/untrusted.png">`),
+    ["The visual-proof section contains an image that is not exact-head evidence."],
+  );
+  for (const image of [
+    `<img src="${expected}" width="1">`,
+    `<span hidden><img src="${expected}"></span>`,
+    `<details><img src="${expected}"></details>`,
+  ]) {
+    assert.deepEqual(validate(image), [
+      "The visual-proof section must render evidence at its normal visible size.",
+    ]);
+  }
 });
 
 test("rejects stale heads and screenshots not embedded from the exact head", () => {
@@ -411,6 +476,31 @@ test("rejects stale heads and screenshots not embedded from the exact head", () 
   assert.equal(errors.length, 2);
   assert.match(errors[0], /exact PR head/);
   assert.match(errors[1], /exact-head raw GitHub URL/);
+});
+
+test("rejects URL-reserved and non-ASCII evidence paths", () => {
+  const error =
+    "Screenshot evidence paths must use URL-safe ASCII letters, numbers, dots, dashes, and underscores.";
+  for (const path of [
+    "app-store-assets/review-evidence/example/proof?.png",
+    "app-store-assets/review-evidence/example/proof#.png",
+    "app-store-assets/review-evidence/example/proof%.png",
+    "app-store-assets/review-evidence/example/proof space.png",
+    "app-store-assets/review-evidence/example/prøof.png",
+  ]) {
+    assert.deepEqual(validatePng(path, Buffer.alloc(0)), [error]);
+  }
+});
+
+test("rejects transparent PNG evidence", () => {
+  const path = "transparent.png";
+  const bytes = makePng({
+    colorType: 6,
+    pixelBytes: Buffer.from([1, 2, 3, 0]),
+  });
+  assert.deepEqual(validatePng(path, bytes), [
+    `${path} contains non-opaque PNG pixels.`,
+  ]);
 });
 
 test("rejects truncated fake PNG evidence", () => {

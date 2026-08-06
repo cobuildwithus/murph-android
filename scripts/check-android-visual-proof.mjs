@@ -8,6 +8,12 @@ import { inflateSync } from "node:zlib";
 
 const EVIDENCE_PREFIX = "app-store-assets/review-evidence/";
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
+const ALLOWED_RENDERED_IMAGE_ATTRIBUTES = new Set([
+  "alt",
+  "data-canonical-src",
+  "src",
+  "style",
+]);
 const MAX_DECODED_BYTES = 128 * 1024 * 1024;
 const MAX_SCREENSHOT_DIMENSION = 20_000;
 const MIN_SCREENSHOT_WIDTH = 320;
@@ -19,7 +25,29 @@ const EXPLICIT_VISIBLE_OWNER_PATH =
   /^app\/src\/(?:main|release)\/java\/ai\/withmurph\/companion\/(?:MainActivity\.kt|(?:app|auth|ui)\/.*\.kt)$/u;
 const VISIBLE_MANIFEST_PATH =
   /^app\/src\/(?:main|release)\/AndroidManifest\.xml$/u;
+const NON_VISIBLE_EVIDENCE_CONTAINERS = new Set([
+  "audio",
+  "canvas",
+  "datalist",
+  "details",
+  "dialog",
+  "iframe",
+  "math",
+  "noscript",
+  "object",
+  "picture",
+  "script",
+  "select",
+  "source",
+  "style",
+  "svg",
+  "template",
+  "themed-picture",
+  "textarea",
+  "video",
+]);
 const SAFE_ANCILLARY_CHUNKS = new Set(["sBIT", "sRGB"]);
+const URL_SAFE_EVIDENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const PROTECTED_GATE_PATHS = new Set([
   ".github/workflows/android-ci.yml",
   ".github/workflows/android-visual-proof.yml",
@@ -61,6 +89,10 @@ export function parseNameStatus(raw) {
 
 export function isVisibleResourcePath(path) {
   return VISIBLE_RESOURCE_PATH.test(path);
+}
+
+export function isShippedAppPath(path) {
+  return SHIPPED_SOURCE_PATH.test(path);
 }
 
 export function isComposePath(path, contents) {
@@ -129,6 +161,18 @@ export function changedUiPaths(records, readRevisionFile) {
     }
   }
 
+  return [...paths].sort();
+}
+
+export function changedShippedAppPaths(records) {
+  const paths = new Set();
+  for (const record of records) {
+    for (const path of [record.oldPath, record.path]) {
+      if (path && isShippedAppPath(path)) {
+        paths.add(path);
+      }
+    }
+  }
   return [...paths].sort();
 }
 
@@ -352,11 +396,19 @@ function validateDecodedPixels({
     throw new Error(`${path} expands beyond the PNG evidence limit.`);
   }
 
+  let consumedBytes;
   let decoded;
   try {
-    decoded = inflateSync(Buffer.concat(idatChunks), {
+    const encoded = Buffer.concat(idatChunks);
+    const inflated = inflateSync(encoded, {
+      info: true,
       maxOutputLength: Number(expectedBytes),
     });
+    decoded = inflated.buffer;
+    consumedBytes = inflated.engine.bytesWritten;
+    if (consumedBytes !== encoded.length) {
+      throw new Error(`${path} contains trailing PNG image data.`);
+    }
   } catch {
     throw new Error(`${path} does not contain decodable PNG pixel data.`);
   }
@@ -431,6 +483,11 @@ function canonicalRgbaPixels({
     throw new Error(`${path} expands beyond the PNG evidence limit.`);
   }
   if (colorType === 6 && bitDepth === 8) {
+    for (let offset = 3; offset < pixels.length; offset += 4) {
+      if (pixels[offset] !== 0xFF) {
+        throw new Error(`${path} contains non-opaque PNG pixels.`);
+      }
+    }
     return pixels;
   }
   const rendered = Buffer.alloc(Number(renderedByteCount));
@@ -479,6 +536,11 @@ function canonicalRgbaPixels({
         default:
           throw new Error(`${path} uses an unsupported PNG pixel format.`);
       }
+    }
+  }
+  for (let offset = 3; offset < rendered.length; offset += 4) {
+    if (rendered[offset] !== 0xFF) {
+      throw new Error(`${path} contains non-opaque PNG pixels.`);
     }
   }
   return rendered;
@@ -546,6 +608,13 @@ export function validateScreenshotBlobs(entries) {
 
   for (const { bytes, mode, path } of entries) {
     try {
+      if (path.split("/").some((segment) =>
+        !URL_SAFE_EVIDENCE_SEGMENT.test(segment)
+      )) {
+        throw new Error(
+          "Screenshot evidence paths must use URL-safe ASCII letters, numbers, dots, dashes, and underscores.",
+        );
+      }
       if (mode !== "100644") {
         throw new Error(`${path} is not a regular, non-executable Git file.`);
       }
@@ -635,16 +704,67 @@ function listItemText(section, label) {
   return null;
 }
 
-function imageUrls(html) {
-  const urls = new Set();
+function renderedTag(tag) {
+  const name = /^<([A-Za-z][^\s/>]*)/u.exec(tag)?.[1].toLowerCase() ?? "";
+  const attributes = new Map();
+  for (const attribute of tag.matchAll(
+    /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/gu,
+  )) {
+    attributes.set(
+      attribute[1].toLowerCase(),
+      decodeHtml(attribute[2] ?? attribute[3] ?? attribute[4] ?? ""),
+    );
+  }
+  return { attributes, name, tag };
+}
+
+function renderedImages(html) {
+  const images = [];
   for (const image of html.matchAll(/<img\b[^>]*>/gi)) {
-    for (const attribute of image[0].matchAll(
-      /\b(?:src|data-canonical-src)=["']([^"']+)["']/gi,
-    )) {
-      urls.add(decodeHtml(attribute[1]));
+    const rendered = renderedTag(image[0]);
+    const effectiveUrl = rendered.attributes.get("data-canonical-src")
+      ?? rendered.attributes.get("src");
+    if (effectiveUrl) {
+      images.push({ ...rendered, url: effectiveUrl });
     }
   }
-  return urls;
+  return images;
+}
+
+function hasHiddenEvidencePresentation(section, images) {
+  for (const match of section.matchAll(/<[A-Za-z][^>]*>/g)) {
+    const { attributes, name } = renderedTag(match[0]);
+    const className = attributes.get("class");
+    if (
+      NON_VISIBLE_EVIDENCE_CONTAINERS.has(name)
+      || attributes.has("hidden")
+      || attributes.has("inert")
+      || (className != null && !(name === "code" && className === "notranslate"))
+      || attributes.has("width")
+      || attributes.has("height")
+      || attributes.get("aria-hidden")?.toLowerCase() === "true"
+      || (name !== "img" && attributes.has("style"))
+    ) {
+      return true;
+    }
+  }
+  return images.some(({ attributes }) => {
+    if (
+      !attributes.has("src")
+      || [...attributes.keys()].some((name) =>
+        !ALLOWED_RENDERED_IMAGE_ATTRIBUTES.has(name)
+      )
+    ) {
+      return true;
+    }
+    if (
+      attributes.has("data-canonical-src")
+      && !attributes.get("src")?.startsWith("https://camo.githubusercontent.com/")
+    ) return true;
+    const style = attributes.get("style");
+    return style != null
+      && !/^max-width\s*:\s*100%\s*;?$/iu.test(style.trim());
+  });
 }
 
 function hasCompletedListValue(section, label) {
@@ -652,8 +772,9 @@ function hasCompletedListValue(section, label) {
   if (!item) {
     return false;
   }
-  const value = item.slice(label.length + 1).trim();
-  return value.length > 0
+  const value = item.slice(label.length + 1).trim().normalize("NFKC");
+  return /[\p{L}\p{N}]/u.test(value)
+    && !/[\p{Cc}\p{Cf}]/u.test(value)
     && !/^<.*>$/u.test(value)
     && !/^(?:tbd|todo|placeholder)$/iu.test(value);
 }
@@ -682,12 +803,27 @@ export function validateRenderedProof({
     );
   }
 
-  const urls = imageUrls(section);
-  for (const path of screenshotPaths) {
-    const expected =
-      `https://raw.githubusercontent.com/${repository}/${head}/${path}`;
+  const images = renderedImages(section);
+  const urls = new Set(images.map(({ url }) => url));
+  if (hasHiddenEvidencePresentation(section, images)) {
+    errors.push(
+      "The visual-proof section must render evidence at its normal visible size.",
+    );
+  }
+  const expectedUrls = new Map(screenshotPaths.map((path) => [
+    `https://raw.githubusercontent.com/${repository}/${head}/${path}`,
+    path,
+  ]));
+  for (const [expected, path] of expectedUrls) {
     if (!urls.has(expected)) {
       errors.push(`${path} must be embedded with its exact-head raw GitHub URL.`);
+    }
+  }
+  for (const url of urls) {
+    if (!expectedUrls.has(url)) {
+      errors.push(
+        "The visual-proof section contains an image that is not exact-head evidence.",
+      );
     }
   }
 
@@ -894,13 +1030,9 @@ export async function main(environment = process.env) {
       + `and cannot self-certify: ${protectedPaths.join(", ")}`,
     );
   }
-  const uiPaths = changedUiPathsAtRevisions(
-    records,
-    comparisonBase,
-    head,
-  );
-  if (uiPaths.length === 0) {
-    console.log("No user-visible Android UI changes detected.");
+  const shippedAppPaths = changedShippedAppPaths(records);
+  if (shippedAppPaths.length === 0) {
+    console.log("No shipped Android app changes detected.");
     return;
   }
 
@@ -908,7 +1040,9 @@ export async function main(environment = process.env) {
   const errors = [];
   if (screenshotPaths.length === 0) {
     errors.push(
-      `UI changed (${uiPaths.join(", ")}) but no PNG changed under ${EVIDENCE_PREFIX}.`,
+      "Shipped Android app changed "
+      + `(${shippedAppPaths.join(", ")}) but no PNG changed under `
+      + `${EVIDENCE_PREFIX}.`,
     );
   } else {
     const entries = screenshotPaths.map((path) => readGitBlobEntry(head, path));
@@ -955,7 +1089,7 @@ export async function main(environment = process.env) {
   }
   console.log(
     `Validated ${screenshotPaths.length} exact-head screenshot file(s) `
-    + `for ${uiPaths.length} evidence-relevant path(s). `
+    + `for ${shippedAppPaths.length} changed shipped app path(s). `
     + "Capture provenance remains manual review evidence.",
   );
 }

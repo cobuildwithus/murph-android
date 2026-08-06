@@ -16,7 +16,7 @@
 
 ## Android visual proof
 
-<!-- Required for changes to shipped Compose UI or visible Android resources. Delete this section otherwise. -->
+<!-- Required for any change under app/src/main/ or app/src/release/. Delete this section otherwise. -->
 
 - Evidence head: `<full commit SHA>`
 - States covered: `<materially changed states>`
