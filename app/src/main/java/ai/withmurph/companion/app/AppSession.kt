@@ -255,17 +255,20 @@ class AppSession(
         prepareInitialOnboardingContactCard(avatarId)
     }
 
-    fun consumeInitialOnboardingContactCardHandoff(id: Int): String? {
+    fun completeInitialOnboardingContactCardHandoff(id: Int): Boolean {
         while (true) {
             val current = _state.value
             val handoff = current.initialOnboardingContactCardHandoff
-                ?.takeIf { it.id == id } ?: return null
+                ?.takeIf { it.id == id } ?: return false
             if (
                 _state.compareAndSet(
                     current,
-                    current.copy(initialOnboardingContactCardHandoff = null),
+                    current.copy(
+                        initialOnboardingStage = InitialOnboardingStage.MainPersona,
+                        initialOnboardingContactCardHandoff = null,
+                    ),
                 )
-            ) return handoff.url
+            ) return true
         }
     }
 
@@ -382,6 +385,12 @@ class AppSession(
                         publishInitialOnboardingMemberBoundaryFailure(
                             "Your Murph session changed. Try a different sign-in.",
                         )
+                    CompanionApiException.AccessRequired ->
+                        publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+                    CompanionApiException.MemberSuspended ->
+                        publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+                    CompanionApiException.AdmissionSupportRequired ->
+                        publishTerminalMemberBoundaryFailure(admissionSupportMessage())
                     else -> publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
                     )
@@ -433,7 +442,6 @@ class AppSession(
                 _state.update {
                     it.copy(
                         isInitialOnboardingSaving = false,
-                        initialOnboardingStage = InitialOnboardingStage.MainPersona,
                         initialOnboardingContactCardHandoff =
                             PendingInitialOnboardingContactCardHandoff(handoffId, response.url),
                     )
@@ -480,6 +488,12 @@ class AppSession(
                         publishInitialOnboardingMemberBoundaryFailure(
                             "Your Murph session changed. Try a different sign-in.",
                         )
+                    CompanionApiException.AccessRequired ->
+                        publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+                    CompanionApiException.MemberSuspended ->
+                        publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+                    CompanionApiException.AdmissionSupportRequired ->
+                        publishTerminalMemberBoundaryFailure(admissionSupportMessage())
                     else -> publishInitialOnboardingFailure(
                         "We couldn't open the contact card. Check your connection and try again.",
                     )
@@ -716,7 +730,7 @@ class AppSession(
             }
             val observedBeforeDrain = authoritativeLocalAuth
             authoritativeLocalAuth = null
-            observedBeforeDrain?.let { handleAuthoritativeLocalAuthObservation(it) }
+            observedBeforeDrain?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
             drainAddressBookReconcile(
                 ownerMemberKey,
                 ownerEpoch,
@@ -966,14 +980,14 @@ class AppSession(
         } finally {
             val observedBeforeDrain = authStateToReconcile
             authStateToReconcile = null
-            observedBeforeDrain?.let { handleAuthoritativeLocalAuthObservation(it) }
+            observedBeforeDrain?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
             drainAddressBookReconcile(
                 pending.memberKey,
                 pending.epoch,
                 onAuthoritativeLocalAuth = { authStateToReconcile = it },
             )
         }
-        authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
+        authStateToReconcile?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
         return completed
     }
 
@@ -1438,7 +1452,7 @@ class AppSession(
                 }
             }
         }
-        authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
+        authStateToReconcile?.let { reconcileAfterMemberScopedWorkAuthLoss(it) }
         if (prepared) requestHealthPermissionLaunch()
         return prepared
     }
@@ -1882,14 +1896,21 @@ class AppSession(
                 }
                 return null
             } catch (error: CompanionApiException) {
-                if (
-                    ownsInitialOnboardingRefresh(memberKey, epoch, generation) &&
-                    (error == CompanionApiException.Unauthorized ||
-                        error == CompanionApiException.NoAccount)
-                ) {
-                    publishInitialOnboardingMemberBoundaryFailure(
-                        "Your Murph session changed. Try a different sign-in.",
-                    )
+                if (ownsInitialOnboardingRefresh(memberKey, epoch, generation)) {
+                    when (error) {
+                        CompanionApiException.Unauthorized,
+                        CompanionApiException.NoAccount ->
+                            publishInitialOnboardingMemberBoundaryFailure(
+                                "Your Murph session changed. Try a different sign-in.",
+                            )
+                        CompanionApiException.AccessRequired ->
+                            publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+                        CompanionApiException.MemberSuspended ->
+                            publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+                        CompanionApiException.AdmissionSupportRequired ->
+                            publishTerminalMemberBoundaryFailure(admissionSupportMessage())
+                        else -> Unit
+                    }
                 }
                 return null
             } catch (_: Exception) {
@@ -2059,9 +2080,18 @@ class AppSession(
             clearInitialOnboardingState()
             localState.clearMemberScopedState()
         }
-        localState.memberKey = authState.memberKey
+        if (
+            (localState.memberKey != authState.memberKey || localState.memberAdmissionPending) &&
+            !localState.beginMemberAdmission(authState.memberKey)
+        ) {
+            currentMemberKey = null
+            publishBackendBootstrapFailure(
+                message = "Murph couldn't safely save account setup. Keep the app open and try again.",
+                canRetry = true,
+            )
+            return
+        }
         currentMemberKey = authState.memberKey
-        val initialSetupStep = resolveInitialSetupStep()
         var epoch = sessionEpoch
         val requested = healthWasRequested()
         if (authState.verifiedOnline) {
@@ -2070,9 +2100,15 @@ class AppSession(
                 return
             }
         }
-        if (!requested && authState.verifiedOnline && !verifyBackendMember(epoch)) {
+        if (!authState.verifiedOnline && localState.memberAdmissionPending) {
+            restoreOfflineIfPossible()
             return
         }
+        if (authState.verifiedOnline) {
+            if (!admitBackendMember(authState.memberKey, epoch)) return
+            if (!requested && !verifyBackendStatus(epoch)) return
+        }
+        val initialSetupStep = resolveInitialSetupStep()
         if (requested && authState.verifiedOnline) {
             try {
                 identifyJunction(
@@ -2121,6 +2157,24 @@ class AppSession(
                 publishAuthoritativeResumeFailure(
                     message = connectionErrorMessage(error),
                     canRetry = false,
+                )
+                return
+            } catch (error: CompanionApiException.AccessRequired) {
+                if (epoch != sessionEpoch) return
+                publishTerminalMemberBoundaryFailure(
+                    message = accessRequiredMessage(),
+                )
+                return
+            } catch (error: CompanionApiException.MemberSuspended) {
+                if (epoch != sessionEpoch) return
+                publishTerminalMemberBoundaryFailure(
+                    message = memberSuspendedMessage(),
+                )
+                return
+            } catch (error: CompanionApiException.AdmissionSupportRequired) {
+                if (epoch != sessionEpoch) return
+                publishTerminalMemberBoundaryFailure(
+                    message = admissionSupportMessage(),
                 )
                 return
             } catch (_: CompanionApiException.AccountConflict) {
@@ -2352,12 +2406,17 @@ class AppSession(
 
     private fun restoreOfflineIfPossible() {
         val memberKey = localState.memberKey
-        if (memberKey == null) {
+        if (memberKey == null || localState.memberAdmissionPending) {
             _state.update {
                 it.copy(
                     phase = AppPhase.Failed(
-                        message = "Murph couldn't check your saved sign-in. Check your connection and try again.",
+                        message = if (memberKey == null) {
+                            "Murph couldn't check your saved sign-in. Check your connection and try again."
+                        } else {
+                            "Murph still needs to verify this account. Reconnect and try again."
+                        },
                     ),
+                    authVerifiedOnline = false,
                 )
             }
             return
@@ -2693,6 +2752,15 @@ class AppSession(
                 canRetry = false,
             )
             return null
+        } catch (_: CompanionApiException.AccessRequired) {
+            failTerminalMemberBoundaryWhileHealthLocked(accessRequiredMessage())
+            return null
+        } catch (_: CompanionApiException.MemberSuspended) {
+            failTerminalMemberBoundaryWhileHealthLocked(memberSuspendedMessage())
+            return null
+        } catch (_: CompanionApiException.AdmissionSupportRequired) {
+            failTerminalMemberBoundaryWhileHealthLocked(admissionSupportMessage())
+            return null
         } catch (_: CompanionApiException.AccountConflict) {
             publishAccountConflictFailureWhileHealthLocked()
             return null
@@ -2853,10 +2921,46 @@ class AppSession(
         return resetSucceeded
     }
 
-    private suspend fun verifyBackendMember(epoch: Int): Boolean {
+    /** Called only while [healthMutex] is held. */
+    private suspend fun failTerminalMemberBoundaryWhileHealthLocked(message: String) {
+        invalidateSessionEpoch()
+        val resetSucceeded = try {
+            health.signOutSdk()
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+        if (resetSucceeded) {
+            currentMemberKey = null
+            localState.clearMemberScopedState()
+            clearInitialOnboardingState()
+        }
+        _state.update { current ->
+            current.copy(
+                isConnectingHealth = false,
+                isSyncingHealth = false,
+                phase = AppPhase.Failed(
+                    message = if (resetSucceeded) {
+                        message
+                    } else {
+                        "Murph couldn't safely reset health sync. Keep the app open and try signing out again."
+                    },
+                    canRetry = false,
+                    canSignOut = true,
+                    signOutLabel = if (resetSucceeded) {
+                        "Try a different sign-in"
+                    } else {
+                        "Sign out and start fresh"
+                    },
+                ),
+            )
+        }
+    }
+
+    private suspend fun verifyBackendStatus(epoch: Int): Boolean {
         val memberKey = currentMemberKey ?: return false
-        if (!admitBackendMember(memberKey, epoch)) return false
-        if (epoch != sessionEpoch) return false
         return try {
             api.fetchSyncStatus(memberKey, HEALTH_CONNECT_SOURCE)
             epoch == sessionEpoch
@@ -2868,10 +2972,21 @@ class AppSession(
             false
         } catch (error: CompanionApiException.NoAccount) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
+            publishTerminalMemberBoundaryFailure(
                 message = "Murph couldn't verify this account after setup. Contact support.",
-                canRetry = false,
             )
+            false
+        } catch (_: CompanionApiException.AccessRequired) {
+            if (epoch != sessionEpoch) return false
+            publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+            false
+        } catch (_: CompanionApiException.MemberSuspended) {
+            if (epoch != sessionEpoch) return false
+            publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+            false
+        } catch (_: CompanionApiException.AdmissionSupportRequired) {
+            if (epoch != sessionEpoch) return false
+            publishTerminalMemberBoundaryFailure(admissionSupportMessage())
             false
         } catch (error: CompanionApiException.AccountConflict) {
             if (epoch != sessionEpoch) return false
@@ -2892,9 +3007,9 @@ class AppSession(
             false
         } catch (error: CompanionApiException.Unauthorized) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
+            publishTerminalMemberBoundaryFailure(
                 message = "Your session needs a refresh. Sign in again.",
-                canRetry = false,
+                signOutLabel = "Sign in again",
             )
             false
         } catch (_: Exception) {
@@ -2948,6 +3063,12 @@ class AppSession(
                     publishInitialOnboardingMemberBoundaryFailure(
                         "Your Murph session changed. Try a different sign-in.",
                     )
+                CompanionApiException.AccessRequired ->
+                    publishTerminalMemberBoundaryFailure(accessRequiredMessage())
+                CompanionApiException.MemberSuspended ->
+                    publishTerminalMemberBoundaryFailure(memberSuspendedMessage())
+                CompanionApiException.AdmissionSupportRequired ->
+                    publishTerminalMemberBoundaryFailure(admissionSupportMessage())
                 else -> publishBackendBootstrapFailure(
                     message = "We couldn't load account setup. Check your connection and try again.",
                     canRetry = true,
@@ -3118,6 +3239,13 @@ class AppSession(
         return try {
             api.admitCompanion(memberKey, ZoneId.systemDefault().id)
             if (epoch != sessionEpoch) return false
+            if (!localState.completeMemberAdmission(memberKey)) {
+                publishBackendBootstrapFailure(
+                    message = "Murph couldn't safely finish account setup. Keep the app open and try again.",
+                    canRetry = true,
+                )
+                return false
+            }
             currentAuthOwnershipLoss(memberKey)?.let { observed ->
                 reconcileObservedAuthState(memberKey, observed)
                 return false
@@ -3145,27 +3273,21 @@ class AppSession(
             false
         } catch (_: CompanionApiException.Unauthorized) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
+            publishTerminalMemberBoundaryFailure(
                 message = "Your session needs a refresh. Sign in again.",
-                canRetry = false,
+                signOutLabel = "Sign in again",
             )
             false
         } catch (_: CompanionApiException.AccessRequired) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
-                message =
-                    "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support.",
-                canRetry = false,
-                signOutLabel = "Try a different sign-in",
+            publishTerminalMemberBoundaryFailure(
+                message = accessRequiredMessage(),
             )
             false
         } catch (_: CompanionApiException.MemberSuspended) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
-                message =
-                    "This Murph account is paused. Try a different sign-in or contact Murph support.",
-                canRetry = false,
-                signOutLabel = "Try a different sign-in",
+            publishTerminalMemberBoundaryFailure(
+                message = memberSuspendedMessage(),
             )
             false
         } catch (_: CompanionApiException.AdmissionRetryable) {
@@ -3177,11 +3299,8 @@ class AppSession(
             false
         } catch (_: CompanionApiException.AdmissionSupportRequired) {
             if (epoch != sessionEpoch) return false
-            publishBackendBootstrapFailure(
-                message =
-                    "Murph support needs to finish setting up this account. Try a different sign-in or contact support.",
-                canRetry = false,
-                signOutLabel = "Try a different sign-in",
+            publishTerminalMemberBoundaryFailure(
+                message = admissionSupportMessage(),
             )
             false
         } catch (error: CancellationException) {
@@ -3199,6 +3318,26 @@ class AppSession(
     private suspend fun publishAccountConflictFailure() {
         if (!resetHealthSdkAtTrustBoundary()) return
         finishAccountConflictFailure()
+    }
+
+    private suspend fun publishTerminalMemberBoundaryFailure(
+        message: String,
+        signOutLabel: String = "Try a different sign-in",
+    ) {
+        if (!resetHealthSdkAtTrustBoundary()) return
+        currentMemberKey = null
+        localState.clearMemberScopedState()
+        clearInitialOnboardingState()
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = message,
+                    canRetry = false,
+                    canSignOut = true,
+                    signOutLabel = signOutLabel,
+                ),
+            )
+        }
     }
 
     /** Called only while [healthMutex] is held. */
@@ -4987,8 +5126,20 @@ class AppSession(
             "This sign-in conflicts with another Murph account. Try a different sign-in."
         CompanionApiException.ConsentRequired -> CONSENT_REQUIRED_MESSAGE
         CompanionApiException.ReconnectRequired -> "Reconnect Health Connect to resume syncing."
+        CompanionApiException.AccessRequired -> accessRequiredMessage()
+        CompanionApiException.MemberSuspended -> memberSuspendedMessage()
+        CompanionApiException.AdmissionSupportRequired -> admissionSupportMessage()
         else -> "Murph couldn't finish connecting Health Connect. Try again in a moment."
     }
+
+    private fun accessRequiredMessage(): String =
+        "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support."
+
+    private fun memberSuspendedMessage(): String =
+        "This Murph account is paused. Try a different sign-in or contact Murph support."
+
+    private fun admissionSupportMessage(): String =
+        "Murph support needs to finish setting up this account. Try a different sign-in or contact support."
 
     private data class ForegroundRefreshClaim(
         val generation: Int,

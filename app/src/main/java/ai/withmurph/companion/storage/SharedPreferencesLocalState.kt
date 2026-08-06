@@ -31,6 +31,9 @@ class SharedPreferencesLocalState internal constructor(
             preferences.edit().putString(KEY_MEMBER_KEY, value).apply()
         }
 
+    override val memberAdmissionPending: Boolean
+        get() = preferences.getBoolean(KEY_MEMBER_ADMISSION_PENDING, false)
+
     override var initialSetupStep: InitialSetupStep?
         get() = InitialSetupStep.fromWireValue(
             preferences.getString(KEY_INITIAL_SETUP_STEP, null),
@@ -277,6 +280,7 @@ class SharedPreferencesLocalState internal constructor(
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
         val wasSignOutPending = signOutPending
+        val wasAdmissionPending = memberAdmissionPending
         val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
         // One durable boundary records the request and revokes member-scoped restoration.
@@ -288,6 +292,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .remove(KEY_INITIAL_SETUP_STEP)
+            .remove(KEY_MEMBER_ADMISSION_PENDING)
             .removeAddressBookMetadata()
             .commit()
         if (!committed) {
@@ -297,9 +302,10 @@ class SharedPreferencesLocalState internal constructor(
                 receivedAt,
                 statusObservedAt,
                 reconnectRequired,
-                wasSignOutPending,
-                setupStep,
-                addressBookSnapshot,
+                pendingSignOut = wasSignOutPending,
+                pendingAdmission = wasAdmissionPending,
+                setupStep = setupStep,
+                addressBookSnapshot = addressBookSnapshot,
             )
         }
         return committed
@@ -309,6 +315,7 @@ class SharedPreferencesLocalState internal constructor(
     override fun completeSignOut(): Boolean {
         val committed = preferences.edit()
             .remove(KEY_MEMBER_KEY)
+            .remove(KEY_MEMBER_ADMISSION_PENDING)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
@@ -326,9 +333,42 @@ class SharedPreferencesLocalState internal constructor(
         return committed
     }
 
+    @SuppressLint("ApplySharedPref")
+    override fun beginMemberAdmission(memberKey: String): Boolean {
+        val previousMemberKey = this.memberKey
+        val wasPending = memberAdmissionPending
+        val committed = preferences.edit()
+            .putString(KEY_MEMBER_KEY, memberKey)
+            .putBoolean(KEY_MEMBER_ADMISSION_PENDING, true)
+            .commit()
+        if (!committed) {
+            preferences.edit().apply {
+                if (previousMemberKey == null) remove(KEY_MEMBER_KEY)
+                else putString(KEY_MEMBER_KEY, previousMemberKey)
+                if (wasPending) putBoolean(KEY_MEMBER_ADMISSION_PENDING, true)
+                else remove(KEY_MEMBER_ADMISSION_PENDING)
+            }.commit()
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun completeMemberAdmission(memberKey: String): Boolean {
+        if (this.memberKey != memberKey) return false
+        if (!memberAdmissionPending) return true
+        val committed = preferences.edit()
+            .remove(KEY_MEMBER_ADMISSION_PENDING)
+            .commit()
+        if (!committed) {
+            preferences.edit().putBoolean(KEY_MEMBER_ADMISSION_PENDING, true).commit()
+        }
+        return committed
+    }
+
     override fun clearMemberScopedState() {
         preferences.edit()
             .remove(KEY_MEMBER_KEY)
+            .remove(KEY_MEMBER_ADMISSION_PENDING)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
@@ -356,6 +396,7 @@ class SharedPreferencesLocalState internal constructor(
         statusObservedAt: InstantValue?,
         reconnectRequired: Boolean,
         pendingSignOut: Boolean? = null,
+        pendingAdmission: Boolean? = null,
         setupStep: InitialSetupStep? = initialSetupStep,
         addressBookSnapshot: AddressBookSnapshot? = null,
     ) {
@@ -371,6 +412,13 @@ class SharedPreferencesLocalState internal constructor(
                     putBoolean(KEY_SIGN_OUT_PENDING, true)
                 } else {
                     remove(KEY_SIGN_OUT_PENDING)
+                }
+            }
+            if (pendingAdmission != null) {
+                if (pendingAdmission) {
+                    putBoolean(KEY_MEMBER_ADMISSION_PENDING, true)
+                } else {
+                    remove(KEY_MEMBER_ADMISSION_PENDING)
                 }
             }
             addressBookSnapshot?.let { writeAddressBookSnapshot(it) }
@@ -455,6 +503,7 @@ class SharedPreferencesLocalState internal constructor(
     private companion object {
         const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_MEMBER_KEY = "member_key"
+        const val KEY_MEMBER_ADMISSION_PENDING = "member_admission_pending"
         const val KEY_INITIAL_SETUP_STEP = "initial_setup_step"
         const val KEY_HEALTH_ACCESS_REQUESTED_AT = "health_access_requested_at"
         const val KEY_HEALTH_RECEIPT_BASELINE_AT = "health_receipt_baseline_at"

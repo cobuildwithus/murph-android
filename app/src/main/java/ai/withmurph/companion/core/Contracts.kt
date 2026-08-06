@@ -137,6 +137,8 @@ interface HealthSyncing {
 interface LocalState {
     val installationId: String
     var memberKey: String?
+    val memberAdmissionPending: Boolean
+        get() = false
     var initialSetupStep: InitialSetupStep?
     var healthAccessRequestedAt: InstantValue?
     var healthReceiptBaselineAt: InstantValue?
@@ -179,6 +181,11 @@ interface LocalState {
     fun revokeHealthSetupAuthorization(): Boolean
     fun beginSignOut(): Boolean
     fun completeSignOut(): Boolean
+    fun beginMemberAdmission(memberKey: String): Boolean {
+        this.memberKey = memberKey
+        return true
+    }
+    fun completeMemberAdmission(memberKey: String): Boolean = this.memberKey == memberKey
     fun clearMemberScopedState()
 }
 

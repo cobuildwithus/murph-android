@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -443,7 +444,11 @@ private fun ContactAvatar(
     size: Int,
     painter: Painter?,
 ) {
-    val imageState by remoteImage(if (painter == null) avatar.imageUrl else null)
+    val targetPixels = with(LocalDensity.current) { size.dp.roundToPx() }
+    val imageState by remoteImage(
+        url = if (painter == null) avatar.imageUrl else null,
+        targetPixels = targetPixels,
+    )
     Box(
         modifier = Modifier
             .size(size.dp)
@@ -956,16 +961,20 @@ private fun WelcomeScreen(state: AppUiState, actions: MurphActions) {
 }
 
 @Composable
-private fun remoteImage(url: String?) = produceState<RemoteImageState>(
+private fun remoteImage(
+    url: String?,
+    targetPixels: Int,
+) = produceState<RemoteImageState>(
     initialValue = if (url == null) RemoteImageState.Empty else RemoteImageState.Loading,
     key1 = url,
+    key2 = targetPixels,
 ) {
     value = if (url == null) {
         RemoteImageState.Empty
     } else {
         value = RemoteImageState.Loading
         withContext(Dispatchers.IO) {
-            runCatching { loadBoundedImage(url) }
+            runCatching { loadBoundedImage(url, targetPixels) }
                 .getOrNull()
                 ?.let(RemoteImageState::Ready)
                 ?: RemoteImageState.Empty
@@ -979,7 +988,7 @@ private sealed interface RemoteImageState {
     data class Ready(val image: ImageBitmap) : RemoteImageState
 }
 
-private fun loadBoundedImage(url: String): ImageBitmap? {
+private fun loadBoundedImage(url: String, requestedTargetPixels: Int): ImageBitmap? {
     val connection = URL(url).openConnection() as HttpURLConnection
     connection.connectTimeout = 8_000
     connection.readTimeout = 12_000
@@ -1007,11 +1016,43 @@ private fun loadBoundedImage(url: String): ImageBitmap? {
         if (bounds.outWidth !in 1..MAX_AVATAR_DIMENSION ||
             bounds.outHeight !in 1..MAX_AVATAR_DIMENSION
         ) return null
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        val targetPixels = requestedTargetPixels.coerceIn(1, MAX_AVATAR_TARGET_PIXELS)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = avatarSampleSize(
+                width = bounds.outWidth,
+                height = bounds.outHeight,
+                targetPixels = targetPixels,
+            )
+            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+        }
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            ?: return null
+        val decodedPixels = decoded.width.toLong() * decoded.height.toLong()
+        if (decodedPixels > MAX_AVATAR_DECODED_PIXELS) {
+            decoded.recycle()
+            return null
+        }
+        decoded.asImageBitmap()
     } finally {
         connection.disconnect()
     }
 }
 
+internal fun avatarSampleSize(
+    width: Int,
+    height: Int,
+    targetPixels: Int,
+): Int {
+    require(width > 0 && height > 0 && targetPixels > 0)
+    var sampleSize = 1
+    val largestDimension = maxOf(width, height)
+    while ((largestDimension + sampleSize - 1) / sampleSize > targetPixels) {
+        sampleSize *= 2
+    }
+    return sampleSize
+}
+
 private const val MAX_AVATAR_BYTES = 2 * 1024 * 1024
 private const val MAX_AVATAR_DIMENSION = 4_096
+private const val MAX_AVATAR_TARGET_PIXELS = 512
+private const val MAX_AVATAR_DECODED_PIXELS = 512L * 512L

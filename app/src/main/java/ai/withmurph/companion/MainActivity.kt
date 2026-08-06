@@ -129,8 +129,9 @@ class MainActivity : ComponentActivity() {
                 val event = appState.initialOnboardingContactCardHandoff
                     ?: return@LaunchedEffect
                 lifecycle.withResumed {
-                    graph.session.consumeInitialOnboardingContactCardHandoff(event.id)
-                        ?.let(::openUri)
+                    if (openUri(event.url)) {
+                        graph.session.completeInitialOnboardingContactCardHandoff(event.id)
+                    }
                 }
             }
             MurphTheme {
@@ -243,10 +244,11 @@ class MainActivity : ComponentActivity() {
                         onDismissCompletedInitialOnboarding =
                             graph.session::dismissCompletedInitialOnboarding,
                         onOpenInitialOnboardingContact = { url ->
-                            graph.session.dismissCompletedInitialOnboarding()
-                            openUri(url)
+                            if (openUri(url)) {
+                                graph.session.dismissCompletedInitialOnboarding()
+                            }
                         },
-                        onOpenConsentDocument = ::openUri,
+                        onOpenConsentDocument = { openUri(it) },
                         onOpenAppSettings = ::openAppSettings,
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
@@ -322,7 +324,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openUri(value: String) {
+    private fun openUri(value: String): Boolean {
         val uri = Uri.parse(value)
         val action = if (uri.scheme == "mailto") {
             Intent.ACTION_SENDTO
@@ -331,17 +333,19 @@ class MainActivity : ComponentActivity() {
         }
         try {
             startActivity(Intent(action, uri))
+            return true
         } catch (_: ActivityNotFoundException) {
-            val destination = if (uri.scheme == "mailto") {
-                Uri.decode(uri.schemeSpecificPart.substringBefore('?'))
+            val message = if (uri.scheme == "mailto") {
+                "No installed email app can open this link."
             } else {
-                value
+                "No installed app can open this link."
             }
             Toast.makeText(
                 this,
-                "No installed app can open $destination",
+                message,
                 Toast.LENGTH_LONG,
             ).show()
+            return false
         }
     }
 

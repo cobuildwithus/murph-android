@@ -8,15 +8,39 @@ import {
   changedUiPaths,
   comparisonRecords,
   isComposePath,
+  isExplicitVisibleOwnerPath,
   isVisibleResourcePath,
   parseNameStatus,
   readGitBlobEntry,
   validateRenderedProof,
+  validateLivePullRequest,
   validateScreenshotBlobs,
+  validateScreenshotFreshness,
 } from "./check-android-visual-proof.mjs";
 
 function validatePng(path, bytes, mode = "100644") {
   return validateScreenshotBlobs([{ bytes, mode, path }]);
+}
+
+function crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+  return chunk;
 }
 
 test("detects changed Compose sources and visible Android resources", () => {
@@ -28,6 +52,10 @@ test("detects changed Compose sources and visible Android resources", () => {
     + "M\0app/src/debug/java/example/ScreenshotActivity.kt\0"
     + "M\0app/src/main/res/drawable-night/logo.xml\0"
     + "A\0app/src/release/res/values/strings.xml\0"
+    + "M\0app/src/main/java/ai/withmurph/companion/app/AppSession.kt\0"
+    + "M\0app/src/main/java/ai/withmurph/companion/app/AppUiState.kt\0"
+    + "M\0app/src/main/AndroidManifest.xml\0"
+    + "M\0app/build.gradle.kts\0"
     + "M\0app/src/main/res/xml/data_extraction_rules.xml\0",
   );
 
@@ -43,12 +71,37 @@ test("detects changed Compose sources and visible Android resources", () => {
     }
     return "import java.time.Instant\n";
   }), [
+    "app/build.gradle.kts",
+    "app/src/main/AndroidManifest.xml",
+    "app/src/main/java/ai/withmurph/companion/app/AppSession.kt",
+    "app/src/main/java/ai/withmurph/companion/app/AppUiState.kt",
     "app/src/main/java/example/Removed.kt",
     "app/src/main/java/example/Root.kt",
     "app/src/main/res/drawable-night/logo.xml",
     "app/src/release/res/values/strings.xml",
     "scripts/Old.kt",
   ]);
+});
+
+test("recognizes non-Compose owners of shipped Android copy and presentation", () => {
+  assert.equal(
+    isExplicitVisibleOwnerPath(
+      "app/src/main/java/ai/withmurph/companion/app/AppSession.kt",
+    ),
+    true,
+  );
+  assert.equal(
+    isExplicitVisibleOwnerPath(
+      "app/src/release/java/ai/withmurph/companion/ui/ReleaseScreen.kt",
+    ),
+    true,
+  );
+  assert.equal(isExplicitVisibleOwnerPath("app/src/main/AndroidManifest.xml"), true);
+  assert.equal(isExplicitVisibleOwnerPath("app/build.gradle.kts"), true);
+  assert.equal(
+    isExplicitVisibleOwnerPath("app/src/main/java/ai/withmurph/companion/api/Client.kt"),
+    false,
+  );
 });
 
 test("recognizes AndroidX Compose namespaces only in shipped Kotlin", () => {
@@ -112,13 +165,62 @@ test("recognizes AndroidX Compose namespaces only in shipped Kotlin", () => {
 test("identifies visual-proof control-plane changes", () => {
   const records = parseNameStatus(
     "M\0.github/workflows/android-visual-proof.yml\0"
+    + "M\0.github/workflows/android-ci.yml\0"
+    + "M\0scripts/verify.sh\0"
     + "R100\0scripts/check-android-visual-proof.mjs\0scripts/retired.mjs\0"
     + "M\0README.md\0",
   );
   assert.deepEqual(changedProtectedPaths(records), [
+    ".github/workflows/android-ci.yml",
     ".github/workflows/android-visual-proof.yml",
     "scripts/check-android-visual-proof.mjs",
+    "scripts/verify.sh",
   ]);
+});
+
+test("rejects a rerun whose live pull request changed after the archived event", () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const repository = "example/murph-android";
+  const archivedEvent = {
+    pull_request: {
+      base: { sha: base },
+      body: "current proof",
+      head: { repo: { full_name: repository }, sha: head },
+      number: 7,
+    },
+  };
+
+  assert.deepEqual(validateLivePullRequest({
+    archivedEvent,
+    base,
+    head,
+    livePullRequest: {
+      base: { sha: base },
+      body: "proof removed after the run",
+      head: { repo: { full_name: repository }, sha: head },
+    },
+    repository,
+  }), ["The live pull request body changed after this workflow event was created."]);
+});
+
+test("accepts a live pull request bound to the archived candidate", () => {
+  const base = "c".repeat(40);
+  const head = "d".repeat(40);
+  const repository = "example/murph-android";
+  const pullRequest = {
+    base: { sha: base },
+    body: "exact proof",
+    head: { repo: { full_name: repository }, sha: head },
+    number: 8,
+  };
+  assert.deepEqual(validateLivePullRequest({
+    archivedEvent: { pull_request: pullRequest },
+    base,
+    head,
+    livePullRequest: pullRequest,
+    repository,
+  }), []);
 });
 
 test("requires changed screenshots under the durable evidence directory", () => {
@@ -130,6 +232,41 @@ test("requires changed screenshots under the durable evidence directory", () => 
   assert.deepEqual(changedScreenshotPaths(records), [
     "app-store-assets/review-evidence/onboarding/01-ready.png",
   ]);
+});
+
+test("rejects copied, renamed, and metadata-only screenshot evidence", () => {
+  const original = "app-store-assets/review-evidence/old/ready.png";
+  const added = "app-store-assets/review-evidence/new/copied.png";
+  const modified = "app-store-assets/review-evidence/new/modified.png";
+  const renamed = "app-store-assets/review-evidence/new/renamed.png";
+  const records = parseNameStatus(
+    `A\0${added}\0M\0${modified}\0R100\0${original}\0${renamed}\0`,
+  );
+  assert.deepEqual(validateScreenshotFreshness({
+    basePixelDigests: new Map([
+      [original, "same-pixels"],
+      [modified, "metadata-only"],
+    ]),
+    headPixelDigests: new Map([
+      [added, "same-pixels"],
+      [modified, "metadata-only"],
+      [renamed, "fresh-pixels"],
+    ]),
+    records,
+  }), [
+    `${added} duplicates pixels already present at the comparison base.`,
+    `${modified} changed without fresh screenshot pixels.`,
+    `${renamed} must be a fresh capture, not a copied or renamed file.`,
+  ]);
+});
+
+test("accepts newly captured screenshot pixels", () => {
+  const path = "app-store-assets/review-evidence/new/ready.png";
+  assert.deepEqual(validateScreenshotFreshness({
+    basePixelDigests: new Map([["old.png", "old-pixels"]]),
+    headPixelDigests: new Map([[path, "new-pixels"]]),
+    records: parseNameStatus(`A\0${path}\0`),
+  }), []);
 });
 
 test("accepts exact-head rendered proof with every changed image", () => {
@@ -245,6 +382,23 @@ test("rejects unknown critical PNG chunks", () => {
 
   assert.deepEqual(validatePng(path, bytes), [
     `${path} contains an unknown critical PNG chunk.`,
+  ]);
+});
+
+test("rejects textual and device metadata in screenshot PNGs", () => {
+  const path = "text-metadata.png";
+  const original = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const bytes = Buffer.concat([
+    original.subarray(0, original.length - 12),
+    pngChunk("tEXt", Buffer.from("device=private", "utf8")),
+    original.subarray(original.length - 12),
+  ]);
+
+  assert.deepEqual(validatePng(path, bytes), [
+    `${path} contains unsupported PNG metadata (tEXt).`,
   ]);
 });
 

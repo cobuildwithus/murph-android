@@ -61,6 +61,52 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
+    fun memberAdmissionStaysProvisionalAcrossRestartUntilCompletion() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+
+        assertTrue(state.beginMemberAdmission("member-key"))
+
+        val pending = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals("member-key", pending.memberKey)
+        assertTrue(pending.memberAdmissionPending)
+        assertTrue(pending.completeMemberAdmission("member-key"))
+
+        val completed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals("member-key", completed.memberKey)
+        assertFalse(completed.memberAdmissionPending)
+    }
+
+    @Test
+    fun failedAdmissionCompletionRetainsTheRestartFence() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        assertTrue(state.beginMemberAdmission("member-key"))
+        preferences.failCommits = true
+
+        assertFalse(state.completeMemberAdmission("member-key"))
+
+        assertTrue(state.memberAdmissionPending)
+        assertTrue(SharedPreferencesLocalState(preferences.recreated()).memberAdmissionPending)
+    }
+
+    @Test
+    fun failedAdmissionStartRestoresThePreviousMemberBoundary() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "established-member"
+        preferences.failCommits = true
+
+        assertFalse(state.beginMemberAdmission("different-member"))
+
+        assertEquals("established-member", state.memberKey)
+        assertFalse(state.memberAdmissionPending)
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals("established-member", reconstructed.memberKey)
+        assertFalse(reconstructed.memberAdmissionPending)
+    }
+
+    @Test
     fun healthSetupAuthorizationCommitsOneCompleteRestartSnapshot() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
@@ -218,6 +264,7 @@ class SharedPreferencesLocalStateTest {
         state.lastKnownStatusObservedAt = observedAt
         state.healthReconnectRequired = true
         state.initialSetupStep = InitialSetupStep.FriendlyNames
+        assertTrue(state.beginMemberAdmission("member-key"))
         preferences.failCommits = true
 
         assertFalse(state.beginSignOut())
@@ -229,6 +276,7 @@ class SharedPreferencesLocalStateTest {
         assertEquals(observedAt, state.lastKnownStatusObservedAt)
         assertTrue(state.healthReconnectRequired)
         assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
+        assertTrue(state.memberAdmissionPending)
         val reconstructed = SharedPreferencesLocalState(preferences.recreated())
         assertFalse(reconstructed.signOutPending)
         assertEquals(requestedAt, reconstructed.healthAccessRequestedAt)
@@ -237,6 +285,7 @@ class SharedPreferencesLocalStateTest {
         assertEquals(observedAt, reconstructed.lastKnownStatusObservedAt)
         assertTrue(reconstructed.healthReconnectRequired)
         assertEquals(InitialSetupStep.FriendlyNames, reconstructed.initialSetupStep)
+        assertTrue(reconstructed.memberAdmissionPending)
     }
 
     @Test
