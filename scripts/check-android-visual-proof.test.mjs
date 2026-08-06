@@ -3,30 +3,20 @@ import test from "node:test";
 import { deflateSync } from "node:zlib";
 
 import {
-  changedShippedAppPaths,
-  changedUiPathsAtRevisions,
   changedProtectedPaths,
   changedScreenshotPaths,
-  changedUiPaths,
+  changedShippedAppPaths,
   comparisonRecords,
-  isComposePath,
-  isExplicitVisibleOwnerPath,
   isShippedAppPath,
-  isVisibleResourcePath,
   parseNameStatus,
   readGitBlobEntry,
-  readPngDimensions,
   validateRenderedProof,
   validateLivePullRequest,
   validateScreenshotBlobs,
   validateScreenshotReuse,
 } from "./check-android-visual-proof.mjs";
 
-function validatePng(path, bytes, mode = "100644") {
-  return validateScreenshotBlobs([{ bytes, mode, path }]);
-}
-
-function crc32(bytes) {
+function pngCrc32(bytes) {
   let crc = 0xFFFFFFFF;
   for (const byte of bytes) {
     crc ^= byte;
@@ -37,88 +27,86 @@ function crc32(bytes) {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-function pngChunk(type, data) {
-  const typeBytes = Buffer.from(type, "ascii");
-  const chunk = Buffer.alloc(12 + data.length);
-  chunk.writeUInt32BE(data.length, 0);
-  typeBytes.copy(chunk, 4);
-  data.copy(chunk, 8);
-  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
-  return chunk;
+function pngChunk(type, data = Buffer.alloc(0)) {
+  const typeBytes = Buffer.from(type, "latin1");
+  const result = Buffer.alloc(12 + data.length);
+  result.writeUInt32BE(data.length, 0);
+  typeBytes.copy(result, 4);
+  data.copy(result, 8);
+  result.writeUInt32BE(
+    pngCrc32(Buffer.concat([typeBytes, data])),
+    8 + data.length,
+  );
+  return result;
 }
 
-function makePng({ ancillaryChunks = [], colorType, pixelBytes }) {
+function emulatorPng({
+  alpha = 255,
+  bitDepth = 8,
+  colorType = 6,
+  compressionMethod = 0,
+  extraAfterIdat = [],
+  extraBeforeIdat = [],
+  filterMethod = 0,
+  firstPixelAlpha = alpha,
+  height = 568,
+  idatChunks,
+  interlaceMethod = 0,
+  sbit = Buffer.from([8, 8, 8, 8]),
+  srgb = Buffer.from([0]),
+  width = 320,
+} = {}) {
   const header = Buffer.alloc(13);
-  header.writeUInt32BE(1, 0);
-  header.writeUInt32BE(1, 4);
-  header[8] = 8;
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = bitDepth;
   header[9] = colorType;
+  header[10] = compressionMethod;
+  header[11] = filterMethod;
+  header[12] = interlaceMethod;
+
+  const rowBytes = width * 4 + 1;
+  const encodedRows = Buffer.alloc(height * rowBytes);
+  for (let row = 0; row < height; row += 1) {
+    for (let pixel = 0; pixel < width; pixel += 1) {
+      encodedRows[row * rowBytes + 1 + pixel * 4 + 3] = alpha;
+    }
+  }
+  encodedRows[4] = firstPixelAlpha;
+  const imageData = idatChunks ?? [deflateSync(encodedRows)];
+
   return Buffer.concat([
     Buffer.from("89504e470d0a1a0a", "hex"),
     pngChunk("IHDR", header),
-    ...ancillaryChunks,
-    pngChunk("IDAT", deflateSync(Buffer.concat([Buffer.from([0]), pixelBytes]))),
-    pngChunk("IEND", Buffer.alloc(0)),
+    ...(srgb === null ? [] : [pngChunk("sRGB", srgb)]),
+    ...(sbit === null ? [] : [pngChunk("sBIT", sbit)]),
+    ...extraBeforeIdat.map(({ data, type }) => pngChunk(type, data)),
+    ...imageData.map((data) => pngChunk("IDAT", data)),
+    ...extraAfterIdat.map(({ data, type }) => pngChunk(type, data)),
+    pngChunk("IEND"),
   ]);
 }
 
-test("detects changed Compose sources and visible Android resources", () => {
-  const records = parseNameStatus(
-    "M\0app/src/main/java/example/Root.kt\0"
-    + "M\0app/src/main/java/example/Plain.kt\0"
-    + "D\0app/src/main/java/example/Removed.kt\0"
-    + "R100\0app/src/main/java/example/Old.kt\0scripts/Old.kt\0"
-    + "M\0app/src/debug/java/example/ScreenshotActivity.kt\0"
-    + "M\0app/src/main/res/drawable-night/logo.xml\0"
-    + "A\0app/src/release/res/values/strings.xml\0"
-    + "M\0app/src/main/java/ai/withmurph/companion/app/AppSession.kt\0"
-    + "M\0app/src/main/java/ai/withmurph/companion/app/AppUiState.kt\0"
-    + "M\0app/src/main/java/ai/withmurph/companion/auth/LoginCoordinator.kt\0"
-    + "M\0app/src/main/java/ai/withmurph/companion/auth/CountryDialCode.kt\0"
-    + "M\0app/src/main/AndroidManifest.xml\0"
-    + "M\0app/build.gradle.kts\0"
-    + "M\0app/src/main/res/xml/data_extraction_rules.xml\0",
-  );
-
-  assert.deepEqual(changedUiPaths(records, (revision, path) => {
-    if (path.endsWith("Root.kt")) {
-      return "import androidx.activity.compose.setContent\n";
-    }
-    if (path.endsWith("Old.kt")) {
-      return "import androidx.navigation.compose.NavHost\n";
-    }
-    if (revision === "base" && path.endsWith("Removed.kt")) {
-      return "import androidx.compose.runtime.Composable\n";
-    }
-    return "import java.time.Instant\n";
-  }), [
-    "app/build.gradle.kts",
-    "app/src/main/AndroidManifest.xml",
-    "app/src/main/java/ai/withmurph/companion/app/AppSession.kt",
-    "app/src/main/java/ai/withmurph/companion/app/AppUiState.kt",
-    "app/src/main/java/ai/withmurph/companion/auth/CountryDialCode.kt",
-    "app/src/main/java/ai/withmurph/companion/auth/LoginCoordinator.kt",
-    "app/src/main/java/example/Removed.kt",
-    "app/src/main/java/example/Root.kt",
-    "app/src/main/res/drawable-night/logo.xml",
-    "app/src/release/res/values/strings.xml",
-    "scripts/Old.kt",
-  ]);
-});
+function validatePng(path, bytes, mode = "100644") {
+  return validateScreenshotBlobs([{ bytes, mode, path }]);
+}
 
 test("every shipped app path triggers proof, including rename and delete", () => {
   const records = parseNameStatus(
     "M\0app/src/main/java/example/AppSession.kt\0"
+    + "M\0app/src/main/AndroidManifest.xml\0"
     + "M\0app/src/main/res/raw/onboarding.json\0"
     + "M\0app/src/main/assets/hero.png\0"
     + "A\0app/src/release/java/example/Release.kt\0"
     + "D\0app/src/main/java/example/Removed.kt\0"
     + "R100\0app/src/main/java/example/Old.kt\0scripts/Old.kt\0"
     + "R100\0scripts/New.kt\0app/src/main/java/example/New.kt\0"
-    + "M\0app/src/debug/java/example/ScreenshotActivity.kt\0",
+    + "M\0app/src/debug/java/example/ScreenshotActivity.kt\0"
+    + "M\0scripts/tool.mjs\0",
   );
 
   assert.deepEqual(changedShippedAppPaths(records), [
+    "app/src/main/AndroidManifest.xml",
     "app/src/main/assets/hero.png",
     "app/src/main/java/example/AppSession.kt",
     "app/src/main/java/example/New.kt",
@@ -127,119 +115,36 @@ test("every shipped app path triggers proof, including rename and delete", () =>
     "app/src/main/res/raw/onboarding.json",
     "app/src/release/java/example/Release.kt",
   ]);
-  assert.equal(isShippedAppPath("app/src/main/assets/hero.png"), true);
-  assert.equal(isShippedAppPath("app/src/release/res/values/strings.xml"), true);
-  assert.equal(isShippedAppPath("app/src/debug/java/example/Debug.kt"), false);
 });
 
-test("recognizes non-Compose owners of shipped Android copy and presentation", () => {
+test("recognizes only shipped main and release source sets", () => {
   assert.equal(
-    isExplicitVisibleOwnerPath(
-      "app/src/main/java/ai/withmurph/companion/app/AppSession.kt",
-    ),
+    isShippedAppPath("app/src/main/java/example/Plain.kt"),
     true,
   );
   assert.equal(
-    isExplicitVisibleOwnerPath(
-      "app/src/release/java/ai/withmurph/companion/ui/ReleaseScreen.kt",
-    ),
+    isShippedAppPath("app/src/release/res/values/strings.xml"),
     true,
   );
   assert.equal(
-    isExplicitVisibleOwnerPath(
-      "app/src/main/java/ai/withmurph/companion/auth/LoginCoordinator.kt",
-    ),
-    true,
-  );
-  assert.equal(
-    isExplicitVisibleOwnerPath(
-      "app/src/main/java/ai/withmurph/companion/auth/CountryDialCode.kt",
-    ),
-    true,
-  );
-  assert.equal(isExplicitVisibleOwnerPath("app/src/main/AndroidManifest.xml"), true);
-  assert.equal(isExplicitVisibleOwnerPath("app/build.gradle.kts"), true);
-  assert.equal(
-    isExplicitVisibleOwnerPath("app/src/main/java/ai/withmurph/companion/api/Client.kt"),
+    isShippedAppPath("app/src/debug/java/example/ScreenshotActivity.kt"),
     false,
   );
-});
-
-test("recognizes AndroidX Compose namespaces only in shipped Kotlin", () => {
-  assert.equal(
-    isComposePath(
-      "app/src/main/java/example/Root.kt",
-      "import androidx.lifecycle.compose.collectAsStateWithLifecycle\n",
-    ),
-    true,
-  );
-  assert.equal(
-    isComposePath(
-      "app/src/debug/java/example/ScreenshotActivity.kt",
-      "import androidx.activity.compose.setContent\n",
-    ),
-    false,
-  );
-  assert.equal(
-    isComposePath(
-      "app/src/release/java/example/ReleaseOnly.kt",
-      "import androidx.compose.material3.Text\n",
-    ),
-    true,
-  );
-  assert.equal(
-    isComposePath(
-      "app/src/main/java/example/Root.kt",
-      "import androidx.lifecycle.ViewModel\n",
-    ),
-    false,
-  );
-  assert.equal(
-    isComposePath(
-      "app/src/main/java/example/FullyQualified.kt",
-      "fun render() = androidx.compose.material3.Text(\"Ready\")\n",
-    ),
-    true,
-  );
-  assert.equal(
-    isVisibleResourcePath("app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"),
-    true,
-  );
-  assert.equal(
-    isVisibleResourcePath("app/src/main/res/interpolator-night/emphasized.xml"),
-    true,
-  );
-  assert.equal(
-    isVisibleResourcePath("app/src/release/res/values/strings.xml"),
-    true,
-  );
-  assert.equal(
-    isVisibleResourcePath("app/src/debug/res/values/strings.xml"),
-    false,
-  );
-  assert.equal(
-    isVisibleResourcePath("app/src/main/res/xml/data_extraction_rules.xml"),
-    false,
-  );
+  assert.equal(isShippedAppPath("scripts/tool.mjs"), false);
 });
 
 test("identifies visual-proof control-plane changes", () => {
   const records = parseNameStatus(
     "M\0.github/workflows/android-visual-proof.yml\0"
+    + "A\0.github/workflows/new-review-gate.yml\0"
+    + "D\0.github/workflows/retired-check.yml\0"
+    + "R100\0.github/workflows/old-name.yml\0.github/workflows/new-name.yml\0"
     + "M\0.github/workflows/android-ci.yml\0"
     + "M\0AGENTS.md\0"
     + "M\0docs/review-workflow.md\0"
     + "M\0package.json\0"
     + "M\0pnpm-lock.yaml\0"
-    + "M\0scripts/chatgpt-review-presets/android-deep-review.md\0"
-    + "M\0scripts/package-review-context.sh\0"
-    + "M\0scripts/repo-tools.config.sh\0"
     + "M\0scripts/review-gpt-contract.mjs\0"
-    + "M\0scripts/review-gpt-contract.test.mjs\0"
-    + "M\0scripts/review-gpt.config.sh\0"
-    + "M\0scripts/review-pr.sh\0"
-    + "M\0scripts/validate-review-gpt-response.sh\0"
-    + "M\0scripts/verify-review-workflow.sh\0"
     + "M\0scripts/verify.sh\0"
     + "R100\0scripts/check-android-visual-proof.mjs\0scripts/retired.mjs\0"
     + "M\0README.md\0",
@@ -247,106 +152,18 @@ test("identifies visual-proof control-plane changes", () => {
   assert.deepEqual(changedProtectedPaths(records), [
     ".github/workflows/android-ci.yml",
     ".github/workflows/android-visual-proof.yml",
+    ".github/workflows/new-name.yml",
+    ".github/workflows/new-review-gate.yml",
+    ".github/workflows/old-name.yml",
+    ".github/workflows/retired-check.yml",
     "AGENTS.md",
     "docs/review-workflow.md",
     "package.json",
     "pnpm-lock.yaml",
-    "scripts/chatgpt-review-presets/android-deep-review.md",
     "scripts/check-android-visual-proof.mjs",
-    "scripts/package-review-context.sh",
-    "scripts/repo-tools.config.sh",
     "scripts/review-gpt-contract.mjs",
-    "scripts/review-gpt-contract.test.mjs",
-    "scripts/review-gpt.config.sh",
-    "scripts/review-pr.sh",
-    "scripts/validate-review-gpt-response.sh",
-    "scripts/verify-review-workflow.sh",
     "scripts/verify.sh",
   ]);
-});
-
-test("rejects a rerun whose live pull request changed after the archived event", () => {
-  const base = "a".repeat(40);
-  const head = "b".repeat(40);
-  const repository = "example/murph-android";
-  const archivedEvent = {
-    pull_request: {
-      base: { repo: { full_name: repository }, sha: base },
-      body: "current proof",
-      head: { repo: { full_name: repository }, sha: head },
-      number: 7,
-    },
-  };
-
-  assert.deepEqual(validateLivePullRequest({
-    archivedEvent,
-    base,
-    baseRepository: repository,
-    head,
-    headRepository: repository,
-    livePullRequest: {
-      base: { repo: { full_name: repository }, sha: base },
-      body: "proof removed after the run",
-      head: { repo: { full_name: repository }, sha: head },
-    },
-  }), ["The live pull request body changed after this workflow event was created."]);
-});
-
-test("accepts a live pull request bound to the archived candidate", () => {
-  const base = "c".repeat(40);
-  const head = "d".repeat(40);
-  const repository = "example/murph-android";
-  const pullRequest = {
-    base: { repo: { full_name: repository }, sha: base },
-    body: "exact proof",
-    head: { repo: { full_name: repository }, sha: head },
-    number: 8,
-  };
-  assert.deepEqual(validateLivePullRequest({
-    archivedEvent: { pull_request: pullRequest },
-    base,
-    baseRepository: repository,
-    head,
-    headRepository: repository,
-    livePullRequest: pullRequest,
-  }), []);
-});
-
-test("accepts a fork head while binding the canonical base repository", () => {
-  const base = "e".repeat(40);
-  const head = "f".repeat(40);
-  const baseRepository = "example/murph-android";
-  const headRepository = "contributor/murph-android";
-  const pullRequest = {
-    base: { repo: { full_name: baseRepository }, sha: base },
-    body: "fork proof",
-    head: { repo: { full_name: headRepository }, sha: head },
-    number: 9,
-  };
-
-  assert.deepEqual(validateLivePullRequest({
-    archivedEvent: { pull_request: pullRequest },
-    base,
-    baseRepository,
-    head,
-    headRepository,
-    livePullRequest: pullRequest,
-  }), []);
-  const path = "app-store-assets/review-evidence/fork/ready.png";
-  assert.deepEqual(validateRenderedProof({
-    head,
-    renderedHtml: [
-      "<h2>Android visual proof</h2>",
-      "<ul>",
-      `<li>Evidence head: <code>${head}</code></li>`,
-      "<li>States covered: fork state</li>",
-      `<li>Screenshots:<img src=\"https://raw.githubusercontent.com/${headRepository}/${head}/${path}\"></li>`,
-      "<li>Physical-device gaps: None</li>",
-      "</ul>",
-    ].join(""),
-    repository: headRepository,
-    screenshotPaths: [path],
-  }), []);
 });
 
 test("requires changed screenshots under the durable evidence directory", () => {
@@ -360,22 +177,51 @@ test("requires changed screenshots under the durable evidence directory", () => 
   ]);
 });
 
-test("rejects Git copies, renames, and unchanged rendered pixels", () => {
-  const original = "app-store-assets/review-evidence/old/ready.png";
-  const added = "app-store-assets/review-evidence/new/copied.png";
+test("binds reruns to the live pull request body, head, base, and repositories", () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const baseRepository = "example/murph-android";
+  const headRepository = "contributor/murph-android";
+  const pullRequest = {
+    base: { repo: { full_name: baseRepository }, sha: base },
+    body: "current proof",
+    head: { repo: { full_name: headRepository }, sha: head },
+  };
+  const archivedEvent = { pull_request: { ...pullRequest, body: "stale proof" } };
+
+  assert.deepEqual(validateLivePullRequest({
+    archivedEvent,
+    base,
+    baseRepository,
+    head,
+    headRepository,
+    livePullRequest: pullRequest,
+  }), ["The live pull request body changed after this workflow event was created."]);
+  assert.deepEqual(validateLivePullRequest({
+    archivedEvent: { pull_request: pullRequest },
+    base,
+    baseRepository,
+    head,
+    headRepository,
+    livePullRequest: pullRequest,
+  }), []);
+});
+
+test("rejects copied, renamed, and unchanged screenshot pixels", () => {
+  const added = "app-store-assets/review-evidence/new/added.png";
   const modified = "app-store-assets/review-evidence/new/modified.png";
   const renamed = "app-store-assets/review-evidence/new/renamed.png";
   const records = parseNameStatus(
-    `A\0${added}\0M\0${modified}\0R100\0${original}\0${renamed}\0`,
+    `A\0${added}\0M\0${modified}\0R100\0old.png\0${renamed}\0`,
   );
   assert.deepEqual(validateScreenshotReuse({
     basePixelDigests: new Map([
-      [original, "same-pixels"],
-      [modified, "metadata-only"],
+      ["existing.png", "existing-pixels"],
+      [modified, "same-pixels"],
     ]),
     headPixelDigests: new Map([
-      [added, "same-pixels"],
-      [modified, "metadata-only"],
+      [added, "existing-pixels"],
+      [modified, "same-pixels"],
       [renamed, "fresh-pixels"],
     ]),
     records,
@@ -386,15 +232,6 @@ test("rejects Git copies, renames, and unchanged rendered pixels", () => {
   ]);
 });
 
-test("accepts a candidate raster distinct from comparison-base evidence", () => {
-  const path = "app-store-assets/review-evidence/new/ready.png";
-  assert.deepEqual(validateScreenshotReuse({
-    basePixelDigests: new Map([["old.png", "old-pixels"]]),
-    headPixelDigests: new Map([[path, "new-pixels"]]),
-    records: parseNameStatus(`A\0${path}\0`),
-  }), []);
-});
-
 test("accepts exact-head rendered proof with every changed image", () => {
   const head = "a".repeat(40);
   const repository = "example/murph-android";
@@ -403,9 +240,9 @@ test("accepts exact-head rendered proof with every changed image", () => {
   const renderedHtml = [
     "<h2>Android visual proof</h2>",
     "<ul>",
-    `<li>Evidence head: <code>${head}</code></li>`,
+    `<li>Evidence head: <code class="notranslate">${head}</code></li>`,
     "<li>States covered: reconnect and saved status</li>",
-    `<li>Screenshots:<img src="https://camo.githubusercontent.com/proxy" data-canonical-src="${url}" alt="Ready" style="max-width: 100%;"></li>`,
+    `<li>Screenshots:<img src="https://camo.githubusercontent.com/proxy" data-canonical-src="${url}" alt="Hidden menu" style="max-width: 100%;"></li>`,
     "<li>Physical-device gaps: Health Connect authorization</li>",
     "</ul>",
     "<h2>Verification</h2>",
@@ -417,43 +254,6 @@ test("accepts exact-head rendered proof with every changed image", () => {
     repository,
     screenshotPaths: [path],
   }), []);
-});
-
-test("rejects unexpected, hidden, and resized proof images", () => {
-  const head = "c".repeat(40);
-  const repository = "example/murph-android";
-  const path = "app-store-assets/review-evidence/onboarding/01-ready.png";
-  const expected =
-    `https://raw.githubusercontent.com/${repository}/${head}/${path}`;
-  const proof = (images) => [
-    "<h2>Android visual proof</h2>",
-    "<ul>",
-    `<li>Evidence head: <code>${head}</code></li>`,
-    "<li>States covered: ready</li>",
-    `<li>Screenshots:${images}</li>`,
-    "<li>Physical-device gaps: None</li>",
-    "</ul>",
-  ].join("");
-  const validate = (images) => validateRenderedProof({
-    head,
-    renderedHtml: proof(images),
-    repository,
-    screenshotPaths: [path],
-  });
-
-  assert.deepEqual(
-    validate(`<img src="${expected}"><img src="https://example.invalid/untrusted.png">`),
-    ["The visual-proof section contains an image that is not exact-head evidence."],
-  );
-  for (const image of [
-    `<img src="${expected}" width="1">`,
-    `<span hidden><img src="${expected}"></span>`,
-    `<details><img src="${expected}"></details>`,
-  ]) {
-    assert.deepEqual(validate(image), [
-      "The visual-proof section must render evidence at its normal visible size.",
-    ]);
-  }
 });
 
 test("rejects stale heads and screenshots not embedded from the exact head", () => {
@@ -478,29 +278,161 @@ test("rejects stale heads and screenshots not embedded from the exact head", () 
   assert.match(errors[1], /exact-head raw GitHub URL/);
 });
 
+test("rejects every unexpected image in the visual-proof section", () => {
+  const head = "c".repeat(40);
+  const repository = "example/murph-android";
+  const path = "app-store-assets/review-evidence/onboarding/01-ready.png";
+  const expected =
+    `https://raw.githubusercontent.com/${repository}/${head}/${path}`;
+  const unexpected = "https://example.invalid/untrusted.png";
+  const errors = validateRenderedProof({
+    head,
+    renderedHtml: [
+      "<h2>Android visual proof</h2>",
+      "<ul>",
+      `<li>Evidence head: <code>${head}</code></li>`,
+      "<li>States covered: ready</li>",
+      `<li>Screenshots:<img src="https://camo.githubusercontent.com/proxy" data-canonical-src="${expected}"><img src="${unexpected}"></li>`,
+      "<li>Physical-device gaps: None</li>",
+      "</ul>",
+    ].join(""),
+    repository,
+    screenshotPaths: [path],
+  });
+
+  assert.deepEqual(errors, [
+    "The visual-proof section contains an image that is not exact-head evidence.",
+  ]);
+});
+
+test("rejects hidden or resized exact-head evidence", () => {
+  const head = "e".repeat(40);
+  const repository = "example/murph-android";
+  const path = "app-store-assets/review-evidence/onboarding/01-ready.png";
+  const expected =
+    `https://raw.githubusercontent.com/${repository}/${head}/${path}`;
+  const proof = (image) => [
+    "<h2>Android visual proof</h2>",
+    "<ul>",
+    `<li>Evidence head: <code>${head}</code></li>`,
+    "<li>States covered: ready</li>",
+    `<li>Screenshots:${image}</li>`,
+    "<li>Physical-device gaps: None</li>",
+    "</ul>",
+  ].join("");
+  const validate = (image) => validateRenderedProof({
+    head,
+    renderedHtml: proof(image),
+    repository,
+    screenshotPaths: [path],
+  });
+  const visibilityError =
+    "The visual-proof section must render evidence at its normal visible size.";
+
+  assert.deepEqual(validate(`<img src="${expected}" width="1" height="1">`), [
+    visibilityError,
+  ]);
+  assert.deepEqual(validate(`<span hidden><img src="${expected}"></span>`), [
+    visibilityError,
+  ]);
+  assert.deepEqual(validate(`<details><img src="${expected}"></details>`), [
+    visibilityError,
+  ]);
+  for (const style of [
+    "display: none;",
+    "visibility: hidden;",
+    "opacity: 0;",
+    "width: 1px; height: 1px;",
+    "position: absolute; left: -9999px;",
+  ]) {
+    assert.deepEqual(validate(`<img src="${expected}" style="${style}">`), [
+      visibilityError,
+    ]);
+  }
+  for (const container of [
+    "audio",
+    "canvas",
+    "datalist",
+    "dialog",
+    "math",
+    "noscript",
+    "object",
+    "svg",
+    "template",
+    "textarea",
+    "video",
+  ]) {
+    assert.deepEqual(validate(
+      `<${container}><img src="${expected}" style="max-width: 100%;"></${container}>`,
+    ), [visibilityError]);
+  }
+  assert.deepEqual(validate(
+    `<picture><source srcset="https://example.invalid/stale.png"><img src="${expected}"></picture>`,
+  ), [visibilityError]);
+  assert.deepEqual(validate(
+    `<img src="${expected}" srcset="https://example.invalid/stale.png 2x">`,
+  ), [visibilityError]);
+  assert.deepEqual(validate(
+    `<img src="https://example.invalid/stale.png" data-canonical-src="${expected}">`,
+  ), [visibilityError]);
+});
+
+test("rejects format-only and bidirectional proof descriptions", () => {
+  const head = "d".repeat(40);
+  const base = {
+    head,
+    repository: "example/murph-android",
+    screenshotPaths: [],
+  };
+  const renderedHtml = (statesCovered) => [
+    "<h2>Android visual proof</h2>",
+    "<ul>",
+    `<li>Evidence head: <code>${head}</code></li>`,
+    `<li>States covered: ${statesCovered}</li>`,
+    "<li>Physical-device gaps: None</li>",
+    "</ul>",
+  ].join("");
+
+  assert.deepEqual(validateRenderedProof({
+    ...base,
+    renderedHtml: renderedHtml("\u200B"),
+  }), ["The visual-proof section must describe the states covered."]);
+  assert.deepEqual(validateRenderedProof({
+    ...base,
+    renderedHtml: renderedHtml("ready\u202E"),
+  }), ["The visual-proof section must describe the states covered."]);
+});
+
+test("accepts an exact emulator-format PNG", () => {
+  assert.deepEqual(validatePng("proof.png", emulatorPng()), []);
+});
+
+test("rejects transparent and partially opaque PNG evidence", () => {
+  for (const [path, options] of [
+    ["transparent.png", { alpha: 0 }],
+    ["partially-opaque.png", { firstPixelAlpha: 254 }],
+  ]) {
+    assert.deepEqual(validatePng(path, emulatorPng(options)), [
+      `${path} contains non-opaque PNG pixels.`,
+    ]);
+  }
+});
+
 test("rejects URL-reserved and non-ASCII evidence paths", () => {
-  const error =
-    "Screenshot evidence paths must use URL-safe ASCII letters, numbers, dots, dashes, and underscores.";
-  for (const path of [
+  const bytes = emulatorPng();
+  const invalidPaths = [
     "app-store-assets/review-evidence/example/proof?.png",
     "app-store-assets/review-evidence/example/proof#.png",
     "app-store-assets/review-evidence/example/proof%.png",
     "app-store-assets/review-evidence/example/proof space.png",
     "app-store-assets/review-evidence/example/prøof.png",
-  ]) {
-    assert.deepEqual(validatePng(path, Buffer.alloc(0)), [error]);
-  }
-});
+  ];
+  const error =
+    "Screenshot evidence paths must use URL-safe ASCII letters, numbers, dots, dashes, and underscores.";
 
-test("rejects transparent PNG evidence", () => {
-  const path = "transparent.png";
-  const bytes = makePng({
-    colorType: 6,
-    pixelBytes: Buffer.from([1, 2, 3, 0]),
-  });
-  assert.deepEqual(validatePng(path, bytes), [
-    `${path} contains non-opaque PNG pixels.`,
-  ]);
+  for (const path of invalidPaths) {
+    assert.deepEqual(validatePng(path, bytes), [error]);
+  }
 });
 
 test("rejects truncated fake PNG evidence", () => {
@@ -518,10 +450,7 @@ test("rejects truncated fake PNG evidence", () => {
 
 test("rejects invalid PNG chunk checksums", () => {
   const path = "bad-crc.png";
-  const bytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "base64",
-  );
+  const bytes = emulatorPng();
   bytes[bytes.length - 1] ^= 1;
 
   assert.deepEqual(validatePng(path, bytes), [
@@ -530,25 +459,39 @@ test("rejects invalid PNG chunk checksums", () => {
 });
 
 test("rejects framed PNGs whose pixels do not decode", () => {
-  const path = "empty-idat.png";
-  const bytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAUAAAAI4CAYAAAAbCTCbAAAAAElEQVQ1rwYeAAAAAElFTkSuQmCC",
-    "base64",
-  );
+  const path = "invalid-idat.png";
+  const bytes = emulatorPng({
+    idatChunks: [Buffer.from([0])],
+  });
 
   assert.deepEqual(validatePng(path, bytes), [
     `${path} does not contain decodable PNG pixel data.`,
   ]);
 });
 
+test("rejects trailing bytes or a second stream inside image data", () => {
+  const encodedRows = Buffer.alloc(568 * (320 * 4 + 1));
+  const imageData = deflateSync(encodedRows);
+  for (const [path, trailer] of [
+    ["trailing-bytes.png", Buffer.from("HIDDEN_TRAILER")],
+    ["second-stream.png", deflateSync(encodedRows)],
+  ]) {
+    assert.deepEqual(
+      validatePng(
+        path,
+        emulatorPng({
+          idatChunks: [Buffer.concat([imageData, trailer])],
+        }),
+      ),
+      [`${path} contains trailing PNG image data.`],
+    );
+  }
+});
+
 test("rejects structurally valid but tiny PNG evidence", () => {
   const path = "tiny.png";
-  const bytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "base64",
-  );
 
-  assert.deepEqual(validatePng(path, bytes), [
+  assert.deepEqual(validatePng(path, emulatorPng({ height: 1, width: 1 })), [
     `${path} is 1x1; evidence must be at least 320x568.`,
   ]);
 });
@@ -561,91 +504,44 @@ test("rejects symlink-mode PNG evidence", () => {
   );
 });
 
-test("rejects unknown critical PNG chunks", () => {
-  const path = "unknown-critical.png";
-  const bytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAUAAAAI4CAAAAAA+Ym9HAAAAAEFCQ0TbFyClAAAAyElEQVR4nO3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4M8AyFYAASLjo7YAAAAASUVORK5CYII=",
-    "base64",
-  );
+test("rejects metadata and private ancillary chunks", () => {
+  const cases = [
+    ["tEXt", Buffer.from("Comment\0synthetic fixture", "latin1")],
+    ["zTXt", Buffer.from("Comment\0\0synthetic fixture", "latin1")],
+    ["iTXt", Buffer.from("Comment\0\0\0\0\0synthetic fixture", "latin1")],
+    ["eXIf", Buffer.from([0, 0, 0, 0])],
+    ["iCCP", Buffer.from("profile\0\0synthetic fixture", "latin1")],
+    ["vpAg", Buffer.from("private data", "latin1")],
+  ];
+
+  for (const [type, data] of cases) {
+    const path = `${type}.png`;
+    const bytes = emulatorPng({
+      extraBeforeIdat: [{ data, type }],
+    });
+    assert.deepEqual(validatePng(path, bytes), [
+      `${path} contains disallowed PNG chunk ${type}.`,
+    ]);
+  }
+});
+
+test("rejects non-emulator critical chunks", () => {
+  const path = "palette.png";
+  const bytes = emulatorPng({
+    extraBeforeIdat: [{
+      data: Buffer.from([0, 0, 0]),
+      type: "PLTE",
+    }],
+  });
 
   assert.deepEqual(validatePng(path, bytes), [
-    `${path} contains an unknown critical PNG chunk.`,
+    `${path} contains disallowed PNG chunk PLTE.`,
   ]);
-});
-
-test("rejects textual and device metadata in screenshot PNGs", () => {
-  const path = "text-metadata.png";
-  const original = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "base64",
-  );
-  const bytes = Buffer.concat([
-    original.subarray(0, original.length - 12),
-    pngChunk("tEXt", Buffer.from("device=private", "utf8")),
-    original.subarray(original.length - 12),
-  ]);
-
-  assert.deepEqual(validatePng(path, bytes), [
-    `${path} contains unsupported PNG metadata (tEXt).`,
-  ]);
-});
-
-test("validates safe ancillary chunks by payload, multiplicity, and order", () => {
-  const path = "safe-ancillary.png";
-  const hiddenPayload = makePng({
-    ancillaryChunks: [pngChunk("sRGB", Buffer.alloc(128, 7))],
-    colorType: 6,
-    pixelBytes: Buffer.from([10, 20, 30, 255]),
-  });
-  assert.deepEqual(validatePng(path, hiddenPayload), [
-    `${path} has an invalid PNG sRGB chunk.`,
-  ]);
-
-  const duplicate = makePng({
-    ancillaryChunks: [
-      pngChunk("sBIT", Buffer.from([8, 8, 8, 8])),
-      pngChunk("sBIT", Buffer.from([8, 8, 8, 8])),
-    ],
-    colorType: 6,
-    pixelBytes: Buffer.from([10, 20, 30, 255]),
-  });
-  assert.deepEqual(validatePng(path, duplicate), [
-    `${path} has an invalid PNG sBIT chunk.`,
-  ]);
-
-  const canonical = makePng({
-    ancillaryChunks: [
-      pngChunk("sRGB", Buffer.from([0])),
-      pngChunk("sBIT", Buffer.from([8, 8, 8, 8])),
-    ],
-    colorType: 6,
-    pixelBytes: Buffer.from([10, 20, 30, 255]),
-  });
-  assert.equal(readPngDimensions(path, canonical).width, 1);
-});
-
-test("hashes equivalent RGB and opaque RGBA rasters identically", () => {
-  const rgb = makePng({
-    colorType: 2,
-    pixelBytes: Buffer.from([12, 34, 56]),
-  });
-  const rgba = makePng({
-    colorType: 6,
-    pixelBytes: Buffer.from([12, 34, 56, 255]),
-  });
-
-  assert.equal(
-    readPngDimensions("rgb.png", rgb).pixelDigest,
-    readPngDimensions("rgba.png", rgba).pixelDigest,
-  );
 });
 
 test("rejects non-ASCII PNG chunk bytes", () => {
   const path = "non-ascii-chunk.png";
-  const bytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAUAAAAI4CAYAAAAbCTCbAAAAAElEQVQ1rwYeAAAAAElFTkSuQmCC",
-    "base64",
-  );
+  const bytes = emulatorPng();
   const idat = bytes.indexOf(Buffer.from("IDAT"));
   for (let index = idat; index < idat + 4; index += 1) {
     bytes[index] |= 0x80;
@@ -654,6 +550,59 @@ test("rejects non-ASCII PNG chunk bytes", () => {
   assert.deepEqual(validatePng(path, bytes), [
     `${path} contains an invalid PNG chunk type.`,
   ]);
+});
+
+test("requires exact 8-bit non-interlaced RGBA header values", () => {
+  for (const options of [
+    { bitDepth: 16 },
+    { colorType: 2 },
+    { compressionMethod: 1 },
+    { filterMethod: 1 },
+    { interlaceMethod: 1 },
+  ]) {
+    assert.deepEqual(validatePng("format.png", emulatorPng(options)), [
+      "format.png is not an 8-bit non-interlaced RGBA emulator PNG.",
+    ]);
+  }
+});
+
+test("requires exact emulator sRGB and sBIT chunks", () => {
+  for (const [options, expected] of [
+    [
+      { srgb: Buffer.from([1]) },
+      "color.png has an invalid emulator PNG sRGB chunk.",
+    ],
+    [
+      { sbit: Buffer.from([8, 8, 8, 7]) },
+      "color.png has an invalid emulator PNG sBIT chunk.",
+    ],
+    [
+      { sbit: Buffer.from([8, 8, 8]) },
+      "color.png has an invalid emulator PNG sBIT chunk.",
+    ],
+  ]) {
+    assert.deepEqual(validatePng("color.png", emulatorPng(options)), [expected]);
+  }
+});
+
+test("rejects missing, empty, or non-consecutive image data", () => {
+  assert.deepEqual(
+    validatePng("empty.png", emulatorPng({ idatChunks: [Buffer.alloc(0)] })),
+    ["empty.png has invalid PNG image-data ordering."],
+  );
+  assert.deepEqual(
+    validatePng("missing-color.png", emulatorPng({ srgb: null })),
+    ["missing-color.png has an invalid emulator PNG sBIT chunk."],
+  );
+  assert.deepEqual(
+    validatePng(
+      "split.png",
+      emulatorPng({
+        extraAfterIdat: [{ data: Buffer.from([0]), type: "sRGB" }],
+      }),
+    ),
+    ["split.png has an invalid emulator PNG sRGB chunk."],
+  );
 });
 
 test("validates candidate Git object bytes rather than checkout transforms", () => {
@@ -687,7 +636,7 @@ test("validates candidate Git object bytes rather than checkout transforms", () 
   ]);
 });
 
-test("reads pre-change UI contents from the merge base", () => {
+test("compares candidate changes from the merge base", () => {
   const base = "a".repeat(40);
   const comparisonBase = "b".repeat(40);
   const head = "c".repeat(40);
@@ -707,17 +656,8 @@ test("reads pre-change UI contents from the merge base", () => {
     ]);
     return `D\0${path}\0`;
   });
-  const uiPaths = changedUiPathsAtRevisions(
-    comparison.records,
-    comparison.comparisonBase,
-    head,
-    (args) => {
-      assert.deepEqual(args, ["show", `${comparisonBase}:${path}`]);
-      return "import androidx.compose.runtime.Composable\n";
-    },
-  );
-
-  assert.deepEqual(uiPaths, [path]);
+  assert.equal(comparison.comparisonBase, comparisonBase);
+  assert.deepEqual(comparison.records, [{ path, status: "D" }]);
 });
 
 test("rejects untouched visual-proof placeholders", () => {

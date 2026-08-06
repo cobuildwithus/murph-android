@@ -20,9 +20,10 @@
   does not generate captures or prove scenario provenance; the independent
   reviewer must confirm that the manually captured state matches the change.
 - Capture durable evidence from debug-only synthetic fixtures and inspect every
-  image before commit. Keep only safe PNG color/bit-significance chunks and no
-  text, profile, Exif, or private metadata. Never use a real account, health
-  value, contact, or other private member state.
+  image before commit. Keep the raw emulator format: opaque 8-bit,
+  non-interlaced RGBA with exact sRGB/sBIT chunks and no text, profile, Exif,
+  or private metadata. Never use a real account, health value, contact, or
+  other private member state.
 - Changes to `.github/workflows/android-visual-proof.yml` or
   `scripts/check-android-visual-proof*` require independent trusted review;
   the trusted check rejects those paths and the candidate's copy of the gate

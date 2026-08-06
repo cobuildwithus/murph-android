@@ -20,8 +20,8 @@ Health Connect, WHOOP, Contacts, or OEM-device proof.
 The trusted visual workflow treats every changed path under `app/src/main/` or
 `app/src/release/` as evidence-relevant. It validates the live PR/body and exact
 base/head repositories (including fork heads), exact-head image links, PNG
-structure and metadata safety, canonical rendered-pixel reuse against the
-comparison base, and control-plane immutability.
+raw-emulator structure and metadata safety, canonical rendered-pixel reuse
+against the comparison base, and every hosted-workflow/control-plane change.
 
 Screenshot capture provenance remains manual evidence. The workflow does not
 build or launch candidate code in its privileged context and must not claim

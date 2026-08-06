@@ -97,7 +97,8 @@ Every PR that changes a shipped path under `app/src/main/` or
 head. Keep them under `app-store-assets/review-evidence/<feature>/`, embed their
 exact-head raw GitHub URLs in the PR's `Android visual proof` section, and name
 physical-device-only gaps. Use only debug synthetic fixtures. Inspect the
-pixels and keep no text, profile, Exif, or private metadata.
+pixels and keep the raw emulator format: opaque 8-bit, non-interlaced RGBA with
+exact sRGB/sBIT chunks and no text, profile, Exif, or private metadata.
 
 `Android Visual Proof / verify` uses a base-owned `pull_request_target`
 workflow that executes only the trusted base verifier while inspecting the

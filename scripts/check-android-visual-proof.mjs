@@ -116,7 +116,8 @@ function isUserVisiblePath(path, contents) {
 }
 
 function isProtectedGatePath(path) {
-  return PROTECTED_GATE_PATHS.has(path)
+  return path.startsWith(".github/workflows/")
+    || PROTECTED_GATE_PATHS.has(path)
     || path.startsWith("scripts/check-android-visual-proof");
 }
 
@@ -194,16 +195,8 @@ export function readPngDimensions(path, bytes) {
   }
 
   let height = 0;
-  let bitDepth = 0;
-  let colorType = -1;
-  let compressionMethod = -1;
-  let filterMethod = -1;
   const idatChunks = [];
-  let interlaceMethod = -1;
   let offset = 8;
-  let paletteBytes = Buffer.alloc(0);
-  let paletteEntries = 0;
-  let sawPlte = false;
   let sawIdat = false;
   let sawIend = false;
   let idatEnded = false;
@@ -232,7 +225,7 @@ export function readPngDimensions(path, bytes) {
       throw new Error(`${path} contains an invalid PNG chunk type.`);
     }
     if (type[0] === type[0].toLowerCase() && !SAFE_ANCILLARY_CHUNKS.has(type)) {
-      throw new Error(`${path} contains unsupported PNG metadata (${type}).`);
+      throw new Error(`${path} contains disallowed PNG chunk ${type}.`);
     }
     const expectedCrc = bytes.readUInt32BE(crcOffset);
     const actualCrc = pngCrc32(bytes.subarray(typeStart, crcOffset));
@@ -246,11 +239,22 @@ export function readPngDimensions(path, bytes) {
       }
       width = bytes.readUInt32BE(dataStart);
       height = bytes.readUInt32BE(dataStart + 4);
-      bitDepth = bytes[dataStart + 8];
-      colorType = bytes[dataStart + 9];
-      compressionMethod = bytes[dataStart + 10];
-      filterMethod = bytes[dataStart + 11];
-      interlaceMethod = bytes[dataStart + 12];
+      const bitDepth = bytes[dataStart + 8];
+      const colorType = bytes[dataStart + 9];
+      const compressionMethod = bytes[dataStart + 10];
+      const filterMethod = bytes[dataStart + 11];
+      const interlaceMethod = bytes[dataStart + 12];
+      if (
+        bitDepth !== 8
+        || colorType !== 6
+        || compressionMethod !== 0
+        || filterMethod !== 0
+        || interlaceMethod !== 0
+      ) {
+        throw new Error(
+          `${path} is not an 8-bit non-interlaced RGBA emulator PNG.`,
+        );
+      }
     } else if (type === "IHDR") {
       throw new Error(`${path} contains more than one PNG header.`);
     }
@@ -263,12 +267,12 @@ export function readPngDimensions(path, bytes) {
     if (type === "sRGB") {
       if (
         sawSrgb
-        || sawPlte
+        || sawSbit
         || sawIdat
         || length !== 1
-        || bytes[dataStart] > 3
+        || bytes[dataStart] !== 0
       ) {
-        throw new Error(`${path} has an invalid PNG sRGB chunk.`);
+        throw new Error(`${path} has an invalid emulator PNG sRGB chunk.`);
       }
       sawSrgb = true;
     }
@@ -276,25 +280,21 @@ export function readPngDimensions(path, bytes) {
       const significantBits = bytes.subarray(dataStart, crcOffset);
       if (
         sawSbit
-        || sawPlte
+        || !sawSrgb
         || sawIdat
-        || !validSignificantBits(significantBits, colorType, bitDepth)
+        || significantBits.length !== 4
+        || ![...significantBits].every((value) => value === 8)
       ) {
-        throw new Error(`${path} has an invalid PNG sBIT chunk.`);
+        throw new Error(`${path} has an invalid emulator PNG sBIT chunk.`);
       }
       sawSbit = true;
     }
     if (type === "PLTE") {
-      if (sawPlte || sawIdat || length === 0 || length % 3 !== 0) {
-        throw new Error(`${path} has an invalid PNG palette.`);
-      }
-      sawPlte = true;
-      paletteEntries = length / 3;
-      paletteBytes = bytes.subarray(dataStart, crcOffset);
+      throw new Error(`${path} contains disallowed PNG chunk PLTE.`);
     }
     if (type === "IDAT") {
-      if (idatEnded) {
-        throw new Error(`${path} has non-consecutive PNG image data.`);
+      if (idatEnded || !sawSrgb || !sawSbit || length === 0) {
+        throw new Error(`${path} has invalid PNG image-data ordering.`);
       }
       sawIdat = true;
       idatChunks.push(bytes.subarray(dataStart, crcOffset));
@@ -311,74 +311,24 @@ export function readPngDimensions(path, bytes) {
     offset = nextOffset;
   }
 
-  if (!sawIdat || !sawIend) {
+  if (!sawSrgb || !sawSbit || !sawIdat || !sawIend) {
     throw new Error(`${path} is not a structurally complete PNG.`);
   }
   const pixelDigest = validateDecodedPixels({
-    bitDepth,
-    colorType,
-    compressionMethod,
-    filterMethod,
     height,
     idatChunks,
-    interlaceMethod,
-    paletteBytes,
-    paletteEntries,
     path,
-    sawPlte,
     width,
   });
   return { height, pixelDigest, width };
 }
 
-function validSignificantBits(values, colorType, bitDepth) {
-  const requirements = new Map([
-    [0, { length: 1, maximum: bitDepth }],
-    [2, { length: 3, maximum: bitDepth }],
-    [3, { length: 3, maximum: 8 }],
-    [4, { length: 2, maximum: bitDepth }],
-    [6, { length: 4, maximum: bitDepth }],
-  ]);
-  const requirement = requirements.get(colorType);
-  return requirement !== undefined
-    && values.length === requirement.length
-    && [...values].every((value) => value >= 1 && value <= requirement.maximum);
-}
-
 function validateDecodedPixels({
-  bitDepth,
-  colorType,
-  compressionMethod,
-  filterMethod,
   height,
   idatChunks,
-  interlaceMethod,
-  paletteBytes,
-  paletteEntries,
   path,
-  sawPlte,
   width,
 }) {
-  const formats = new Map([
-    [0, { channels: 1, depths: [1, 2, 4, 8, 16] }],
-    [2, { channels: 3, depths: [8, 16] }],
-    [3, { channels: 1, depths: [1, 2, 4, 8] }],
-    [4, { channels: 2, depths: [8, 16] }],
-    [6, { channels: 4, depths: [8, 16] }],
-  ]);
-  const format = formats.get(colorType);
-  if (
-    !format
-    || !format.depths.includes(bitDepth)
-    || compressionMethod !== 0
-    || filterMethod !== 0
-    || interlaceMethod !== 0
-    || (colorType === 3 && (!sawPlte || paletteEntries > 2 ** bitDepth))
-    || ([0, 4].includes(colorType) && sawPlte)
-    || (sawPlte && paletteEntries > 256)
-  ) {
-    throw new Error(`${path} uses an unsupported PNG pixel format.`);
-  }
   if (
     width < 1
     || height < 1
@@ -388,29 +338,27 @@ function validateDecodedPixels({
     throw new Error(`${path} has unreasonable PNG dimensions.`);
   }
 
-  const rowBytes = (
-    BigInt(width) * BigInt(format.channels) * BigInt(bitDepth) + 7n
-  ) / 8n;
+  const rowBytes = BigInt(width) * 4n;
   const expectedBytes = BigInt(height) * (rowBytes + 1n);
   if (expectedBytes > BigInt(MAX_DECODED_BYTES)) {
     throw new Error(`${path} expands beyond the PNG evidence limit.`);
   }
 
+  const encoded = Buffer.concat(idatChunks);
   let consumedBytes;
   let decoded;
   try {
-    const encoded = Buffer.concat(idatChunks);
     const inflated = inflateSync(encoded, {
       info: true,
       maxOutputLength: Number(expectedBytes),
     });
     decoded = inflated.buffer;
     consumedBytes = inflated.engine.bytesWritten;
-    if (consumedBytes !== encoded.length) {
-      throw new Error(`${path} contains trailing PNG image data.`);
-    }
   } catch {
     throw new Error(`${path} does not contain decodable PNG pixel data.`);
+  }
+  if (consumedBytes !== encoded.length) {
+    throw new Error(`${path} contains trailing PNG image data.`);
   }
   if (decoded.length !== Number(expectedBytes)) {
     throw new Error(`${path} has an invalid PNG pixel-data length.`);
@@ -422,10 +370,7 @@ function validateDecodedPixels({
       throw new Error(`${path} contains an invalid PNG row filter.`);
     }
   }
-  const bytesPerPixel = Math.max(
-    1,
-    Math.ceil((format.channels * bitDepth) / 8),
-  );
+  const bytesPerPixel = 4;
   const pixels = Buffer.alloc(Number(rowBytes) * height);
   for (let row = 0; row < height; row += 1) {
     const filteredOffset = row * rowStride;
@@ -450,121 +395,15 @@ function validateDecodedPixels({
       pixels[pixelOffset + column] = (filtered + predictor) & 0xFF;
     }
   }
-  const renderedPixels = canonicalRgbaPixels({
-    bitDepth,
-    colorType,
-    height,
-    paletteBytes,
-    paletteEntries,
-    path,
-    pixels,
-    rowBytes: Number(rowBytes),
-    width,
-  });
-  return createHash("sha256")
-    .update(pngDimensionBytes(width, height))
-    .update(renderedPixels)
-    .digest("hex");
-}
-
-function canonicalRgbaPixels({
-  bitDepth,
-  colorType,
-  height,
-  paletteBytes,
-  paletteEntries,
-  path,
-  pixels,
-  rowBytes,
-  width,
-}) {
-  const renderedByteCount = BigInt(width) * BigInt(height) * 4n;
-  if (renderedByteCount > BigInt(MAX_DECODED_BYTES)) {
-    throw new Error(`${path} expands beyond the PNG evidence limit.`);
-  }
-  if (colorType === 6 && bitDepth === 8) {
-    for (let offset = 3; offset < pixels.length; offset += 4) {
-      if (pixels[offset] !== 0xFF) {
-        throw new Error(`${path} contains non-opaque PNG pixels.`);
-      }
-    }
-    return pixels;
-  }
-  const rendered = Buffer.alloc(Number(renderedByteCount));
-  const channelCount = pngChannelCount(colorType);
-  for (let row = 0; row < height; row += 1) {
-    const encodedRow = pixels.subarray(row * rowBytes, (row + 1) * rowBytes);
-    for (let column = 0; column < width; column += 1) {
-      const target = (row * width + column) * 4;
-      const sample = (channel) => readPngSample(
-        encodedRow,
-        column * channelCount + channel,
-        bitDepth,
-      );
-      const scaled = (channel) => scalePngSample(sample(channel), bitDepth);
-      switch (colorType) {
-        case 0: {
-          const gray = scaled(0);
-          rendered.set([gray, gray, gray, 255], target);
-          break;
-        }
-        case 2:
-          rendered.set([scaled(0), scaled(1), scaled(2), 255], target);
-          break;
-        case 3: {
-          const paletteIndex = sample(0);
-          if (paletteIndex >= paletteEntries) {
-            throw new Error(`${path} contains a PNG palette index out of range.`);
-          }
-          const paletteOffset = paletteIndex * 3;
-          rendered.set([
-            paletteBytes[paletteOffset],
-            paletteBytes[paletteOffset + 1],
-            paletteBytes[paletteOffset + 2],
-            255,
-          ], target);
-          break;
-        }
-        case 4: {
-          const gray = scaled(0);
-          rendered.set([gray, gray, gray, scaled(1)], target);
-          break;
-        }
-        case 6:
-          rendered.set([scaled(0), scaled(1), scaled(2), scaled(3)], target);
-          break;
-        default:
-          throw new Error(`${path} uses an unsupported PNG pixel format.`);
-      }
-    }
-  }
-  for (let offset = 3; offset < rendered.length; offset += 4) {
-    if (rendered[offset] !== 0xFF) {
+  for (let offset = 3; offset < pixels.length; offset += 4) {
+    if (pixels[offset] !== 0xFF) {
       throw new Error(`${path} contains non-opaque PNG pixels.`);
     }
   }
-  return rendered;
-}
-
-function pngChannelCount(colorType) {
-  return new Map([[0, 1], [2, 3], [3, 1], [4, 2], [6, 4]]).get(colorType);
-}
-
-function readPngSample(row, sampleIndex, bitDepth) {
-  const bitOffset = sampleIndex * bitDepth;
-  const byteOffset = Math.floor(bitOffset / 8);
-  if (bitDepth === 16) {
-    return row.readUInt16BE(byteOffset);
-  }
-  if (bitDepth === 8) {
-    return row[byteOffset];
-  }
-  const shift = 8 - bitDepth - (bitOffset % 8);
-  return (row[byteOffset] >>> shift) & (2 ** bitDepth - 1);
-}
-
-function scalePngSample(value, bitDepth) {
-  return Math.round((value * 255) / (2 ** bitDepth - 1));
+  return createHash("sha256")
+    .update(pngDimensionBytes(width, height))
+    .update(pixels)
+    .digest("hex");
 }
 
 function pngDimensionBytes(width, height) {
