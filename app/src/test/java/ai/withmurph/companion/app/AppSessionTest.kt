@@ -5926,6 +5926,99 @@ class AppSessionTest {
     }
 
     @Test
+    fun failedForegroundPermissionReloadKeepsCachedStatusStaleAndSkipsSync() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.localState.lastKnownDataReceivedAt =
+            InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.localState.lastKnownStatusObservedAt = InstantValue(now.toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = now,
+            resources = emptyMap(),
+        )
+        fixture.session.start()
+        val statusCalls = fixture.api.statusSources.size
+        val syncCalls = fixture.health.syncCalls
+        fixture.health.actualGrantedCount = 0
+        fixture.health.refreshError = IllegalStateException("permission reload unavailable")
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            HEALTH_PERMISSION_VERIFICATION_MESSAGE,
+            fixture.session.state.value.healthMessage,
+        )
+        assertEquals(statusCalls, fixture.api.statusSources.size)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+
+        fixture.session.syncNow()
+
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(statusCalls, fixture.api.statusSources.size)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+
+        fixture.health.refreshError = null
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertFalse(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(0, fixture.session.state.value.grantedResourceCount)
+        assertEquals(HEALTH_PERMISSION_RECOVERY_MESSAGE, fixture.session.state.value.healthMessage)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun failedStartupPermissionReloadKeepsReadyStatusStaleUntilVerified() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.localState.lastKnownDataReceivedAt =
+            InstantValue(now.minusSeconds(600).toEpochMilli())
+        fixture.localState.lastKnownStatusObservedAt = InstantValue(now.toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.actualGrantedCount = fixture.health.totalResourceCount
+        fixture.health.refreshError = IllegalStateException("permission reload unavailable")
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(300),
+            observedAt = now,
+            resources = emptyMap(),
+        )
+
+        fixture.session.start()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            HEALTH_PERMISSION_VERIFICATION_MESSAGE,
+            fixture.session.state.value.healthMessage,
+        )
+        assertEquals(0, fixture.health.syncCalls)
+        assertTrue(fixture.api.statusSources.isEmpty())
+
+        fixture.health.refreshError = null
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertFalse(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(null, fixture.session.state.value.healthMessage)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(2, fixture.api.statusSources.size)
+    }
+
+    @Test
     fun unavailableAuthStillReconcilesCompletePermissionRevocation() = runTest {
         val now = Instant.parse("2026-07-25T18:00:00Z")
         val fixture = fixture(now = now)
@@ -7726,6 +7819,7 @@ class AppSessionTest {
         var configureError: Throwable? = null
         var connectError: Throwable? = null
         var syncError: Throwable? = null
+        var refreshError: Throwable? = null
         var syncErrorOnCall: Int? = null
         var loseSessionOnSyncError = false
         var connectGate: CompletableDeferred<Unit>? = null
@@ -7783,6 +7877,7 @@ class AppSessionTest {
                 refreshEntered.complete(Unit)
                 refreshGate?.await()
             }
+            refreshError?.let { throw it }
             actualGrantedCount?.let { grantedCount = it }
         }
 
@@ -7993,6 +8088,8 @@ class AppSessionTest {
         const val MEMBER_KEY = "did:privy:user_123"
         const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
             "Health Connect access is off. Reconnect and choose at least one category."
+        const val HEALTH_PERMISSION_VERIFICATION_MESSAGE =
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown."
 
         fun launchConsentStatus(granted: Boolean): LaunchConsentStatus {
             val legal = LaunchConsentDocument(

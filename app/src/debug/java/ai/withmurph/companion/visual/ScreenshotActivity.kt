@@ -77,6 +77,7 @@ internal enum class ScreenshotScenario {
     Awaiting,
     Synced,
     SavedStatus,
+    PermissionVerificationFailed,
     Delayed,
     Attention,
     ConsentRequired,
@@ -116,6 +117,13 @@ internal enum class ScreenshotScenario {
             authVerifiedOnline = false,
             healthMessage = "You're offline. Saved sync status is shown until Murph reconnects.",
         )
+        PermissionVerificationFailed ->
+            ready(HealthSyncState.Synced(now.minus(Duration.ofMinutes(5)))).copy(
+                healthStatusObservedAt = now,
+                healthStatusIsStale = true,
+                healthMessage =
+                    "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+            )
         Delayed -> ready(
             HealthSyncState.Delayed(now.minus(Duration.ofHours(48))),
             observedAt = now,
@@ -208,6 +216,7 @@ internal enum class ScreenshotScenario {
         Awaiting,
         Synced,
         SavedStatus,
+        PermissionVerificationFailed,
         Delayed,
         Attention,
         ConsentRequired,

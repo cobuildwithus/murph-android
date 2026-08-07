@@ -297,7 +297,8 @@ private fun SyncStatusContent(
         icon = MurphIconKind.Clock
         tint = MurphColors.SlateMuted
         title = "Last checked online"
-        detail = "This is saved status from the last successful check, not a live sync result."
+        detail = state.healthMessage
+            ?: "This is saved status from the last successful check, not a live sync result."
     } else when (sync) {
         HealthSyncState.NotConnected -> return
         HealthSyncState.AwaitingFirstData -> {

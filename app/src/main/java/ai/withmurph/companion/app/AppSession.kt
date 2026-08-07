@@ -1869,6 +1869,7 @@ class AppSession(
     private suspend fun syncNow(
         foregroundClaim: ForegroundRefreshClaim?,
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+        permissionStateVerified: Boolean = false,
         onAuthoritativeLocalAuth: ((AuthSessionState) -> Unit)? = null,
     ) {
         if (!allowsLaunchConsentWork(acceptedConsentOwner)) return
@@ -1884,10 +1885,19 @@ class AppSession(
             reconcile(force = true, foregroundClaim, acceptedConsentOwner)
             return
         }
+        if (
+            !permissionStateVerified &&
+            _state.value.healthStatusIsStale &&
+            !refreshHealthPermissionState()
+        ) {
+            publishHealthPermissionVerificationFailure()
+            return
+        }
         if (health.grantedResourceCount() == 0) {
             publishPermissionAwareHealthState(
                 status = cachedHealthStatus(),
                 message = _state.value.healthMessage,
+                healthStatusIsStale = false,
             )
             return
         }
@@ -1996,15 +2006,13 @@ class AppSession(
                 if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             }
             if (_state.value.phase != AppPhase.Ready) return@withLock
-            try {
-                health.refreshPermissionState()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                // Availability and backend receipt status remain independently useful.
-            }
+            val permissionStateVerified = refreshHealthPermissionState()
             if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             val availability = health.availability()
+            if (!permissionStateVerified) {
+                publishHealthPermissionVerificationFailure(availability)
+                return@withLock
+            }
             val grantedResourceCount = health.grantedResourceCount()
             val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
             _state.update { current ->
@@ -2014,6 +2022,11 @@ class AppSession(
                         HealthSyncState.NotConnected
                     } else {
                         current.healthSync
+                    },
+                    healthStatusIsStale = if (needsPermissionRecovery) {
+                        false
+                    } else {
+                        current.healthStatusIsStale
                     },
                     grantedResourceCount = grantedResourceCount,
                     healthMessage = if (
@@ -2036,6 +2049,7 @@ class AppSession(
             ) {
                 syncNow(
                     foregroundClaim,
+                    permissionStateVerified = true,
                     onAuthoritativeLocalAuth = {
                         deferredBoundary = deferredBoundary
                             ?: DeferredSessionBoundary.LocalAuth(it)
@@ -2440,14 +2454,12 @@ class AppSession(
             }
             if (!fetchInitialOnboardingProjection(authState.memberKey, epoch)) return
         }
+        val permissionStateVerified = when {
+            !requested -> true
+            !authState.verifiedOnline -> false
+            else -> refreshHealthPermissionState()
+        }
         if (requested && authState.verifiedOnline) {
-            try {
-                health.refreshPermissionState()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                // The last cached permission state remains safe to render.
-            }
             if (
                 epoch != sessionEpoch ||
                 authState.memberKey != currentMemberKey ||
@@ -2455,7 +2467,8 @@ class AppSession(
             ) return
         }
         val grantedResourceCount = health.grantedResourceCount()
-        val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
+        val needsPermissionRecovery =
+            permissionStateVerified && healthWasRequested() && grantedResourceCount == 0
         val reconnectRequired = localState.healthReconnectRequired
         _state.update { current ->
             current.copy(
@@ -2468,12 +2481,16 @@ class AppSession(
                 } else {
                     deriveCachedHealthState()
                 },
-                healthStatusIsStale = !authState.verifiedOnline && healthWasRequested(),
+                healthStatusIsStale =
+                    healthWasRequested() &&
+                        (!authState.verifiedOnline || !permissionStateVerified),
                 healthReconnectRequired = reconnectRequired,
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = when {
                     reconnectRequired -> HEALTH_RECONNECT_REQUIRED_MESSAGE
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
+                    !permissionStateVerified && authState.verifiedOnline ->
+                        HEALTH_PERMISSION_VERIFICATION_MESSAGE
                     authState.verifiedOnline -> null
                     else -> "You're offline. Murph will verify the session and resume sync when the connection returns."
                 },
@@ -2510,6 +2527,7 @@ class AppSession(
         if (
             healthWasRequested() &&
             authState.verifiedOnline &&
+            permissionStateVerified &&
             grantedResourceCount > 0
         ) {
             var authoritativeLocalAuth: AuthSessionState? = null
@@ -3256,6 +3274,32 @@ class AppSession(
             healthStatusIsStale = true,
             clearSyncing = true,
         )
+    }
+
+    private suspend fun refreshHealthPermissionState(): Boolean = try {
+        health.refreshPermissionState()
+        true
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun publishHealthPermissionVerificationFailure(
+        availability: HealthConnectAvailability = health.availability(),
+    ) {
+        val requested = healthWasRequested()
+        _state.update { current ->
+            current.copy(
+                healthAvailability = availability,
+                healthStatusIsStale = if (requested) true else current.healthStatusIsStale,
+                healthMessage = if (requested) {
+                    HEALTH_PERMISSION_VERIFICATION_MESSAGE
+                } else {
+                    current.healthMessage
+                },
+            )
+        }
     }
 
     private fun publishPermissionAwareHealthState(
@@ -5895,6 +5939,8 @@ class AppSession(
             "Murph needs your latest launch consent. Review it in the app, then try again."
         const val HEALTH_PERMISSION_RECOVERY_MESSAGE =
             "Health Connect access is off. Reconnect and choose at least one category."
+        const val HEALTH_PERMISSION_VERIFICATION_MESSAGE =
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown."
         const val HEALTH_RECONNECT_REQUIRED_MESSAGE =
             "Health Connect needs to reconnect before syncing can resume."
     }

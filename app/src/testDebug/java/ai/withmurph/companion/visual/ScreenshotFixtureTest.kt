@@ -45,6 +45,7 @@ class ScreenshotFixtureTest {
         val timestampScenarios = listOf(
             ScreenshotScenario.Synced,
             ScreenshotScenario.SavedStatus,
+            ScreenshotScenario.PermissionVerificationFailed,
             ScreenshotScenario.Delayed,
             ScreenshotScenario.Attention,
             ScreenshotScenario.FriendlyNames,
@@ -107,6 +108,15 @@ class ScreenshotFixtureTest {
             unavailable.healthAvailability,
         )
         assertEquals(HealthSyncState.NotConnected, unavailable.healthSync)
+
+        val permissionFailure = ScreenshotScenario.PermissionVerificationFailed.appState(now)
+        assertTrue(permissionFailure.healthSync is HealthSyncState.Synced)
+        assertTrue(permissionFailure.healthStatusIsStale)
+        assertTrue(permissionFailure.authVerifiedOnline)
+        assertEquals(
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+            permissionFailure.healthMessage,
+        )
     }
 
     @Test
