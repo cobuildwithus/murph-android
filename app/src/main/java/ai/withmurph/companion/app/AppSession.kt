@@ -2216,31 +2216,34 @@ class AppSession(
             claim.sessionEpoch == sessionEpoch
 
     suspend fun signOut() = withContext(NonCancellable) {
-        val authState = try {
-            auth.currentState()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            AuthSessionState.TemporarilyUnavailable
-        }
-        if (authState == AuthSessionState.TemporarilyUnavailable) {
-            _state.update {
-                it.copy(
-                    phase = AppPhase.Failed(
-                        message = "We couldn't verify which account to sign out. Check your connection and try again.",
-                        canRetry = false,
-                        canSignOut = true,
-                    ),
-                )
-            }
-            return@withContext
-        }
         val expectedMemberKey = localState.memberKey
+        val knownPrivyMemberKey = currentMemberKey ?: expectedMemberKey
+        val privySignOutMemberKey = knownPrivyMemberKey ?: run {
+            val authState = try {
+                auth.currentState()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                AuthSessionState.TemporarilyUnavailable
+            }
+            if (authState == AuthSessionState.TemporarilyUnavailable) {
+                _state.update {
+                    it.copy(
+                        phase = AppPhase.Failed(
+                            message = "We couldn't verify which account to sign out. Check your connection and try again.",
+                            canRetry = false,
+                            canSignOut = true,
+                        ),
+                    )
+                }
+                return@withContext
+            }
+            (authState as? AuthSessionState.SignedIn)?.memberKey
+        }
         if (
             !localState.beginSignOut(
                 expectedMemberKey = expectedMemberKey,
-                privySignOutMemberKey =
-                    (authState as? AuthSessionState.SignedIn)?.memberKey,
+                privySignOutMemberKey = privySignOutMemberKey,
             )
         ) {
             _state.update {
@@ -2668,7 +2671,7 @@ class AppSession(
             is DeferredSessionBoundary.LocalAuth ->
                 handleAuthoritativeLocalAuthObservation(boundary.observedState)
             is DeferredSessionBoundary.BackendRejected ->
-                publishTerminalMemberBoundaryFailure(boundary.error)
+                publishTerminalMemberBoundaryFailurePreservingMember(boundary.error)
             DeferredSessionBoundary.AccountConflict -> publishAccountConflictFailure()
         }
     }
@@ -2686,7 +2689,7 @@ class AppSession(
                 reconcileObservedAuthState(expectedMemberKey, boundary.observedState)
             }
             is DeferredSessionBoundary.BackendRejected ->
-                publishTerminalMemberBoundaryFailure(boundary.error)
+                publishTerminalMemberBoundaryFailurePreservingMember(boundary.error)
             DeferredSessionBoundary.AccountConflict -> publishAccountConflictFailure()
         }
     }
@@ -3817,6 +3820,22 @@ class AppSession(
         )
     }
 
+    private suspend fun publishTerminalMemberBoundaryFailurePreservingMember(
+        error: CompanionApiException,
+    ) {
+        if (!resetHealthAuthorizationAtTrustBoundary()) return
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = terminalMemberBoundaryMessage(error),
+                    canRetry = false,
+                    canSignOut = true,
+                    signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                ),
+            )
+        }
+    }
+
     private fun closeProductAuthorityForBoundary() {
         _state.update { current ->
             current.copy(
@@ -3949,6 +3968,26 @@ class AppSession(
             )
         }
         invalidateSessionEpoch(acceptedConsentOwner)
+        return try {
+            healthMutex.withLock { health.signOutSdk() }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            publishHealthResetFailure()
+            false
+        }
+    }
+
+    private suspend fun resetHealthAuthorizationAtTrustBoundary(
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ): Boolean {
+        closeProductAuthorityForBoundary()
+        invalidateSessionEpoch(acceptedConsentOwner)
+        if (!localState.revokeHealthSetupAuthorization()) {
+            publishHealthResetFailure()
+            return false
+        }
         return try {
             healthMutex.withLock { health.signOutSdk() }
             true
@@ -4538,7 +4577,14 @@ class AppSession(
         val clearsAdmissionCandidate =
             pending.memberOwnership == LaunchConsentMemberOwnership.AdmissionCandidate &&
                 localState.memberKey == null
-        if (!resetMemberAtTrustBoundary(localState.memberKey)) return
+        val resetSucceeded = if (
+            pending.followUp.preservesAddressBookStateOnTerminalBoundary()
+        ) {
+            resetHealthAuthorizationAtTrustBoundary()
+        } else {
+            resetMemberAtTrustBoundary(localState.memberKey)
+        }
+        if (!resetSucceeded) return
         if (clearsAdmissionCandidate) currentMemberKey = null
         _state.update { current ->
             current.copy(
@@ -4860,6 +4906,17 @@ class AppSession(
         -> true
         else -> false
     }
+
+    private fun LaunchConsentFollowUp.preservesAddressBookStateOnTerminalBoundary(): Boolean =
+        when (this) {
+            is LaunchConsentFollowUp.PrepareAddressBookPermission,
+            LaunchConsentFollowUp.ReconcileAddressBook,
+            LaunchConsentFollowUp.StopAddressBookSharing,
+            is LaunchConsentFollowUp.AutomaticAddressBookDeletion,
+            is LaunchConsentFollowUp.AddressBookReplacement,
+            -> true
+            else -> false
+        }
 
     private fun LaunchConsentFollowUp.isInitialOnboardingContinuation(): Boolean = when (this) {
         is LaunchConsentFollowUp.CompleteInitialOnboarding,

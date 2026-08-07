@@ -5747,7 +5747,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun explicitSignOutWaitsForPrivyOwnershipBeforeWritingTheBoundary() = runTest {
+    fun explicitSignOutFencesBoundProductWorkBeforePrivyOwnershipReturns() = runTest {
         val fixture = completedHealthFixture()
         val signOutCalls = fixture.health.signOutCalls
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
@@ -5755,9 +5755,9 @@ class AppSessionTest {
         fixture.session.signOut()
 
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
-        assertFalse(fixture.localState.signOutPending)
-        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
-        assertEquals(signOutCalls, fixture.health.signOutCalls)
+        assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
         assertEquals(0, fixture.auth.signOutCalls)
         assertEquals(MEMBER_KEY, fixture.localState.memberKey)
     }
