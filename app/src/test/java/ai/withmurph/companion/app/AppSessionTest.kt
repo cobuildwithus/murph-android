@@ -5744,6 +5744,7 @@ class AppSessionTest {
     @Test
     fun explicitSignOutPreservesAndReconcilesANewerPrivyMember() = runTest {
         val fixture = completedHealthFixture()
+        fixture.api.admissionMemberKeys.clear()
         val teardownGate = CompletableDeferred<Unit>()
         fixture.health.signOutGate = teardownGate
 
