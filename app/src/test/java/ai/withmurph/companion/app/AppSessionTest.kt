@@ -214,6 +214,23 @@ class AppSessionTest {
     }
 
     @Test
+    fun freshUnboundAdmissionFailureCanSignOutToLogin() = runTest {
+        val memberKey = "did:privy:fresh-sign-out-member"
+        val fixture = fixture(memberKey = memberKey)
+        fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+        fixture.session.start()
+
+        fixture.session.signOut()
+
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertNull(fixture.localState.memberKey)
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
+        assertEquals(1, fixture.auth.signOutCalls)
+        assertTrue(fixture.auth.state is AuthSessionState.SignedOut)
+    }
+
+    @Test
     fun verifiedMemberSwitchAdmissionFailureClearsOldOwnerWithoutBindingCandidate() = runTest {
         val oldMemberKey = "did:privy:old-admission-member"
         val candidateMemberKey = "did:privy:new-admission-member"
@@ -750,6 +767,21 @@ class AppSessionTest {
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertEquals(0, replacementHealth.syncCalls)
         assertEquals(1, fixture.auth.signOutCalls)
+    }
+
+    @Test
+    fun terminalAdmissionDifferentSignInActionLogsOutTheRejectedUnboundMember() = runTest {
+        val fixture = fixture()
+        fixture.api.admissionError = CompanionApiException.AccessRequired
+        fixture.session.start()
+        assertNull(fixture.localState.memberKey)
+
+        fixture.session.signOut()
+
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertEquals(1, fixture.auth.signOutCalls)
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
     }
 
     @Test
@@ -5531,6 +5563,7 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.healthAccessRequestedAt)
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
         assertEquals(0, fixture.auth.signOutCalls)
 
@@ -5547,6 +5580,32 @@ class AppSessionTest {
     }
 
     @Test
+    fun unboundExplicitSignOutTargetSurvivesJunctionFailureAndReconstruction() = runTest {
+        val fixture = fixture()
+        fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+        fixture.session.start()
+        fixture.health.signOutError = IllegalStateException("teardown failed")
+
+        fixture.session.signOut()
+
+        assertTrue(fixture.localState.signOutPending)
+        assertNull(fixture.localState.memberKey)
+        assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
+        assertEquals(0, fixture.auth.signOutCalls)
+
+        fixture.health.signOutError = null
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(AppPhase.NeedsLogin, replacement.state.value.phase)
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
+        assertEquals(1, fixture.auth.signOutCalls)
+        assertTrue(fixture.api.intents.isEmpty())
+        assertEquals(0, fixture.health.syncCalls)
+    }
+
+    @Test
     fun failedPrivyLogoutCannotResumeAfterProcessReconstruction() = runTest {
         val fixture = completedHealthFixture()
         fixture.api.intents.clear()
@@ -5560,6 +5619,7 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertFalse(fixture.health.signedIn)
         assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
 
         fixture.auth.signOutError = null
@@ -5567,6 +5627,7 @@ class AppSessionTest {
         replacement.start()
 
         assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
         assertTrue(fixture.api.intents.isEmpty())
         assertEquals(identifyCalls, fixture.health.identifyCalls)
         assertEquals(syncCalls, fixture.health.syncCalls)
@@ -5663,6 +5724,45 @@ class AppSessionTest {
     }
 
     @Test
+    fun explicitSignOutPreservesAndReconcilesANewerPrivyMember() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.health.signedIn = true
+        val teardownGate = CompletableDeferred<Unit>()
+        fixture.health.signOutGate = teardownGate
+
+        val signOut = async { fixture.session.signOut() }
+        fixture.health.signOutEntered.await()
+        assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
+        fixture.auth.state = AuthSessionState.SignedIn("member-b", verifiedOnline = true)
+        teardownGate.complete(Unit)
+        signOut.await()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals("member-b", fixture.localState.memberKey)
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertEquals(listOf("member-b"), fixture.api.admissionMemberKeys)
+    }
+
+    @Test
+    fun explicitSignOutWaitsForPrivyOwnershipBeforeWritingTheBoundary() = runTest {
+        val fixture = completedHealthFixture()
+        val signOutCalls = fixture.health.signOutCalls
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+
+        fixture.session.signOut()
+
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
+        assertEquals(signOutCalls, fixture.health.signOutCalls)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+    }
+
+    @Test
     fun signOutDoesNotCrossSdkBoundariesWhenPendingWriteFails() = runTest {
         val fixture = completedHealthFixture()
         val priorSignOutCalls = fixture.health.signOutCalls
@@ -5671,6 +5771,7 @@ class AppSessionTest {
         fixture.session.signOut()
 
         assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.pendingPrivySignOutMemberKey)
         assertEquals(priorSignOutCalls, fixture.health.signOutCalls)
         assertEquals(0, fixture.auth.signOutCalls)
         assertTrue(fixture.auth.state is AuthSessionState.SignedIn)
@@ -7718,6 +7819,8 @@ class AppSessionTest {
         override var healthReconnectRequired = false
         override var signOutPending = false
             private set
+        override var pendingPrivySignOutMemberKey: String? = null
+            private set
         var revokeHealthAuthorizationSucceeds = true
         var completeHealthAuthorizationSucceeds = true
         var requireHealthReconnectSucceeds = true
@@ -7810,11 +7913,13 @@ class AppSessionTest {
 
         override fun beginSignOut(
             expectedMemberKey: String?,
+            privySignOutMemberKey: String?,
             preserveMemberState: Boolean,
         ): Boolean {
             if (memberKey != expectedMemberKey) return false
             if (!beginSignOutSucceeds) return false
             signOutPending = true
+            pendingPrivySignOutMemberKey = privySignOutMemberKey
             healthAccessRequestedAt = null
             healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
@@ -7833,6 +7938,7 @@ class AppSessionTest {
             if (memberKey != expectedMemberKey) return false
             if (!completeSignOutSucceeds) return false
             signOutPending = false
+            pendingPrivySignOutMemberKey = null
             clearMemberScopedState()
             return true
         }

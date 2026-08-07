@@ -142,6 +142,7 @@ interface LocalState {
     var lastKnownStatusObservedAt: InstantValue?
     var healthReconnectRequired: Boolean
     val signOutPending: Boolean
+    val pendingPrivySignOutMemberKey: String?
     val addressBookRevision: Int?
         get() = null
     val pendingAddressBookReplacement: AddressBookMutation?
@@ -177,6 +178,7 @@ interface LocalState {
     fun revokeHealthSetupAuthorization(): Boolean
     fun beginSignOut(
         expectedMemberKey: String?,
+        privySignOutMemberKey: String? = null,
         preserveMemberState: Boolean = false,
     ): Boolean
     fun completeSignOut(expectedMemberKey: String?): Boolean

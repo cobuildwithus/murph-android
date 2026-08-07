@@ -223,6 +223,7 @@ class SharedPreferencesLocalStateTest {
         assertFalse(state.beginSignOut(state.memberKey))
 
         assertFalse(state.signOutPending)
+        assertNull(state.pendingPrivySignOutMemberKey)
         assertEquals(requestedAt, state.healthAccessRequestedAt)
         assertEquals(baselineAt, state.healthReceiptBaselineAt)
         assertEquals(receivedAt, state.lastKnownDataReceivedAt)
@@ -243,7 +244,12 @@ class SharedPreferencesLocalStateTest {
     fun failedSignOutBoundaryPreservesExistingTombstone() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
-        assertTrue(state.beginSignOut(state.memberKey))
+        assertTrue(
+            state.beginSignOut(
+                expectedMemberKey = state.memberKey,
+                privySignOutMemberKey = "member-a",
+            ),
+        )
         val requestedAt = InstantValue(500)
         val baselineAt = InstantValue(550)
         val receivedAt = InstantValue(600)
@@ -255,9 +261,15 @@ class SharedPreferencesLocalStateTest {
         state.healthReconnectRequired = true
         preferences.failCommits = true
 
-        assertFalse(state.beginSignOut(state.memberKey))
+        assertFalse(
+            state.beginSignOut(
+                expectedMemberKey = state.memberKey,
+                privySignOutMemberKey = "member-b",
+            ),
+        )
 
         assertTrue(state.signOutPending)
+        assertEquals("member-a", state.pendingPrivySignOutMemberKey)
         assertEquals(requestedAt, state.healthAccessRequestedAt)
         assertEquals(baselineAt, state.healthReceiptBaselineAt)
         assertEquals(receivedAt, state.lastKnownDataReceivedAt)
@@ -265,6 +277,7 @@ class SharedPreferencesLocalStateTest {
         assertTrue(state.healthReconnectRequired)
         val reconstructed = SharedPreferencesLocalState(preferences.recreated())
         assertTrue(reconstructed.signOutPending)
+        assertEquals("member-a", reconstructed.pendingPrivySignOutMemberKey)
         assertEquals(requestedAt, reconstructed.healthAccessRequestedAt)
         assertEquals(baselineAt, reconstructed.healthReceiptBaselineAt)
         assertEquals(receivedAt, reconstructed.lastKnownDataReceivedAt)
@@ -306,16 +319,47 @@ class SharedPreferencesLocalStateTest {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
         state.memberKey = "member-a"
-        assertTrue(state.beginSignOut("member-a"))
+        assertTrue(
+            state.beginSignOut(
+                expectedMemberKey = "member-a",
+                privySignOutMemberKey = "member-a",
+            ),
+        )
         preferences.failCommits = true
 
         assertFalse(state.completeSignOut("member-a"))
 
         assertEquals("member-a", state.memberKey)
         assertTrue(state.signOutPending)
+        assertEquals("member-a", state.pendingPrivySignOutMemberKey)
         val reconstructed = SharedPreferencesLocalState(preferences.recreated())
         assertEquals("member-a", reconstructed.memberKey)
         assertTrue(reconstructed.signOutPending)
+        assertEquals("member-a", reconstructed.pendingPrivySignOutMemberKey)
+    }
+
+    @Test
+    fun explicitSignOutPersistsAnUnboundPrivyTargetUntilCompletion() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+
+        assertTrue(
+            state.beginSignOut(
+                expectedMemberKey = null,
+                privySignOutMemberKey = "member-a",
+            ),
+        )
+
+        assertTrue(state.signOutPending)
+        assertNull(state.memberKey)
+        assertEquals("member-a", state.pendingPrivySignOutMemberKey)
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertTrue(reconstructed.signOutPending)
+        assertEquals("member-a", reconstructed.pendingPrivySignOutMemberKey)
+
+        assertTrue(reconstructed.completeSignOut(null))
+        assertFalse(reconstructed.signOutPending)
+        assertNull(reconstructed.pendingPrivySignOutMemberKey)
     }
 
     @Test

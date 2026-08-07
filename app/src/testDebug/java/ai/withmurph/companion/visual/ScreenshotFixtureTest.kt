@@ -3,8 +3,10 @@ package ai.withmurph.companion.visual
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
+import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
 import org.junit.Assert.assertEquals
@@ -105,6 +107,33 @@ class ScreenshotFixtureTest {
             unavailable.healthAvailability,
         )
         assertEquals(HealthSyncState.NotConnected, unavailable.healthSync)
+    }
+
+    @Test
+    fun friendlyNamesReconnectMapsToThePersistedProductionState() {
+        val now = Instant.parse("2026-08-06T12:00:00Z")
+        val state = ScreenshotScenario.FriendlyNamesReconnectRequired.appState(now)
+
+        assertEquals(AppPhase.Ready, state.phase)
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
+        assertTrue(state.healthReconnectRequired)
+        assertEquals(HealthSyncState.NotConnected, state.healthSync)
+        assertNull(state.healthStatusObservedAt)
+        assertEquals(0, state.grantedResourceCount)
+        assertEquals(4, state.totalResourceCount)
+        assertEquals(
+            "Health Connect needs to reconnect before syncing can resume.",
+            state.healthMessage,
+        )
+        assertEquals(
+            AddressBookSharingState.Server(
+                enabled = false,
+                storedContactCount = 0,
+                canWrite = true,
+                ownedByInstallation = false,
+            ),
+            state.addressBookSharing,
+        )
     }
 
     @Test

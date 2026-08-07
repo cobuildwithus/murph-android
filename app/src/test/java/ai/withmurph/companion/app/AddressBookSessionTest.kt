@@ -1864,6 +1864,8 @@ class AddressBookSessionTest {
         override var healthReconnectRequired = false
         override var signOutPending = false
             private set
+        override var pendingPrivySignOutMemberKey: String? = null
+            private set
 
         override fun completeHealthSetupAuthorization(
             requestedAt: InstantValue,
@@ -1991,10 +1993,12 @@ class AddressBookSessionTest {
 
         override fun beginSignOut(
             expectedMemberKey: String?,
+            privySignOutMemberKey: String?,
             preserveMemberState: Boolean,
         ): Boolean {
             if (memberKey != expectedMemberKey) return false
             signOutPending = true
+            pendingPrivySignOutMemberKey = privySignOutMemberKey
             healthAccessRequestedAt = null
             healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
@@ -2010,6 +2014,7 @@ class AddressBookSessionTest {
         override fun completeSignOut(expectedMemberKey: String?): Boolean {
             if (memberKey != expectedMemberKey) return false
             signOutPending = false
+            pendingPrivySignOutMemberKey = null
             clearMemberScopedState()
             return true
         }

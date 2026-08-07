@@ -102,11 +102,12 @@ internal fun readyAppShellState(
     initialSetupStep: InitialSetupStep,
     healthReconnectRequired: Boolean,
 ): ReadyAppShellState {
-    val setupComplete = initialSetupStep == InitialSetupStep.Complete
-    val activeTab = if (setupComplete) selectedTab else AppTab.Home
+    val navigationAvailable =
+        initialSetupStep == InitialSetupStep.Complete || healthReconnectRequired
+    val activeTab = if (navigationAvailable) selectedTab else AppTab.Home
     return ReadyAppShellState(
         activeTab = activeTab,
-        showsTabBar = setupComplete,
+        showsTabBar = navigationAvailable,
         showsReconnect = healthReconnectRequired && activeTab == AppTab.Home,
     )
 }
@@ -159,7 +160,6 @@ private fun ReadyApp(
     var addressBookConsentAction by rememberSaveable {
         mutableStateOf<AddressBookConsentAction?>(null)
     }
-    val setupComplete = state.initialSetupStep == InitialSetupStep.Complete
     val shellState = readyAppShellState(
         selectedTab = selectedTab,
         initialSetupStep = state.initialSetupStep,
@@ -167,8 +167,8 @@ private fun ReadyApp(
     )
     val bannerRecovery = state.launchConsentRecovery?.takeIf { !it.showSheet }
 
-    LaunchedEffect(state.initialSetupStep) {
-        if (!setupComplete) selectedTab = AppTab.Home
+    LaunchedEffect(shellState.showsTabBar) {
+        if (!shellState.showsTabBar) selectedTab = AppTab.Home
     }
 
     LaunchedEffect(showsHealthConsent, connectAfterConsent) {
