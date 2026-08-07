@@ -48,7 +48,7 @@ import java.util.concurrent.TimeUnit
 @OptIn(ExperimentalCoroutinesApi::class)
 class AddressBookSessionTest {
     @Test
-    fun terminalReplacementFailuresResetTheWholeMemberBoundary() = runTest {
+    fun terminalReplacementFailuresCloseRuntimeAndPreserveTheExactMutation() = runTest {
         val cases = listOf(
             CompanionApiException.Unauthorized to "Sign in again",
             CompanionApiException.NoAccount to "Try a different sign-in",
@@ -71,10 +71,8 @@ class AddressBookSessionTest {
             val failure = fixture.session.state.value.phase as AppPhase.Failed
             assertFalse(failure.canRetry)
             assertEquals(signOutLabel, failure.signOutLabel)
-            assertNull(fixture.localState.memberKey)
-            assertNull(fixture.localState.addressBookRevision)
-            assertNull(fixture.localState.pendingAddressBookReplacement)
-            assertNull(fixture.localState.pendingAddressBookDeletion)
+            assertEquals(MEMBER_ONE, fixture.localState.memberKey)
+            assertTrue(fixture.localState.pendingAddressBookReplacement != null)
             assertFalse(fixture.health.signedIn)
         }
     }
@@ -95,7 +93,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun foregroundStatusUnauthorizedResetsMemberBeforeHealthCanSyncAgain() = runTest {
+    fun foregroundStatusUnauthorizedClosesJunctionBeforeHealthCanSyncAgain() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = true,
@@ -122,8 +120,7 @@ class AddressBookSessionTest {
         assertFalse(fixture.health.signedIn)
         assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
         assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.addressBookRevision)
+        assertEquals(5, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertNull(fixture.localState.pendingAddressBookDeletion)
         assertTrue(fixture.api.replacements.isEmpty())
@@ -179,7 +176,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun acceptedConsentReplacementUnauthorizedResetsTheWholeMemberBoundary() = runTest {
+    fun acceptedConsentReplacementUnauthorizedKeepsTheExactMutationAndClosesJunction() = runTest {
         val fixture = fixture(
             initializeLocal = {
                 memberKey = MEMBER_ONE
@@ -217,9 +214,8 @@ class AddressBookSessionTest {
         assertEquals(2, fixture.api.replacements.size)
         assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
         assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.pendingAddressBookReplacement)
-        assertNull(fixture.localState.addressBookRevision)
+        assertEquals(savedMutation, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(0, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookDeletion)
         assertFalse(fixture.health.signedIn)
         assertEquals(signOutCallsAtRejection + 1, fixture.health.signOutCalls)
@@ -227,7 +223,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun explicitDeletionUnauthorizedResetsTheWholeMemberBoundary() = runTest {
+    fun explicitDeletionUnauthorizedKeepsTheExactMutationAndClosesJunction() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = true,
@@ -249,21 +245,20 @@ class AddressBookSessionTest {
         fixture.session.stopAddressBookSharing()
 
         val failure = fixture.session.state.value.phase as AppPhase.Failed
-        val attemptedMutation = fixture.api.deletions.single().second.mutation
+        val savedMutation = requireNotNull(fixture.localState.pendingAddressBookDeletion)
         assertFalse(failure.canRetry)
         assertEquals(1, fixture.api.deletions.size)
-        assertEquals(5, attemptedMutation.baseRevision)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.addressBookRevision)
+        assertEquals(savedMutation, fixture.api.deletions.single().second.mutation)
+        assertEquals(5, savedMutation.baseRevision)
+        assertEquals(5, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
-        assertNull(fixture.localState.pendingAddressBookDeletion)
         assertFalse(fixture.health.signedIn)
         assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
         assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
     }
 
     @Test
-    fun automaticForegroundDeletionUnauthorizedResetsMemberBeforeHealthSync() = runTest {
+    fun automaticForegroundDeletionUnauthorizedStopsBeforeHealthSync() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = true,
@@ -287,14 +282,13 @@ class AddressBookSessionTest {
         fixture.session.didBecomeActive()
 
         val failure = fixture.session.state.value.phase as AppPhase.Failed
-        val attemptedMutation = fixture.api.deletions.single().second.mutation
+        val savedMutation = requireNotNull(fixture.localState.pendingAddressBookDeletion)
         assertFalse(failure.canRetry)
         assertEquals(1, fixture.api.deletions.size)
-        assertEquals(5, attemptedMutation.baseRevision)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.addressBookRevision)
+        assertEquals(savedMutation, fixture.api.deletions.single().second.mutation)
+        assertEquals(5, savedMutation.baseRevision)
+        assertEquals(5, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
-        assertNull(fixture.localState.pendingAddressBookDeletion)
         assertTrue(fixture.session.state.value.contactsPermissionDenied)
         assertFalse(fixture.health.signedIn)
         assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
