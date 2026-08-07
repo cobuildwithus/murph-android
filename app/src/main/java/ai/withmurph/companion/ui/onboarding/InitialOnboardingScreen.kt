@@ -23,6 +23,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -49,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -58,15 +60,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -173,6 +180,11 @@ fun InitialOnboardingScreen(
     }
 
     val stageScrollState = key(stage) { rememberScrollState() }
+    val stageHeadingFocus = remember(stage) { FocusRequester() }
+    LaunchedEffect(stage) {
+        stageScrollState.scrollTo(0)
+        stageHeadingFocus.requestFocus()
+    }
 
     Column(
         modifier = Modifier
@@ -187,10 +199,11 @@ fun InitialOnboardingScreen(
                 .fillMaxWidth()
                 .align(Alignment.CenterHorizontally)
                 .verticalScroll(stageScrollState)
-                .padding(horizontal = 20.dp, vertical = 18.dp),
+                .padding(horizontal = 20.dp, vertical = 18.dp)
+                .semantics { paneTitle = stage.onboardingTitle() },
             verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
-            OnboardingHeader(stage, draft, catalog.personas)
+            OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
             when (stage) {
                 InitialOnboardingStage.Contact -> ContactChoices(
                     avatars = onboarding.contactCard?.avatars.orEmpty(),
@@ -273,6 +286,7 @@ private fun OnboardingHeader(
     stage: InitialOnboardingStage,
     draft: InitialOnboardingDraft,
     personas: List<InitialOnboardingPersona>,
+    headingFocus: FocusRequester,
 ) {
     val mainLabel = personas.firstOrNull { it.id == draft.mainPersonaId }?.label ?: "Murph"
     val step = when (stage) {
@@ -315,15 +329,14 @@ private fun OnboardingHeader(
             }
         }
         Text(
-            text = when (stage) {
-                InitialOnboardingStage.Contact -> "Add Murph to your contacts"
-                InitialOnboardingStage.MainPersona -> "Choose Murph’s main personality"
-                InitialOnboardingStage.SupportingPersona -> "Add a supporting personality"
-                InitialOnboardingStage.Voice -> "Choose a voice"
-                InitialOnboardingStage.Tone -> "Pick Murph’s tone"
-                InitialOnboardingStage.Welcome -> "Welcome to Murph"
-            },
-            modifier = Modifier.semantics { heading() },
+            text = stage.onboardingTitle(),
+            modifier = Modifier
+                .focusRequester(headingFocus)
+                .focusable()
+                .semantics {
+                    heading()
+                    liveRegion = LiveRegionMode.Polite
+                },
             style = onboardingTitleStyle(),
             color = MurphColors.Slate,
         )
@@ -348,6 +361,15 @@ private fun OnboardingHeader(
             )
         }
     }
+}
+
+private fun InitialOnboardingStage.onboardingTitle(): String = when (this) {
+    InitialOnboardingStage.Contact -> "Add Murph to your contacts"
+    InitialOnboardingStage.MainPersona -> "Choose Murph’s main personality"
+    InitialOnboardingStage.SupportingPersona -> "Add a supporting personality"
+    InitialOnboardingStage.Voice -> "Choose a voice"
+    InitialOnboardingStage.Tone -> "Pick Murph’s tone"
+    InitialOnboardingStage.Welcome -> "Welcome to Murph"
 }
 
 @Composable

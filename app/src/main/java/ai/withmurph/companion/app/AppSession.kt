@@ -595,13 +595,32 @@ class AppSession(
             return@withLock false
         }
         val memberKey = currentMemberKey ?: return@withLock false
+        if (localState.pendingAddressBookReplacement != null) {
+            _state.update {
+                if (
+                    it.phase == AppPhase.Ready &&
+                    it.initialSetupStep == InitialSetupStep.FriendlyNames &&
+                    currentMemberKey == memberKey &&
+                    localState.memberKey == memberKey &&
+                    !localState.signOutPending
+                ) {
+                    it.copy(
+                        addressBookHasInterruptedReplacement = true,
+                        addressBookMessage =
+                            "Finish the saved contact update or stop and delete it before skipping Friendly Names.",
+                    )
+                } else {
+                    it
+                }
+            }
+            return@withLock false
+        }
         val deferred = advanceInitialSetupStep(
             expected = InitialSetupStep.FriendlyNames,
             next = InitialSetupStep.Complete,
-            abandonPendingAddressBookReplacement = true,
+            abandonPendingAddressBookReplacement = false,
         )
         if (!deferred) {
-            val hasSavedRetry = localState.pendingAddressBookReplacement != null
             _state.update {
                 if (
                     it.phase == AppPhase.Ready &&
@@ -612,11 +631,8 @@ class AppSession(
                     !localState.signOutPending
                 ) {
                     it.copy(
-                        addressBookMessage = if (hasSavedRetry) {
-                            "Murph couldn't safely clear the saved contact retry. Try again."
-                        } else {
-                            "Murph couldn't save that Friendly Names setup choice. Try again."
-                        },
+                        addressBookMessage =
+                            "Murph couldn't save that Friendly Names setup choice. Try again.",
                     )
                 } else {
                     it
@@ -4430,6 +4446,20 @@ class AppSession(
         signOutLabel: String = "Sign out and start fresh",
     ) {
         if (!ownsLaunchConsentRecovery(pending)) return
+        if (!localState.revokeHealthSetupAuthorization()) {
+            invalidateSessionEpoch()
+            _state.update { current ->
+                current.copy(
+                    phase = AppPhase.Failed(
+                        message =
+                            "Murph couldn't safely close health sync. Sign out and try again.",
+                        canRetry = false,
+                        canSignOut = true,
+                    ),
+                )
+            }
+            return
+        }
         val clearsAdmissionCandidate =
             pending.memberOwnership == LaunchConsentMemberOwnership.AdmissionCandidate &&
                 localState.memberKey == null

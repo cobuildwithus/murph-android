@@ -86,6 +86,11 @@ internal enum class AppTab {
     Settings,
 }
 
+private enum class AddressBookConsentAction {
+    InitialSetup,
+    Settings,
+}
+
 internal data class ReadyAppShellState(
     val activeTab: AppTab,
     val showsTabBar: Boolean,
@@ -151,7 +156,9 @@ private fun ReadyApp(
     var showsAddressBookConsent by rememberSaveable { mutableStateOf(false) }
     var showsWhoopGuide by rememberSaveable { mutableStateOf(false) }
     var connectAfterConsent by rememberSaveable { mutableStateOf(false) }
-    var shareAddressBookAfterConsent by rememberSaveable { mutableStateOf(false) }
+    var addressBookConsentAction by rememberSaveable {
+        mutableStateOf<AddressBookConsentAction?>(null)
+    }
     val setupComplete = state.initialSetupStep == InitialSetupStep.Complete
     val shellState = readyAppShellState(
         selectedTab = selectedTab,
@@ -170,10 +177,15 @@ private fun ReadyApp(
             actions.onConnectHealth()
         }
     }
-    LaunchedEffect(showsAddressBookConsent, shareAddressBookAfterConsent) {
-        if (!showsAddressBookConsent && shareAddressBookAfterConsent) {
-            shareAddressBookAfterConsent = false
-            actions.onShareAddressBook()
+    LaunchedEffect(showsAddressBookConsent, addressBookConsentAction) {
+        if (!showsAddressBookConsent) {
+            when (addressBookConsentAction) {
+                AddressBookConsentAction.InitialSetup ->
+                    actions.onPrepareInitialAddressBookSharing()
+                AddressBookConsentAction.Settings -> actions.onShareAddressBook()
+                null -> Unit
+            }
+            addressBookConsentAction = null
         }
     }
     LaunchedEffect(state.healthSync) {
@@ -188,7 +200,7 @@ private fun ReadyApp(
             showsAddressBookConsent = false
             showsWhoopGuide = false
             connectAfterConsent = false
-            shareAddressBookAfterConsent = false
+            addressBookConsentAction = null
         }
     }
     LaunchedEffect(state.launchConsentRecovery != null) {
@@ -197,7 +209,7 @@ private fun ReadyApp(
             showsAddressBookConsent = false
             showsWhoopGuide = false
             connectAfterConsent = false
-            shareAddressBookAfterConsent = false
+            addressBookConsentAction = null
         }
     }
 
@@ -267,13 +279,20 @@ private fun ReadyApp(
                             },
                             onShareAddressBookFromSetup = {
                                 if (state.launchConsentRecovery == null) {
-                                    actions.onPrepareInitialAddressBookSharing()
+                                    addressBookConsentAction =
+                                        AddressBookConsentAction.InitialSetup
+                                    showsAddressBookConsent = true
                                 } else {
                                     actions.onShowLaunchConsent()
                                 }
                             },
-                            onDeferAddressBookSetup =
-                                actions.onDeferAddressBookSharingInitialSetup,
+                            onAddressBookSetupSecondaryAction = if (
+                                state.addressBookHasInterruptedReplacement
+                            ) {
+                                actions.onStopAddressBook
+                            } else {
+                                actions.onDeferAddressBookSharingInitialSetup
+                            },
                             onOpenAppSettings = actions.onOpenAppSettings,
                             reserveStatusBarInset = bannerRecovery == null,
                         )
@@ -281,6 +300,7 @@ private fun ReadyApp(
                             state = state,
                             onShareAddressBook = {
                                 if (state.launchConsentRecovery == null) {
+                                    addressBookConsentAction = AddressBookConsentAction.Settings
                                     showsAddressBookConsent = true
                                 } else {
                                     actions.onShowLaunchConsent()
@@ -361,7 +381,7 @@ private fun ReadyApp(
         ModalBottomSheet(
             onDismissRequest = {
                 showsAddressBookConsent = false
-                shareAddressBookAfterConsent = false
+                addressBookConsentAction = null
             },
             modifier = Modifier.padding(top = 48.dp).fillMaxHeight(),
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -370,7 +390,6 @@ private fun ReadyApp(
         ) {
             AddressBookConsentContent(
                 onContinue = {
-                    shareAddressBookAfterConsent = true
                     showsAddressBookConsent = false
                 },
             )
@@ -428,7 +447,10 @@ private fun ReconnectHealthContent(
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
+            modifier = Modifier
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {

@@ -48,7 +48,7 @@ fun HomeScreen(
     onDeferHealthSetup: () -> Unit,
     onSyncNow: () -> Unit,
     onShareAddressBookFromSetup: () -> Unit,
-    onDeferAddressBookSetup: () -> Unit,
+    onAddressBookSetupSecondaryAction: () -> Unit,
     onOpenAppSettings: () -> Unit,
     reserveStatusBarInset: Boolean = true,
 ) {
@@ -78,7 +78,7 @@ fun HomeScreen(
             InitialSetupStep.FriendlyNames -> FriendlyNamesSetupContent(
                 state = state,
                 onShare = onShareAddressBookFromSetup,
-                onNotNow = onDeferAddressBookSetup,
+                onNotNow = onAddressBookSetupSecondaryAction,
                 onOpenAppSettings = onOpenAppSettings,
                 modifier = Modifier.align(Alignment.Center),
             )
@@ -304,7 +304,11 @@ private fun FriendlyNamesSetupContent(
                 enabled = !isWorking,
             )
             MurphLinkButton(
-                text = "Not now",
+                text = if (state.addressBookHasInterruptedReplacement) {
+                    "Stop and delete"
+                } else {
+                    "Not now"
+                },
                 onClick = onNotNow,
                 enabled = !isWorking && state.launchConsentRecovery == null,
             )

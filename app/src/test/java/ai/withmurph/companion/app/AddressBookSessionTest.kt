@@ -399,46 +399,51 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun friendlyNamesDeferralClearsASettledRetryAndPreventsSetupReplay() = runTest {
+    fun friendlyNamesDeferralKeepsAnInterruptedReplacementVisibleUntilCleanup() = runTest {
         val fixture = fixture(
+            initialStatus = enabledStatus(revision = 1, count = 1),
             initializeLocal = {
+                memberKey = MEMBER_ONE
                 initialSetupStep = InitialSetupStep.FriendlyNames
+                revision = 0
+                replacement = AddressBookMutation(0, MUTATION_ONE)
             },
         )
+        fixture.contacts.permissionGranted = false
         fixture.session.start()
-        fixture.contacts.permissionGranted = true
-        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
-        fixture.localState.completeAddressBookReplacementSucceeds = false
+
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
+        assertTrue(fixture.session.state.value.addressBookHasInterruptedReplacement)
+        assertTrue(
+            fixture.session.state.value.addressBookMessage.orEmpty()
+                .contains("stop and delete"),
+        )
 
         assertTrue(fixture.session.prepareInitialAddressBookSharing())
-        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
-        assertTrue(fixture.localState.pendingAddressBookReplacement != null)
-        val savedSharing = fixture.session.state.value.addressBookSharing
-        assertTrue((savedSharing as AddressBookSharingState.Server).enabled)
-        val statusCalls = fixture.api.addressStatusMembers.size
-        val reads = fixture.contacts.readCalls
-        val replacements = fixture.api.replacements.size
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(false))
+        assertEquals(0, fixture.contacts.readCalls)
+        assertTrue(fixture.api.deletions.isEmpty())
+        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
 
-        assertTrue(fixture.session.deferAddressBookSharingInitialSetup())
+        fixture.session.stopAddressBookSharing()
 
-        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(listOf(1), fixture.api.deletions.map { it.second.mutation.baseRevision })
+        assertEquals(2, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertFalse(fixture.session.state.value.addressBookHasInterruptedReplacement)
-        assertNull(fixture.session.state.value.addressBookMessage)
-        assertEquals(savedSharing, fixture.session.state.value.addressBookSharing)
-        assertFalse(fixture.session.prepareInitialAddressBookSharing())
-        assertEquals(statusCalls, fixture.api.addressStatusMembers.size)
-        assertEquals(reads, fixture.contacts.readCalls)
-        assertEquals(replacements, fixture.api.replacements.size)
+        assertTrue(fixture.session.deferAddressBookSharingInitialSetup())
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
     }
 
     @Test
-    fun friendlyNamesDeferralStaysVisibleWhenRetryCleanupCannotCommit() = runTest {
+    fun friendlyNamesDeferralStaysVisibleWhileRetryIsPending() = runTest {
         val fixture = fixture(
             initializeLocal = {
                 initialSetupStep = InitialSetupStep.FriendlyNames
                 replacement = AddressBookMutation(0, MUTATION_ONE)
-                advanceInitialSetupSucceeds = false
             },
         )
         fixture.session.start()
@@ -449,7 +454,7 @@ class AddressBookSessionTest {
         assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
         assertTrue(
             fixture.session.state.value.addressBookMessage.orEmpty()
-                .contains("couldn't safely clear"),
+                .contains("stop and delete"),
         )
     }
 

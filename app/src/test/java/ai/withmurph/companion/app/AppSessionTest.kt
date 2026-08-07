@@ -1680,7 +1680,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun terminalConsentLoadFailuresCloseRuntimeAndPreserveTheEstablishedMember() = runTest {
+    fun terminalConsentLoadFailuresRevokeEstablishedHealthAuthorization() = runTest {
         val cases = listOf(
             CompanionApiException.Unauthorized to "Sign in again",
             CompanionApiException.NoAccount to "Try a different sign-in",
@@ -1690,19 +1690,109 @@ class AppSessionTest {
         )
 
         cases.forEach { (rejection, signOutLabel) ->
-            val fixture = fixture()
+            val fixture = completedHealthFixture()
             fixture.api.statusError = CompanionApiException.ConsentRequired
             fixture.api.launchConsentFetchError = rejection
 
-            fixture.session.start()
+            fixture.session.syncNow()
 
             val failure = fixture.session.state.value.phase as AppPhase.Failed
             assertFalse(failure.canRetry)
             assertEquals(signOutLabel, failure.signOutLabel)
             assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+            assertNull(fixture.localState.healthAccessRequestedAt)
             assertFalse(fixture.health.signedIn)
             assertNull(fixture.session.state.value.launchConsentRecovery)
         }
+    }
+
+    @Test
+    fun terminalConsentAcceptanceRevokesEstablishedHealthAuthorization() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.session.syncNow()
+        fixture.api.statusError = null
+        fixture.api.launchConsentAcceptError = CompanionApiException.AccessRequired
+
+        fixture.session.acceptLaunchConsent()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.health.signedIn)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacementHealth = FakeHealth(fixture.events).apply {
+            grantedCount = totalResourceCount
+        }
+        val replacement = recreatedSession(fixture, replacementHealth)
+
+        replacement.start()
+
+        assertEquals(AppPhase.Ready, replacement.state.value.phase)
+        assertFalse(replacement.state.value.authVerifiedOnline)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertEquals(0, replacementHealth.identifyCalls)
+        assertEquals(0, replacementHealth.configureCalls)
+        assertEquals(0, replacementHealth.syncCalls)
+    }
+
+    @Test
+    fun terminalStaleConsentReloadRevokesEstablishedHealthAuthorization() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.session.syncNow()
+        fixture.api.statusError = null
+        fixture.api.launchConsentAcceptError = CompanionApiException.StaleConsentDocuments
+        fixture.api.launchConsentFetchError = CompanionApiException.MemberSuspended
+
+        fixture.session.acceptLaunchConsent()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.health.signedIn)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun terminalConsentRevocationFailureStaysProviderClosedAcrossReconstruction() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        fixture.session.syncNow()
+        val signOutCalls = fixture.health.signOutCalls
+        fixture.api.statusError = null
+        fixture.api.launchConsentAcceptError = CompanionApiException.AccessRequired
+        fixture.localState.revokeHealthAuthorizationSucceeds = false
+
+        fixture.session.acceptLaunchConsent()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(signOutCalls, fixture.health.signOutCalls)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacementHealth = FakeHealth(fixture.events).apply {
+            grantedCount = totalResourceCount
+        }
+        val replacement = recreatedSession(fixture, replacementHealth)
+
+        replacement.start()
+
+        assertEquals(AppPhase.Ready, replacement.state.value.phase)
+        assertFalse(replacement.state.value.authVerifiedOnline)
+        assertFalse(replacementHealth.signedIn)
+        assertEquals(0, replacementHealth.identifyCalls)
+        assertEquals(0, replacementHealth.configureCalls)
+        assertEquals(0, replacementHealth.syncCalls)
     }
 
     @Test
