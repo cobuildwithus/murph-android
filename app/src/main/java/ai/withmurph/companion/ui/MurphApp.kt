@@ -97,6 +97,28 @@ internal data class ReadyAppShellState(
     val showsReconnect: Boolean,
 )
 
+internal data class FailureExternalAction(
+    val label: String,
+    val onClick: () -> Unit,
+)
+
+internal fun failureExternalActions(
+    failure: AppPhase.Failed,
+    onOpenSupport: () -> Unit,
+    onDeleteAccount: () -> Unit,
+    onOpenPrivacy: () -> Unit,
+    onOpenTerms: () -> Unit,
+): List<FailureExternalAction> = if (failure.canSignOut) {
+    listOf(
+        FailureExternalAction("Contact support", onOpenSupport),
+        FailureExternalAction("Delete account", onDeleteAccount),
+        FailureExternalAction("Privacy Policy", onOpenPrivacy),
+        FailureExternalAction("Terms", onOpenTerms),
+    )
+} else {
+    emptyList()
+}
+
 internal fun readyAppShellState(
     selectedTab: AppTab,
     initialSetupStep: InitialSetupStep,
@@ -1244,6 +1266,13 @@ private fun FailureScreen(
     failure: AppPhase.Failed,
     actions: MurphActions,
 ) {
+    val externalActions = failureExternalActions(
+        failure = failure,
+        onOpenSupport = actions.onOpenSupport,
+        onDeleteAccount = actions.onDeleteAccount,
+        onOpenPrivacy = actions.onOpenPrivacy,
+        onOpenTerms = actions.onOpenTerms,
+    )
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1272,6 +1301,25 @@ private fun FailureScreen(
             if (failure.canSignOut) {
                 Spacer(Modifier.height(4.dp))
                 MurphLinkButton(failure.signOutLabel, actions.onSignOut)
+            }
+            if (externalActions.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                MurphCard(modifier = Modifier.widthIn(max = 420.dp)) {
+                    Text(
+                        text = "Account and legal",
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MurphColors.Slate,
+                        textAlign = TextAlign.Center,
+                    )
+                    externalActions.forEach { action ->
+                        MurphLinkButton(
+                            text = action.label,
+                            onClick = action.onClick,
+                            modifier = Modifier.align(Alignment.CenterHorizontally),
+                        )
+                    }
+                }
             }
         }
     }

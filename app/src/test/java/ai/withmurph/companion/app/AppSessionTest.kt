@@ -852,6 +852,7 @@ class AppSessionTest {
             val failure = fixture.session.state.value.phase as AppPhase.Failed
             assertEquals(message, failure.message)
             assertEquals(canRetry, failure.canRetry)
+            assertTrue(failure.canSignOut)
             assertEquals(
                 if (error == CompanionApiException.AdmissionRetryable) {
                     "Sign out and start fresh"
