@@ -72,7 +72,6 @@ class AppSession(
     private val pendingAddressBookReconcileLock = Any()
     private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
-    private var pendingAutomaticMemberReset: PendingAutomaticMemberReset? = null
     private var nextHealthPermissionRequestId = 1
     private var nextHealthHistoryPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
@@ -1329,13 +1328,7 @@ class AppSession(
                 )
             }
             var recoveredAuthState: AuthSessionState? = null
-            val automaticMemberReset = pendingAutomaticMemberReset
-            if (automaticMemberReset != null) {
-                if (!resetMemberAtTrustBoundary(automaticMemberReset)) {
-                    hasCompletedStartup = true
-                    return@withLock
-                }
-            } else if (localState.signOutPending) {
+            if (localState.signOutPending) {
                 recoveredAuthState = finishPendingSignOut()
                 if (recoveredAuthState == null) {
                     hasCompletedStartup = _state.value.phase != AppPhase.Launching
@@ -2239,7 +2232,6 @@ class AppSession(
             }
             return@withContext
         }
-        pendingAutomaticMemberReset = null
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         startMutex.withLock {
@@ -2282,7 +2274,6 @@ class AppSession(
         if (mustDistrustPersistedHealthSession) {
             if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
             clearInitialOnboardingState()
-            localState.clearMemberScopedState()
         }
         currentMemberKey = authState.memberKey
         var epoch = sessionEpoch
@@ -2556,6 +2547,7 @@ class AppSession(
             if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         } else {
             invalidateSessionEpoch()
+            localState.clearMemberScopedState()
         }
         finishSignedOut()
     }
@@ -2563,7 +2555,6 @@ class AppSession(
     private fun finishSignedOut() {
         currentMemberKey = null
         clearInitialOnboardingState()
-        localState.clearMemberScopedState()
         _state.value = AppUiState(
             phase = AppPhase.NeedsLogin,
             healthAvailability = health.availability(),
@@ -2574,7 +2565,6 @@ class AppSession(
     private fun finishChangedMemberAuthTransition() {
         currentMemberKey = null
         clearInitialOnboardingState()
-        localState.clearMemberScopedState()
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Failed(
@@ -2621,7 +2611,7 @@ class AppSession(
                 )
         val resetSucceeded = if (revokeAuthorization) {
             resetMemberAtTrustBoundary(
-                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                expectedMemberKey = localState.memberKey,
                 acceptedConsentOwner = retainedConsentOwner,
                 healthAlreadySignedOut = healthAlreadySignedOut,
             )
@@ -2656,7 +2646,7 @@ class AppSession(
             is DeferredSessionBoundary.LocalAuth ->
                 handleAuthoritativeLocalAuthObservation(boundary.observedState)
             is DeferredSessionBoundary.BackendRejected ->
-                publishTerminalMemberBoundaryFailure(boundary.error)
+                publishTerminalMemberBoundaryFailurePreservingMember(boundary.error)
             DeferredSessionBoundary.AccountConflict -> publishAccountConflictFailure()
         }
     }
@@ -2674,7 +2664,7 @@ class AppSession(
                 reconcileObservedAuthState(expectedMemberKey, boundary.observedState)
             }
             is DeferredSessionBoundary.BackendRejected ->
-                publishTerminalMemberBoundaryFailure(boundary.error)
+                publishTerminalMemberBoundaryFailurePreservingMember(boundary.error)
             DeferredSessionBoundary.AccountConflict -> publishAccountConflictFailure()
         }
     }
@@ -3056,7 +3046,6 @@ class AppSession(
             )
             return null
         }
-        pendingAutomaticMemberReset = null
         currentMemberKey = null
         if (
             authState is AuthSessionState.SignedIn &&
@@ -3286,7 +3275,7 @@ class AppSession(
     ): Boolean {
         val resetSucceeded = if (revokeAuthorization) {
             resetMemberAtTrustBoundary(
-                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                expectedMemberKey = localState.memberKey,
                 acceptedConsentOwner = retainedConsentOwner,
                 healthMutexHeld = true,
             )
@@ -3723,7 +3712,7 @@ class AppSession(
     private suspend fun publishAccountConflictFailureWhileHealthLocked() {
         if (
             !resetMemberAtTrustBoundary(
-                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                expectedMemberKey = localState.memberKey,
                 healthMutexHeld = true,
             )
         ) return
@@ -3732,7 +3721,6 @@ class AppSession(
 
     private fun finishAccountConflictFailure() {
         currentMemberKey = null
-        localState.clearMemberScopedState()
         clearInitialOnboardingState()
         _state.update { current ->
             current.copy(
@@ -3803,6 +3791,22 @@ class AppSession(
             canRetry = false,
             signOutLabel = terminalMemberBoundarySignOutLabel(error),
         )
+    }
+
+    private suspend fun publishTerminalMemberBoundaryFailurePreservingMember(
+        error: CompanionApiException,
+    ) {
+        if (!resetHealthAuthorizationAtTrustBoundary()) return
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = terminalMemberBoundaryMessage(error),
+                    canRetry = false,
+                    canSignOut = true,
+                    signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                ),
+            )
+        }
     }
 
     private fun closeProductAuthorityForBoundary() {
@@ -3932,7 +3936,7 @@ class AppSession(
     ): Boolean {
         if (revokeAuthorization) {
             return resetMemberAtTrustBoundary(
-                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                expectedMemberKey = localState.memberKey,
                 acceptedConsentOwner = acceptedConsentOwner,
             )
         }
@@ -3948,21 +3952,35 @@ class AppSession(
         }
     }
 
+    private suspend fun resetHealthAuthorizationAtTrustBoundary(
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+    ): Boolean {
+        closeProductAuthorityForBoundary()
+        invalidateSessionEpoch(acceptedConsentOwner)
+        if (!localState.revokeHealthSetupAuthorization()) {
+            publishHealthResetFailure()
+            return false
+        }
+        return try {
+            healthMutex.withLock { health.signOutSdk() }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            publishHealthResetFailure()
+            false
+        }
+    }
+
     private suspend fun resetMemberAtTrustBoundary(
-        boundary: PendingAutomaticMemberReset,
+        expectedMemberKey: String?,
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
         healthAlreadySignedOut: Boolean = false,
         healthMutexHeld: Boolean = false,
     ): Boolean {
-        val pendingBoundary = pendingAutomaticMemberReset
-        if (pendingBoundary != null && pendingBoundary != boundary) {
-            publishHealthResetFailure()
-            return false
-        }
         closeProductAuthorityForBoundary()
-        pendingAutomaticMemberReset = boundary
         invalidateSessionEpoch(acceptedConsentOwner)
-        if (!localState.beginSignOut(boundary.expectedMemberKey)) {
+        if (!localState.beginSignOut(expectedMemberKey)) {
             publishHealthResetFailure()
             return false
         }
@@ -3984,13 +4002,12 @@ class AppSession(
         }
         if (
             !sdkResetSucceeded ||
-            !localState.completeSignOut(boundary.expectedMemberKey)
+            !localState.completeSignOut(expectedMemberKey)
         ) {
             publishHealthResetFailure()
             return false
         }
         currentMemberKey = null
-        pendingAutomaticMemberReset = null
         return true
     }
 
@@ -4528,11 +4545,14 @@ class AppSession(
         val clearsAdmissionCandidate =
             pending.memberOwnership == LaunchConsentMemberOwnership.AdmissionCandidate &&
                 localState.memberKey == null
-        if (
-            !resetMemberAtTrustBoundary(
-                PendingAutomaticMemberReset(localState.memberKey),
-            )
-        ) return
+        val resetSucceeded = if (
+            pending.followUp.preservesAddressBookStateOnTerminalBoundary()
+        ) {
+            resetHealthAuthorizationAtTrustBoundary()
+        } else {
+            resetMemberAtTrustBoundary(localState.memberKey)
+        }
+        if (!resetSucceeded) return
         if (clearsAdmissionCandidate) currentMemberKey = null
         _state.update { current ->
             current.copy(
@@ -4854,6 +4874,17 @@ class AppSession(
         -> true
         else -> false
     }
+
+    private fun LaunchConsentFollowUp.preservesAddressBookStateOnTerminalBoundary(): Boolean =
+        when (this) {
+            is LaunchConsentFollowUp.PrepareAddressBookPermission,
+            LaunchConsentFollowUp.ReconcileAddressBook,
+            LaunchConsentFollowUp.StopAddressBookSharing,
+            is LaunchConsentFollowUp.AutomaticAddressBookDeletion,
+            is LaunchConsentFollowUp.AddressBookReplacement,
+            -> true
+            else -> false
+        }
 
     private fun LaunchConsentFollowUp.isInitialOnboardingContinuation(): Boolean = when (this) {
         is LaunchConsentFollowUp.CompleteInitialOnboarding,
@@ -5801,10 +5832,6 @@ class AppSession(
 
         data object AccountConflict : DeferredSessionBoundary
     }
-
-    private data class PendingAutomaticMemberReset(
-        val expectedMemberKey: String?,
-    )
 
     private class PendingLaunchConsentRecovery(
         var epoch: Int,
