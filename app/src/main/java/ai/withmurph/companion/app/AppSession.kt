@@ -72,6 +72,7 @@ class AppSession(
     private val pendingAddressBookReconcileLock = Any()
     private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
+    private var pendingAutomaticMemberReset: PendingAutomaticMemberReset? = null
     private var nextHealthPermissionRequestId = 1
     private var nextHealthHistoryPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
@@ -1327,7 +1328,13 @@ class AppSession(
                     healthMessage = null,
                 )
             }
-            if (localState.signOutPending) {
+            val automaticMemberReset = pendingAutomaticMemberReset
+            if (automaticMemberReset != null) {
+                if (!resetMemberAtTrustBoundary(automaticMemberReset)) {
+                    hasCompletedStartup = true
+                    return@withLock
+                }
+            } else if (localState.signOutPending) {
                 finishPendingSignOut()
                 hasCompletedStartup = _state.value.phase != AppPhase.Launching
                 return@withLock
@@ -2216,7 +2223,8 @@ class AppSession(
             claim.sessionEpoch == sessionEpoch
 
     suspend fun signOut() = withContext(NonCancellable) {
-        if (!localState.beginSignOut()) {
+        val expectedMemberKey = localState.memberKey
+        if (!localState.beginSignOut(expectedMemberKey)) {
             _state.update {
                 it.copy(
                     phase = AppPhase.Failed(
@@ -2228,6 +2236,7 @@ class AppSession(
             }
             return@withContext
         }
+        pendingAutomaticMemberReset = null
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         startMutex.withLock {
@@ -2607,17 +2616,20 @@ class AppSession(
                 observed is AuthSessionState.SignedIn &&
                     !isUnverifiedDifferentMemberCandidate(observed)
                 )
-        closeProductAuthorityForBoundary()
-        val resetSucceeded = if (healthAlreadySignedOut) {
-            invalidateSessionEpoch(retainedConsentOwner)
-            if (revokeAuthorization && !localState.revokeHealthSetupAuthorization()) {
-                publishHealthResetFailure()
-                false
-            } else {
-                true
-            }
+        val resetSucceeded = if (revokeAuthorization) {
+            resetMemberAtTrustBoundary(
+                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                acceptedConsentOwner = retainedConsentOwner,
+                healthAlreadySignedOut = healthAlreadySignedOut,
+            )
         } else {
-            resetHealthSdkAtTrustBoundary(retainedConsentOwner, revokeAuthorization)
+            closeProductAuthorityForBoundary()
+            if (healthAlreadySignedOut) {
+                invalidateSessionEpoch(retainedConsentOwner)
+                true
+            } else {
+                resetHealthSdkAtTrustBoundary(retainedConsentOwner)
+            }
         }
         if (!resetSucceeded) return true
         if (observed == AuthSessionState.SignedOut) {
@@ -2996,6 +3008,7 @@ class AppSession(
     /** Called only while [startMutex] is held. */
     private suspend fun finishPendingSignOut() {
         if (!localState.signOutPending) return
+        val expectedMemberKey = localState.memberKey
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         try {
@@ -3016,12 +3029,13 @@ class AppSession(
             publishPendingSignOutFailure("We couldn't finish signing out. Try once more.")
             return
         }
-        if (!localState.completeSignOut()) {
+        if (!localState.completeSignOut(expectedMemberKey)) {
             publishPendingSignOutFailure(
                 "We couldn't safely finish signing out. Keep Murph open and try again.",
             )
             return
         }
+        pendingAutomaticMemberReset = null
         currentMemberKey = null
         _state.value = AppUiState(
             phase = AppPhase.NeedsLogin,
@@ -3241,19 +3255,23 @@ class AppSession(
         retainedConsentOwner: PendingLaunchConsentRecovery? = null,
         revokeAuthorization: Boolean = false,
     ): Boolean {
-        closeProductAuthorityForBoundary()
-        invalidateSessionEpoch(retainedConsentOwner)
-        if (revokeAuthorization && !localState.revokeHealthSetupAuthorization()) {
-            publishHealthResetFailure()
-            return false
-        }
-        val resetSucceeded = try {
-            health.signOutSdk()
-            true
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            false
+        val resetSucceeded = if (revokeAuthorization) {
+            resetMemberAtTrustBoundary(
+                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                acceptedConsentOwner = retainedConsentOwner,
+                healthMutexHeld = true,
+            )
+        } else {
+            closeProductAuthorityForBoundary()
+            invalidateSessionEpoch(retainedConsentOwner)
+            try {
+                health.signOutSdk()
+                true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                false
+            }
         }
         _state.update { current ->
             current.copy(
@@ -3674,28 +3692,12 @@ class AppSession(
 
     /** Called only while [healthMutex] is held. */
     private suspend fun publishAccountConflictFailureWhileHealthLocked() {
-        closeProductAuthorityForBoundary()
-        invalidateSessionEpoch()
-        if (!localState.revokeHealthSetupAuthorization()) {
-            publishHealthResetFailure()
-            return
-        }
-        try {
-            health.signOutSdk()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            _state.update { current ->
-                current.copy(
-                    phase = AppPhase.Failed(
-                        message = "Murph couldn't safely reset health sync. Keep the app open and try again.",
-                        canRetry = true,
-                        canSignOut = true,
-                    ),
-                )
-            }
-            return
-        }
+        if (
+            !resetMemberAtTrustBoundary(
+                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                healthMutexHeld = true,
+            )
+        ) return
         finishAccountConflictFailure()
     }
 
@@ -3899,11 +3901,13 @@ class AppSession(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
         revokeAuthorization: Boolean = false,
     ): Boolean {
-        invalidateSessionEpoch(acceptedConsentOwner)
-        if (revokeAuthorization && !localState.revokeHealthSetupAuthorization()) {
-            publishHealthResetFailure()
-            return false
+        if (revokeAuthorization) {
+            return resetMemberAtTrustBoundary(
+                boundary = PendingAutomaticMemberReset(localState.memberKey),
+                acceptedConsentOwner = acceptedConsentOwner,
+            )
         }
+        invalidateSessionEpoch(acceptedConsentOwner)
         return try {
             healthMutex.withLock { health.signOutSdk() }
             true
@@ -3913,6 +3917,49 @@ class AppSession(
             publishHealthResetFailure()
             false
         }
+    }
+
+    private suspend fun resetMemberAtTrustBoundary(
+        boundary: PendingAutomaticMemberReset,
+        acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+        healthAlreadySignedOut: Boolean = false,
+        healthMutexHeld: Boolean = false,
+    ): Boolean {
+        val pendingBoundary = pendingAutomaticMemberReset
+        if (pendingBoundary != null && pendingBoundary != boundary) {
+            publishHealthResetFailure()
+            return false
+        }
+        closeProductAuthorityForBoundary()
+        pendingAutomaticMemberReset = boundary
+        invalidateSessionEpoch(acceptedConsentOwner)
+        localState.beginSignOut(boundary.expectedMemberKey)
+        val sdkResetSucceeded = if (healthAlreadySignedOut) {
+            true
+        } else {
+            try {
+                if (healthMutexHeld) {
+                    health.signOutSdk()
+                } else {
+                    healthMutex.withLock { health.signOutSdk() }
+                }
+                true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                false
+            }
+        }
+        if (
+            !sdkResetSucceeded ||
+            !localState.completeSignOut(boundary.expectedMemberKey)
+        ) {
+            publishHealthResetFailure()
+            return false
+        }
+        currentMemberKey = null
+        pendingAutomaticMemberReset = null
+        return true
     }
 
     private fun publishHealthResetFailure() {
@@ -4439,31 +4486,21 @@ class AppSession(
         }
     }
 
-    private fun publishLaunchConsentMemberBoundaryFailure(
+    private suspend fun publishLaunchConsentMemberBoundaryFailure(
         pending: PendingLaunchConsentRecovery,
         message: String,
         canRetry: Boolean,
         signOutLabel: String = "Sign out and start fresh",
     ) {
         if (!ownsLaunchConsentRecovery(pending)) return
-        if (!localState.revokeHealthSetupAuthorization()) {
-            invalidateSessionEpoch()
-            _state.update { current ->
-                current.copy(
-                    phase = AppPhase.Failed(
-                        message =
-                            "Murph couldn't safely close health sync. Sign out and try again.",
-                        canRetry = false,
-                        canSignOut = true,
-                    ),
-                )
-            }
-            return
-        }
         val clearsAdmissionCandidate =
             pending.memberOwnership == LaunchConsentMemberOwnership.AdmissionCandidate &&
                 localState.memberKey == null
-        invalidateSessionEpoch()
+        if (
+            !resetMemberAtTrustBoundary(
+                PendingAutomaticMemberReset(localState.memberKey),
+            )
+        ) return
         if (clearsAdmissionCandidate) currentMemberKey = null
         _state.update { current ->
             current.copy(
@@ -4478,7 +4515,7 @@ class AppSession(
         }
     }
 
-    private fun publishLaunchConsentTerminalBoundaryFailure(
+    private suspend fun publishLaunchConsentTerminalBoundaryFailure(
         pending: PendingLaunchConsentRecovery,
         error: CompanionApiException,
     ) {
@@ -5732,6 +5769,10 @@ class AppSession(
 
         data object AccountConflict : DeferredSessionBoundary
     }
+
+    private data class PendingAutomaticMemberReset(
+        val expectedMemberKey: String?,
+    )
 
     private class PendingLaunchConsentRecovery(
         var epoch: Int,

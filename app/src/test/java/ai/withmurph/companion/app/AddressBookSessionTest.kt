@@ -1989,7 +1989,8 @@ class AddressBookSessionTest {
             return true
         }
 
-        override fun beginSignOut(): Boolean {
+        override fun beginSignOut(expectedMemberKey: String?): Boolean {
+            if (memberKey != expectedMemberKey) return false
             signOutPending = true
             healthAccessRequestedAt = null
             healthReceiptBaselineAt = null
@@ -2001,7 +2002,8 @@ class AddressBookSessionTest {
             return true
         }
 
-        override fun completeSignOut(): Boolean {
+        override fun completeSignOut(expectedMemberKey: String?): Boolean {
+            if (memberKey != expectedMemberKey) return false
             signOutPending = false
             clearMemberScopedState()
             return true

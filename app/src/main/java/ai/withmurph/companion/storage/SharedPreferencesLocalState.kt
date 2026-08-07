@@ -270,7 +270,8 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
-    override fun beginSignOut(): Boolean {
+    override fun beginSignOut(expectedMemberKey: String?): Boolean {
+        if (memberKey != expectedMemberKey) return false
         val requestedAt = healthAccessRequestedAt
         val receiptBaselineAt = healthReceiptBaselineAt
         val receivedAt = lastKnownDataReceivedAt
@@ -306,7 +307,8 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
-    override fun completeSignOut(): Boolean {
+    override fun completeSignOut(expectedMemberKey: String?): Boolean {
+        if (memberKey != expectedMemberKey) return false
         val committed = preferences.edit()
             .remove(KEY_MEMBER_KEY)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
@@ -320,8 +322,15 @@ class SharedPreferencesLocalState internal constructor(
             .commit()
         if (!committed) {
             // SharedPreferences updates memory before reporting a disk failure.
-            // Reassert the fail-closed tombstone for the next startup attempt.
-            preferences.edit().putBoolean(KEY_SIGN_OUT_PENDING, true).commit()
+            // Reassert the expected owner and fail-closed tombstone for retry.
+            preferences.edit().apply {
+                if (expectedMemberKey == null) {
+                    remove(KEY_MEMBER_KEY)
+                } else {
+                    putString(KEY_MEMBER_KEY, expectedMemberKey)
+                }
+                putBoolean(KEY_SIGN_OUT_PENDING, true)
+            }.commit()
         }
         return committed
     }

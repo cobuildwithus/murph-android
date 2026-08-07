@@ -220,7 +220,7 @@ class SharedPreferencesLocalStateTest {
         state.initialSetupStep = InitialSetupStep.FriendlyNames
         preferences.failCommits = true
 
-        assertFalse(state.beginSignOut())
+        assertFalse(state.beginSignOut(state.memberKey))
 
         assertFalse(state.signOutPending)
         assertEquals(requestedAt, state.healthAccessRequestedAt)
@@ -243,7 +243,7 @@ class SharedPreferencesLocalStateTest {
     fun failedSignOutBoundaryPreservesExistingTombstone() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
-        assertTrue(state.beginSignOut())
+        assertTrue(state.beginSignOut(state.memberKey))
         val requestedAt = InstantValue(500)
         val baselineAt = InstantValue(550)
         val receivedAt = InstantValue(600)
@@ -255,7 +255,7 @@ class SharedPreferencesLocalStateTest {
         state.healthReconnectRequired = true
         preferences.failCommits = true
 
-        assertFalse(state.beginSignOut())
+        assertFalse(state.beginSignOut(state.memberKey))
 
         assertTrue(state.signOutPending)
         assertEquals(requestedAt, state.healthAccessRequestedAt)
@@ -270,6 +270,52 @@ class SharedPreferencesLocalStateTest {
         assertEquals(receivedAt, reconstructed.lastKnownDataReceivedAt)
         assertEquals(observedAt, reconstructed.lastKnownStatusObservedAt)
         assertTrue(reconstructed.healthReconnectRequired)
+    }
+
+    @Test
+    fun signOutBoundaryRejectsAStaleMemberOwnerWithoutMutation() {
+        val state = SharedPreferencesLocalState(FaultInjectedPreferences())
+        val requestedAt = InstantValue(700)
+        state.memberKey = "member-a"
+        state.healthAccessRequestedAt = requestedAt
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
+
+        assertFalse(state.beginSignOut("member-b"))
+
+        assertEquals("member-a", state.memberKey)
+        assertFalse(state.signOutPending)
+        assertEquals(requestedAt, state.healthAccessRequestedAt)
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
+    }
+
+    @Test
+    fun signOutCompletionCannotClearANewerMemberOwner() {
+        val state = SharedPreferencesLocalState(FaultInjectedPreferences())
+        state.memberKey = "member-a"
+        assertTrue(state.beginSignOut("member-a"))
+        state.memberKey = "member-b"
+
+        assertFalse(state.completeSignOut("member-a"))
+
+        assertEquals("member-b", state.memberKey)
+        assertTrue(state.signOutPending)
+    }
+
+    @Test
+    fun failedSignOutCompletionKeepsTheExpectedOwnerFencedForReconstruction() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "member-a"
+        assertTrue(state.beginSignOut("member-a"))
+        preferences.failCommits = true
+
+        assertFalse(state.completeSignOut("member-a"))
+
+        assertEquals("member-a", state.memberKey)
+        assertTrue(state.signOutPending)
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals("member-a", reconstructed.memberKey)
+        assertTrue(reconstructed.signOutPending)
     }
 
     @Test
@@ -478,13 +524,13 @@ class SharedPreferencesLocalStateTest {
         state.initialSetupStep = InitialSetupStep.FriendlyNames
         preferences.failCommits = true
 
-        assertFalse(state.beginSignOut())
+        assertFalse(state.beginSignOut(state.memberKey))
         assertEquals(11, state.addressBookRevision)
         assertEquals(deletion, state.pendingAddressBookDeletion)
         assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
 
         preferences.failCommits = false
-        assertTrue(state.beginSignOut())
+        assertTrue(state.beginSignOut(state.memberKey))
         assertTrue(state.signOutPending)
         assertNull(state.addressBookRevision)
         assertNull(state.pendingAddressBookReplacement)
