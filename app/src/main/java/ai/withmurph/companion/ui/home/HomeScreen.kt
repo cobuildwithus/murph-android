@@ -15,19 +15,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,6 +35,9 @@ import androidx.compose.ui.unit.dp
 import java.time.Duration
 import java.time.Instant
 
+internal fun homeShowsHealthStatus(initialSetupStep: InitialSetupStep): Boolean =
+    initialSetupStep != InitialSetupStep.HealthConnect
+
 @Composable
 fun HomeScreen(
     state: AppUiState,
@@ -46,9 +45,6 @@ fun HomeScreen(
     onOpenHealthConnect: () -> Unit,
     onDeferHealthSetup: () -> Unit,
     onSyncNow: () -> Unit,
-    onShareAddressBookFromSetup: () -> Unit,
-    onAddressBookSetupSecondaryAction: () -> Unit,
-    onOpenAppSettings: () -> Unit,
     reserveStatusBarInset: Boolean = true,
 ) {
     Box(
@@ -56,31 +52,18 @@ fun HomeScreen(
             .fillMaxSize()
             .background(MurphColors.Cream)
             .then(if (reserveStatusBarInset) Modifier.statusBarsPadding() else Modifier)
-            .then(
-                if (state.initialSetupStep != InitialSetupStep.Complete) {
-                    Modifier.navigationBarsPadding()
-                } else {
-                    Modifier
-                },
-            )
             .padding(24.dp),
     ) {
-        when (state.initialSetupStep) {
-            InitialSetupStep.HealthConnect -> InitialHealthSetupContent(
+        if (!homeShowsHealthStatus(state.initialSetupStep)) {
+            InitialHealthSetupContent(
                 state = state,
                 onConnectHealth = onConnectHealth,
                 onOpenHealthConnect = onOpenHealthConnect,
                 onNotNow = onDeferHealthSetup,
                 modifier = Modifier.align(Alignment.Center),
             )
-            InitialSetupStep.FriendlyNames -> FriendlyNamesSetupContent(
-                state = state,
-                onShare = onShareAddressBookFromSetup,
-                onNotNow = onAddressBookSetupSecondaryAction,
-                onOpenAppSettings = onOpenAppSettings,
-                modifier = Modifier.align(Alignment.Center),
-            )
-            InitialSetupStep.Complete -> when (state.healthSync) {
+        } else {
+            when (state.healthSync) {
                 HealthSyncState.NotConnected -> NotConnectedStatusContent(
                     state = state,
                     onConnectHealth = onConnectHealth,
@@ -212,127 +195,6 @@ private fun InitialHealthSetupContent(
                 textAlign = TextAlign.Center,
             )
         }
-    }
-}
-
-@Composable
-private fun FriendlyNamesSetupContent(
-    state: AppUiState,
-    onShare: () -> Unit,
-    onNotNow: () -> Unit,
-    onOpenAppSettings: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val isWorking = state.isAddressBookBusy
-    Column(
-        modifier = modifier
-            .widthIn(max = 520.dp)
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
-        horizontalAlignment = Alignment.Start,
-    ) {
-        Text(
-            text = "FRIENDLY NAMES · 2 OF 2",
-            style = MaterialTheme.typography.labelMedium,
-            color = MurphColors.SlateMuted,
-        )
-        MurphIcon(
-            kind = MurphIconKind.People,
-            modifier = Modifier.size(42.dp),
-            contentDescription = null,
-        )
-        Text(
-            text = "Murph can know who's in the chat.",
-            modifier = Modifier.semantics { heading() },
-            style = MaterialTheme.typography.headlineLarge,
-            color = MurphColors.Slate,
-        )
-        Text(
-            text = "Share your contacts so Murph can tell who's who when you start a group chat with friends.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MurphColors.SlateMuted,
-        )
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            color = MurphColors.SelectedSurface,
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                SetupAssuranceRow(
-                    icon = MurphIconKind.PersonaChat,
-                    text = "No invitations or automatic messages",
-                )
-                SetupAssuranceRow(
-                    icon = MurphIconKind.Lock,
-                    text = "Phone numbers aren't stored in readable form",
-                )
-                SetupAssuranceRow(
-                    icon = MurphIconKind.People,
-                    text = "Names may appear in group replies others can see",
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            MurphPrimaryButton(
-                text = when {
-                    state.contactsPermissionDenied -> "Open Android Settings"
-                    isWorking -> "Sharing…"
-                    else -> "Share contacts"
-                },
-                onClick = if (state.contactsPermissionDenied) onOpenAppSettings else onShare,
-                enabled = !isWorking,
-            )
-            MurphLinkButton(
-                text = if (state.addressBookHasInterruptedReplacement) {
-                    "Stop and delete"
-                } else {
-                    "Not now"
-                },
-                onClick = onNotNow,
-                enabled = !isWorking && state.launchConsentRecovery == null,
-            )
-        }
-
-        state.addressBookMessage?.let { message ->
-            Text(
-                text = message,
-                modifier = Modifier.fillMaxWidth(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MurphColors.SlateMuted,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SetupAssuranceRow(icon: MurphIconKind, text: String) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        MurphIcon(
-            kind = icon,
-            modifier = Modifier.size(20.dp),
-            tint = MurphColors.Slate,
-            contentDescription = null,
-        )
-        Text(
-            text = text,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall,
-            color = MurphColors.Slate,
-        )
     }
 }
 

@@ -47,8 +47,8 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
-            .verticalScroll(rememberScrollState())
             .then(if (reserveStatusBarInset) Modifier.statusBarsPadding() else Modifier)
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
@@ -60,7 +60,7 @@ fun SettingsScreen(
 
         Section(
             title = "Address book",
-            footer = "Friendly labels only — not identity proof. Murph sends no invitations or messages, does not store phone numbers in readable form, and may use a name in group replies that other participants can see. Contacts are read only when you choose Share, Update, or Retry — never in the background.",
+            footer = "Optional labels for group chats. Murph never messages contacts or stores readable phone numbers.",
         ) {
             SettingsRow(
                 title = "Familiar group names",

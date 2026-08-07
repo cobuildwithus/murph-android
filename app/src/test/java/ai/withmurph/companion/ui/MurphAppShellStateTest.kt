@@ -2,6 +2,7 @@ package ai.withmurph.companion.ui
 
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.ui.home.homeShowsHealthStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -49,8 +50,8 @@ class MurphAppShellStateTest {
         )
 
         assertEquals(AppTab.Home, shell.activeTab)
-        assertTrue(shell.showsTabBar)
         assertTrue(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
     }
 
     @Test
@@ -62,8 +63,8 @@ class MurphAppShellStateTest {
         )
 
         assertEquals(AppTab.Settings, shell.activeTab)
-        assertTrue(shell.showsTabBar)
         assertFalse(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
     }
 
     @Test
@@ -75,8 +76,8 @@ class MurphAppShellStateTest {
         )
 
         assertEquals(AppTab.Home, shell.activeTab)
-        assertTrue(shell.showsTabBar)
         assertTrue(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
     }
 
     @Test
@@ -88,20 +89,54 @@ class MurphAppShellStateTest {
         )
 
         assertEquals(AppTab.Settings, shell.activeTab)
-        assertTrue(shell.showsTabBar)
         assertFalse(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
     }
 
     @Test
-    fun friendlyNamesWithoutReconnectRemainsHomeOnlyAndTabless() {
+    fun everySetupStepKeepsSettingsReachable() {
+        InitialSetupStep.entries.forEach { step ->
+            val shell = readyAppShellState(
+                selectedTab = AppTab.Settings,
+                initialSetupStep = step,
+                healthReconnectRequired = false,
+            )
+
+            assertEquals(step.name, AppTab.Settings, shell.activeTab)
+            assertFalse(step.name, shell.showsReconnect)
+            assertFalse(step.name, shell.showsFriendlyNamesSetup)
+        }
+    }
+
+    @Test
+    fun friendlyNamesUsesAnOptionalBannerOverHealthStatusOnHome() {
         val shell = readyAppShellState(
-            selectedTab = AppTab.Settings,
+            selectedTab = AppTab.Home,
             initialSetupStep = InitialSetupStep.FriendlyNames,
             healthReconnectRequired = false,
         )
 
         assertEquals(AppTab.Home, shell.activeTab)
-        assertFalse(shell.showsTabBar)
         assertFalse(shell.showsReconnect)
+        assertTrue(shell.showsFriendlyNamesSetup)
+    }
+
+    @Test
+    fun friendlyNamesBannerWaitsUntilInitialOnboardingFinishes() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+            hasInitialOnboarding = true,
+        )
+
+        assertFalse(shell.showsFriendlyNamesSetup)
+    }
+
+    @Test
+    fun onlyHealthSetupReplacesHomeStatus() {
+        assertFalse(homeShowsHealthStatus(InitialSetupStep.HealthConnect))
+        assertTrue(homeShowsHealthStatus(InitialSetupStep.FriendlyNames))
+        assertTrue(homeShowsHealthStatus(InitialSetupStep.Complete))
     }
 }

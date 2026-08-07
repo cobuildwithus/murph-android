@@ -73,6 +73,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -93,8 +94,8 @@ private enum class AddressBookConsentAction {
 
 internal data class ReadyAppShellState(
     val activeTab: AppTab,
-    val showsTabBar: Boolean,
     val showsReconnect: Boolean,
+    val showsFriendlyNamesSetup: Boolean,
 )
 
 internal data class FailureExternalAction(
@@ -123,14 +124,16 @@ internal fun readyAppShellState(
     selectedTab: AppTab,
     initialSetupStep: InitialSetupStep,
     healthReconnectRequired: Boolean,
+    hasInitialOnboarding: Boolean = false,
 ): ReadyAppShellState {
-    val navigationAvailable =
-        initialSetupStep == InitialSetupStep.Complete || healthReconnectRequired
-    val activeTab = if (navigationAvailable) selectedTab else AppTab.Home
     return ReadyAppShellState(
-        activeTab = activeTab,
-        showsTabBar = navigationAvailable,
-        showsReconnect = healthReconnectRequired && activeTab == AppTab.Home,
+        activeTab = selectedTab,
+        showsReconnect = healthReconnectRequired && selectedTab == AppTab.Home,
+        showsFriendlyNamesSetup =
+            initialSetupStep == InitialSetupStep.FriendlyNames &&
+                !healthReconnectRequired &&
+                !hasInitialOnboarding &&
+                selectedTab == AppTab.Home,
     )
 }
 
@@ -139,6 +142,7 @@ fun MurphApp(
     appState: AppUiState,
     loginState: LoginUiState,
     actions: MurphActions,
+    initialOnboardingContactAvatarPainters: Map<String, Painter> = emptyMap(),
 ) {
     when (val phase = appState.phase) {
         AppPhase.Launching -> LoadingScreen()
@@ -155,15 +159,11 @@ fun MurphApp(
             onOpenPrivacy = actions.onOpenPrivacy,
             onOpenTerms = actions.onOpenTerms,
         )
-        AppPhase.Ready -> if (
-            appState.initialOnboarding != null &&
-            appState.launchConsentRecovery == null &&
-            !appState.healthReconnectRequired
-        ) {
-            InitialOnboardingScreen(appState, actions)
-        } else {
-            ReadyApp(appState, actions)
-        }
+        AppPhase.Ready -> ReadyApp(
+            state = appState,
+            actions = actions,
+            initialOnboardingContactAvatarPainters = initialOnboardingContactAvatarPainters,
+        )
         is AppPhase.Failed -> FailureScreen(phase, actions)
     }
 }
@@ -173,6 +173,7 @@ fun MurphApp(
 private fun ReadyApp(
     state: AppUiState,
     actions: MurphActions,
+    initialOnboardingContactAvatarPainters: Map<String, Painter>,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Home) }
     var showsHealthConsent by rememberSaveable { mutableStateOf(false) }
@@ -185,12 +186,9 @@ private fun ReadyApp(
         selectedTab = selectedTab,
         initialSetupStep = state.initialSetupStep,
         healthReconnectRequired = state.healthReconnectRequired,
+        hasInitialOnboarding = state.initialOnboarding != null,
     )
     val bannerRecovery = state.launchConsentRecovery?.takeIf { !it.showSheet }
-
-    LaunchedEffect(shellState.showsTabBar) {
-        if (!shellState.showsTabBar) selectedTab = AppTab.Home
-    }
 
     LaunchedEffect(showsHealthConsent, connectAfterConsent) {
         if (!showsHealthConsent && connectAfterConsent) {
@@ -237,12 +235,10 @@ private fun ReadyApp(
         containerColor = MurphColors.Cream,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            if (shellState.showsTabBar) {
-                MurphTabBar(
-                    selectedTab = selectedTab,
-                    onSelect = { selectedTab = it },
-                )
-            }
+            MurphTabBar(
+                selectedTab = selectedTab,
+                onSelect = { selectedTab = it },
+            )
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -251,6 +247,31 @@ private fun ReadyApp(
                     recovery = recovery,
                     onOpen = actions.onShowLaunchConsent,
                     modifier = Modifier.statusBarsPadding(),
+                )
+            }
+            if (shellState.showsFriendlyNamesSetup) {
+                FriendlyNamesSetupBanner(
+                    state = state,
+                    onSetUp = {
+                        if (state.contactsPermissionDenied) {
+                            actions.onOpenAppSettings()
+                        } else if (state.launchConsentRecovery == null) {
+                            addressBookConsentAction = AddressBookConsentAction.InitialSetup
+                            showsAddressBookConsent = true
+                        } else {
+                            actions.onShowLaunchConsent()
+                        }
+                    },
+                    onSecondaryAction = if (state.addressBookHasInterruptedReplacement) {
+                        actions.onStopAddressBook
+                    } else {
+                        actions.onDeferAddressBookSharingInitialSetup
+                    },
+                    modifier = if (bannerRecovery == null) {
+                        Modifier.statusBarsPadding()
+                    } else {
+                        Modifier
+                    },
                 )
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -271,43 +292,39 @@ private fun ReadyApp(
                     )
                 } else {
                     when (shellState.activeTab) {
-                        AppTab.Home -> HomeScreen(
-                            state = state,
-                            onConnectHealth = {
-                                if (state.launchConsentRecovery == null) {
-                                    showsHealthConsent = true
-                                } else {
-                                    actions.onShowLaunchConsent()
-                                }
-                            },
-                            onOpenHealthConnect = actions.onOpenHealthConnect,
-                            onDeferHealthSetup = actions.onDeferHealthConnectInitialSetup,
-                            onSyncNow = {
-                                if (state.launchConsentRecovery == null) {
-                                    actions.onSyncNow()
-                                } else {
-                                    actions.onShowLaunchConsent()
-                                }
-                            },
-                            onShareAddressBookFromSetup = {
-                                if (state.launchConsentRecovery == null) {
-                                    addressBookConsentAction =
-                                        AddressBookConsentAction.InitialSetup
-                                    showsAddressBookConsent = true
-                                } else {
-                                    actions.onShowLaunchConsent()
-                                }
-                            },
-                            onAddressBookSetupSecondaryAction = if (
-                                state.addressBookHasInterruptedReplacement
-                            ) {
-                                actions.onStopAddressBook
-                            } else {
-                                actions.onDeferAddressBookSharingInitialSetup
-                            },
-                            onOpenAppSettings = actions.onOpenAppSettings,
-                            reserveStatusBarInset = bannerRecovery == null,
-                        )
+                        AppTab.Home -> if (
+                            state.initialOnboarding != null &&
+                            state.launchConsentRecovery == null
+                        ) {
+                            InitialOnboardingScreen(
+                                state = state,
+                                actions = actions,
+                                contactAvatarPainters = initialOnboardingContactAvatarPainters,
+                            )
+                        } else {
+                            HomeScreen(
+                                state = state,
+                                onConnectHealth = {
+                                    if (state.launchConsentRecovery == null) {
+                                        showsHealthConsent = true
+                                    } else {
+                                        actions.onShowLaunchConsent()
+                                    }
+                                },
+                                onOpenHealthConnect = actions.onOpenHealthConnect,
+                                onDeferHealthSetup = actions.onDeferHealthConnectInitialSetup,
+                                onSyncNow = {
+                                    if (state.launchConsentRecovery == null) {
+                                        actions.onSyncNow()
+                                    } else {
+                                        actions.onShowLaunchConsent()
+                                    }
+                                },
+                                reserveStatusBarInset =
+                                    bannerRecovery == null &&
+                                        !shellState.showsFriendlyNamesSetup,
+                            )
+                        }
                         AppTab.Settings -> SettingsScreen(
                             state = state,
                             onShareAddressBook = {
@@ -529,6 +546,87 @@ private fun LaunchConsentBanner(
                     text = "Review",
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                     color = MurphColors.SageDark,
+                )
+            }
+            HorizontalDivider(color = MurphColors.BorderWarm)
+        }
+    }
+}
+
+@Composable
+private fun FriendlyNamesSetupBanner(
+    state: AppUiState,
+    onSetUp: () -> Unit,
+    onSecondaryAction: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MurphColors.Card,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MurphIcon(
+                    kind = MurphIconKind.People,
+                    modifier = Modifier.size(24.dp),
+                    contentDescription = null,
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "Friendly Names are optional",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MurphColors.Slate,
+                    )
+                    Text(
+                        text = if (state.addressBookHasInterruptedReplacement) {
+                            "A previous update needs attention."
+                        } else {
+                            "Add familiar labels for group chats."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MurphColors.SlateMuted,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MurphLinkButton(
+                    text = if (state.addressBookHasInterruptedReplacement) {
+                        "Stop and delete"
+                    } else {
+                        "Not now"
+                    },
+                    onClick = onSecondaryAction,
+                    enabled = !state.isAddressBookBusy && state.launchConsentRecovery == null,
+                )
+                MurphLinkButton(
+                    text = when {
+                        state.contactsPermissionDenied -> "Open settings"
+                        state.isAddressBookBusy -> "Working…"
+                        state.addressBookHasInterruptedReplacement -> "Retry"
+                        else -> "Set up"
+                    },
+                    onClick = onSetUp,
+                    enabled = !state.isAddressBookBusy,
+                )
+            }
+            state.addressBookMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MurphColors.SlateMuted,
                 )
             }
             HorizontalDivider(color = MurphColors.BorderWarm)

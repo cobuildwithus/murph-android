@@ -32,7 +32,6 @@ import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
-import ai.withmurph.companion.ui.onboarding.InitialOnboardingScreen
 import ai.withmurph.companion.ui.theme.MurphTheme
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -52,19 +51,12 @@ class ScreenshotActivity : ComponentActivity() {
         setContent {
             MurphTheme {
                 val appState = scenario.appState(now)
-                if (scenario.isInitialOnboarding()) {
-                    InitialOnboardingScreen(
-                        state = appState,
-                        actions = NoOpActions,
-                        contactAvatarPainters = screenshotAvatarPainters(),
-                    )
-                } else {
-                    MurphApp(
-                        appState = appState,
-                        loginState = scenario.loginState(),
-                        actions = NoOpActions,
-                    )
-                }
+                MurphApp(
+                    appState = appState,
+                    loginState = scenario.loginState(),
+                    actions = NoOpActions,
+                    initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
+                )
             }
         }
     }
