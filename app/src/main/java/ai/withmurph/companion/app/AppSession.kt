@@ -2216,31 +2216,34 @@ class AppSession(
             claim.sessionEpoch == sessionEpoch
 
     suspend fun signOut() = withContext(NonCancellable) {
-        val authState = try {
-            auth.currentState()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            AuthSessionState.TemporarilyUnavailable
-        }
-        if (authState == AuthSessionState.TemporarilyUnavailable) {
-            _state.update {
-                it.copy(
-                    phase = AppPhase.Failed(
-                        message = "We couldn't verify which account to sign out. Check your connection and try again.",
-                        canRetry = false,
-                        canSignOut = true,
-                    ),
-                )
-            }
-            return@withContext
-        }
         val expectedMemberKey = localState.memberKey
+        val mountedMemberKey = currentMemberKey?.takeIf { it == expectedMemberKey }
+        val privySignOutMemberKey = mountedMemberKey ?: run {
+            val authState = try {
+                auth.currentState()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                AuthSessionState.TemporarilyUnavailable
+            }
+            if (authState == AuthSessionState.TemporarilyUnavailable) {
+                _state.update {
+                    it.copy(
+                        phase = AppPhase.Failed(
+                            message = "We couldn't verify which account to sign out. Check your connection and try again.",
+                            canRetry = false,
+                            canSignOut = true,
+                        ),
+                    )
+                }
+                return@withContext
+            }
+            (authState as? AuthSessionState.SignedIn)?.memberKey
+        }
         if (
             !localState.beginSignOut(
                 expectedMemberKey = expectedMemberKey,
-                privySignOutMemberKey =
-                    (authState as? AuthSessionState.SignedIn)?.memberKey,
+                privySignOutMemberKey = privySignOutMemberKey,
             )
         ) {
             _state.update {
