@@ -44,7 +44,6 @@ fun HomeScreen(
     state: AppUiState,
     onConnectHealth: () -> Unit,
     onOpenHealthConnect: () -> Unit,
-    onShowWhoopGuide: () -> Unit,
     onDeferHealthSetup: () -> Unit,
     onSyncNow: () -> Unit,
     onShareAddressBookFromSetup: () -> Unit,
@@ -71,7 +70,6 @@ fun HomeScreen(
                 state = state,
                 onConnectHealth = onConnectHealth,
                 onOpenHealthConnect = onOpenHealthConnect,
-                onShowWhoopGuide = onShowWhoopGuide,
                 onNotNow = onDeferHealthSetup,
                 modifier = Modifier.align(Alignment.Center),
             )
@@ -87,7 +85,6 @@ fun HomeScreen(
                     state = state,
                     onConnectHealth = onConnectHealth,
                     onOpenHealthConnect = onOpenHealthConnect,
-                    onShowWhoopGuide = onShowWhoopGuide,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> SyncStatusContent(
@@ -105,7 +102,6 @@ private fun InitialHealthSetupContent(
     state: AppUiState,
     onConnectHealth: () -> Unit,
     onOpenHealthConnect: () -> Unit,
-    onShowWhoopGuide: () -> Unit,
     onNotNow: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -205,13 +201,6 @@ private fun InitialHealthSetupContent(
                 onClick = onNotNow,
                 enabled = !state.isConnectingHealth && state.launchConsentRecovery == null,
             )
-            if (state.healthAvailability == HealthConnectAvailability.Available) {
-                MurphLinkButton(
-                    text = "Set up WHOOP first",
-                    onClick = onShowWhoopGuide,
-                    enabled = !state.isConnectingHealth,
-                )
-            }
         }
 
         if (state.healthMessage != null) {
@@ -352,7 +341,6 @@ private fun NotConnectedStatusContent(
     state: AppUiState,
     onConnectHealth: () -> Unit,
     onOpenHealthConnect: () -> Unit,
-    onShowWhoopGuide: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val title = when (state.healthAvailability) {
@@ -419,13 +407,6 @@ private fun NotConnectedStatusContent(
             )
             HealthConnectAvailability.AppNotAllowed,
             HealthConnectAvailability.Unsupported -> Unit
-        }
-        if (state.healthAvailability == HealthConnectAvailability.Available) {
-            MurphLinkButton(
-                text = "Set up WHOOP first",
-                onClick = onShowWhoopGuide,
-                enabled = !state.isConnectingHealth,
-            )
         }
         state.healthMessage?.let { message ->
             Text(
@@ -523,11 +504,11 @@ private fun SyncStatusContent(
             MurphCard {
                 GuidanceRow(
                     number = "1",
-                    text = "Open Health Connect → App permissions → Murph, and confirm the categories you chose.",
+                    text = "Check Murph's permissions in Health Connect.",
                 )
                 GuidanceRow(
                     number = "2",
-                    text = "Open WHOOP and confirm it is still sharing data with Health Connect.",
+                    text = "Check that your health apps are still sharing with Health Connect.",
                 )
             }
             if (sync.lastDataReceivedAt != null) {

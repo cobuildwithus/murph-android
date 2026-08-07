@@ -13,7 +13,7 @@ The repository has three independent hosted checks:
   Candidate code is inspected as data only in the privileged workflow.
 
 These checks complement local verification. They do not replace physical
-Health Connect, WHOOP, Contacts, or OEM-device proof.
+Health Connect, connected health apps, Contacts, or OEM-device proof.
 
 ## Exact-head PR review
 

@@ -39,8 +39,8 @@ ui/        Compose surfaces and Murph theme
 ## Data flow
 
 ```text
-WHOOP → Health Connect → Junction Android SDK → Junction webhooks → Murph device-sync pipeline
-                                                               ↘ backend receipt ledger
+Health apps → Health Connect → Junction Android SDK → Junction webhooks → Murph device-sync pipeline
+                                                                     ↘ backend receipt ledger
 Android UI ← source-scoped companion status endpoint ←───────────┘
 
 Explicit Share/Update → Android Contacts edge → bounded pure projection

@@ -48,7 +48,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -178,7 +177,6 @@ private fun ReadyApp(
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Home) }
     var showsHealthConsent by rememberSaveable { mutableStateOf(false) }
     var showsAddressBookConsent by rememberSaveable { mutableStateOf(false) }
-    var showsWhoopGuide by rememberSaveable { mutableStateOf(false) }
     var connectAfterConsent by rememberSaveable { mutableStateOf(false) }
     var addressBookConsentAction by rememberSaveable {
         mutableStateOf<AddressBookConsentAction?>(null)
@@ -221,7 +219,6 @@ private fun ReadyApp(
         if (state.healthReconnectRequired) {
             showsHealthConsent = false
             showsAddressBookConsent = false
-            showsWhoopGuide = false
             connectAfterConsent = false
             addressBookConsentAction = null
         }
@@ -230,7 +227,6 @@ private fun ReadyApp(
         if (state.launchConsentRecovery != null) {
             showsHealthConsent = false
             showsAddressBookConsent = false
-            showsWhoopGuide = false
             connectAfterConsent = false
             addressBookConsentAction = null
         }
@@ -285,13 +281,6 @@ private fun ReadyApp(
                                 }
                             },
                             onOpenHealthConnect = actions.onOpenHealthConnect,
-                            onShowWhoopGuide = {
-                                if (state.launchConsentRecovery == null) {
-                                    showsWhoopGuide = true
-                                } else {
-                                    actions.onShowLaunchConsent()
-                                }
-                            },
                             onDeferHealthSetup = actions.onDeferHealthConnectInitialSetup,
                             onSyncNow = {
                                 if (state.launchConsentRecovery == null) {
@@ -419,22 +408,6 @@ private fun ReadyApp(
         }
     }
 
-    if (showsWhoopGuide && state.launchConsentRecovery == null) {
-        ModalBottomSheet(
-            onDismissRequest = { showsWhoopGuide = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = MurphColors.Cream,
-            dragHandle = { MurphSheetHandle() },
-        ) {
-            WhoopGuideContent(
-                onOpenHealthConnect = {
-                    showsWhoopGuide = false
-                    actions.onOpenHealthConnect()
-                },
-                onBack = { showsWhoopGuide = false },
-            )
-        }
-    }
 }
 
 @Composable
@@ -1086,7 +1059,7 @@ private fun AddressBookConsentContent(onContinue: () -> Unit) {
                 color = MurphColors.Slate,
             )
             Text(
-                text = "Optional friendly labels, not identity proof.",
+                text = "Optional",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MurphColors.SlateMuted,
             )
@@ -1095,19 +1068,15 @@ private fun AddressBookConsentContent(onContinue: () -> Unit) {
         MurphCard {
             ConsentRow(
                 icon = MurphIconKind.Checklist,
-                text = "Android asks for Contacts access only after you continue. Murph reads given and family names and checks phone values for this update only — never in the background. Only explicit international numbers can be included.",
+                text = "Murph can use first names and last initials in group replies that others can see.",
             )
             ConsentRow(
                 icon = MurphIconKind.Shield,
-                text = "Murph sends no invitations or messages, and phone numbers are not stored in readable form.",
-            )
-            ConsentRow(
-                icon = MurphIconKind.Sparkles,
-                text = "A first name and optional last initial may appear in group replies that other participants can see.",
+                text = "Murph never messages your contacts or stores phone numbers in readable form.",
             )
             ConsentRow(
                 icon = MurphIconKind.Trash,
-                text = "Stop and delete removes the server projection.",
+                text = "You can stop sharing and delete these names at any time.",
             )
         }
 
@@ -1138,117 +1107,6 @@ private fun ConsentRow(
             style = MaterialTheme.typography.bodyMedium,
             color = MurphColors.SlateMuted,
         )
-    }
-}
-
-@Composable
-private fun WhoopGuideContent(
-    onOpenHealthConnect: () -> Unit,
-    onBack: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            MurphIcon(
-                kind = MurphIconKind.Refresh,
-                modifier = Modifier.size(40.dp),
-                contentDescription = null,
-            )
-            Text(
-                text = "Share WHOOP with Health Connect",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontSize = 28.sp,
-                    lineHeight = 33.sp,
-                ),
-                color = MurphColors.Slate,
-            )
-            Text(
-                text = "Set up the relay once, then return to Murph.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MurphColors.SlateMuted,
-            )
-        }
-
-        MurphCard {
-            WhoopStep(
-                number = "1",
-                title = "Open WHOOP",
-                detail = "Go to More → App Settings → Integrations.",
-            )
-            WhoopStep(
-                number = "2",
-                title = "Choose Health Connect",
-                detail = "Turn on the categories you want WHOOP to share.",
-            )
-            WhoopStep(
-                number = "3",
-                title = "Return to Murph",
-                detail = "Connect Health Connect and approve the same categories.",
-            )
-        }
-
-        Text(
-            text = "WHOOP decides which fields it writes. Murph can sync only data that appears in Health Connect.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MurphColors.SlateMuted,
-        )
-
-        MurphPrimaryButton(
-            text = "Open Health Connect",
-            onClick = onOpenHealthConnect,
-        )
-        MurphLinkButton(
-            text = "Back",
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-    }
-}
-
-@Composable
-private fun WhoopStep(
-    number: String,
-    title: String,
-    detail: String,
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(30.dp)
-                .clip(CircleShape)
-                .background(MurphColors.MutedSurface),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = number,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MurphColors.SageDark,
-            )
-        }
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MurphColors.Slate,
-            )
-            Text(
-                text = detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MurphColors.SlateMuted,
-            )
-        }
     }
 }
 

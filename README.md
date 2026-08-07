@@ -15,7 +15,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
-- WHOOP → Health Connect setup guidance.
+- Provider-neutral Health Connect setup and recovery guidance.
 - Optional, server-backed familiar-name projection for unregistered phone participants in groups.
 - Settings, legal links, deletion, support, and sign-out.
 - No local health/contact database and no token, health-value, contact-value, or provider-response logging.
@@ -24,7 +24,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 
 - Automatic meal-photo capture and a Meals tab.
 - Chat, vault browsing, challenges, or a general Murph client.
-- Direct WHOOP OAuth.
+- Direct wearable-provider OAuth.
 - Samsung Health support before the Health Connect path is proven.
 - Contact backup, continuous/background contact sync, invitations, messaging,
   identity proof, signup prefill, or contact-derived routing authority.
@@ -98,7 +98,7 @@ Run its contract tests locally with:
 node --test scripts/check-android-visual-proof.test.mjs
 ```
 
-Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real WHOOP account.
+Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real connected health source.
 
 ## ReviewGPT
 
@@ -131,7 +131,7 @@ setOf(
 )
 ```
 
-This deliberately covers only the first WHOOP bridge use case: sleep, workouts, steps, and active calories.
+This deliberately covers only the first Health Connect bridge use case: sleep, workouts, steps, and active calories.
 
 The manifest declares only the four corresponding Health Connect read permissions. Users still choose each category in the Health Connect system UI. Denied categories remain unavailable and do not block categories the user approved.
 
@@ -232,7 +232,7 @@ Before a Play release:
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
 4. Review the merged manifest and prove Junction's boot receiver and exact-alarm service remain removed.
 5. Verify foreground sync and its notification behavior on Android 13–16.
-6. Verify WHOOP actually exports each product-critical field. Murph cannot manufacture fields WHOOP does not write.
+6. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
 7. Verify Contacts grant, denial, permanent denial, app-settings recovery,
    permission revocation cleanup, compare-and-swap conflict handling, and Stop
    deletion on at least one Pixel and one Samsung device.

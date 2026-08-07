@@ -689,8 +689,6 @@ private fun VoiceSection(
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .clip(CircleShape)
-                            .background(MurphColors.Sage.copy(alpha = 0.12f))
                             .clickable(role = Role.Button) { onPreview(voice) }
                             .semantics {
                                 contentDescription = if (isPreviewing) {
@@ -703,17 +701,29 @@ private fun VoiceSection(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = MurphColors.SageDark,
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            MurphIcon(
-                                kind = if (isPreviewing) MurphIconKind.Pause else MurphIconKind.Play,
-                                modifier = Modifier.size(18.dp),
-                            )
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(MurphColors.Sage.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = MurphColors.SageDark,
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                MurphIcon(
+                                    kind = if (isPreviewing) {
+                                        MurphIconKind.Pause
+                                    } else {
+                                        MurphIconKind.Play
+                                    },
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
                         }
                     }
                 }
