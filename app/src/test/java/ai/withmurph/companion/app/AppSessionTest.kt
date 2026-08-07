@@ -5733,9 +5733,12 @@ class AppSessionTest {
 
         val signOut = async { fixture.session.signOut() }
         fixture.health.signOutEntered.await()
-        assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
-        fixture.auth.state = AuthSessionState.SignedIn("member-b", verifiedOnline = true)
-        teardownGate.complete(Unit)
+        try {
+            assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
+            fixture.auth.state = AuthSessionState.SignedIn("member-b", verifiedOnline = true)
+        } finally {
+            teardownGate.complete(Unit)
+        }
         signOut.await()
 
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
@@ -5808,27 +5811,27 @@ class AppSessionTest {
     }
 
     @Test
-    fun signOutBoundaryStopsStatusAndSyncAfterBlockedAuthCheck() = runTest {
+    fun signOutWaitsForBlockedAuthCheckBeforeWritingTheBoundary() = runTest {
         val fixture = completedHealthFixture()
-        val statusCount = fixture.api.statusSources.size
-        val syncCount = fixture.health.syncCalls
+        val healthSignOutCalls = fixture.health.signOutCalls
         val authGate = CompletableDeferred<Unit>()
+        fixture.auth.currentStateEntered = CompletableDeferred()
         fixture.auth.currentStateGate = authGate
-        val sync = launch { fixture.session.syncNow() }
-        runCurrent()
-        assertTrue(fixture.session.state.value.isSyncingHealth)
 
         val signOut = launch { fixture.session.signOut() }
-        runCurrent()
-        assertTrue(fixture.localState.signOutPending)
-        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
+        fixture.auth.currentStateEntered.await()
 
-        authGate.complete(Unit)
-        sync.join()
+        try {
+            assertFalse(signOut.isCompleted)
+            assertFalse(fixture.localState.signOutPending)
+            assertNull(fixture.localState.pendingPrivySignOutMemberKey)
+            assertEquals(healthSignOutCalls, fixture.health.signOutCalls)
+            assertEquals(0, fixture.auth.signOutCalls)
+        } finally {
+            authGate.complete(Unit)
+        }
         signOut.join()
 
-        assertEquals(statusCount, fixture.api.statusSources.size)
-        assertEquals(syncCount, fixture.health.syncCalls)
         assertFalse(fixture.localState.signOutPending)
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
     }
