@@ -1328,6 +1328,7 @@ class AppSession(
                     healthMessage = null,
                 )
             }
+            var recoveredAuthState: AuthSessionState? = null
             val automaticMemberReset = pendingAutomaticMemberReset
             if (automaticMemberReset != null) {
                 if (!resetMemberAtTrustBoundary(automaticMemberReset)) {
@@ -1335,11 +1336,13 @@ class AppSession(
                     return@withLock
                 }
             } else if (localState.signOutPending) {
-                finishPendingSignOut()
-                hasCompletedStartup = _state.value.phase != AppPhase.Launching
-                return@withLock
+                recoveredAuthState = finishPendingSignOut()
+                if (recoveredAuthState == null) {
+                    hasCompletedStartup = _state.value.phase != AppPhase.Launching
+                    return@withLock
+                }
             }
-            val authState = auth.currentState()
+            val authState = recoveredAuthState ?: auth.currentState()
             if (
                 acceptedConsentOwner != null &&
                 ownsAcceptedConsentContinuation(acceptedConsentOwner) &&
@@ -3006,8 +3009,8 @@ class AppSession(
             _state.value.authVerifiedOnline
 
     /** Called only while [startMutex] is held. */
-    private suspend fun finishPendingSignOut() {
-        if (!localState.signOutPending) return
+    private suspend fun finishPendingSignOut(): AuthSessionState? {
+        if (!localState.signOutPending) return null
         val expectedMemberKey = localState.memberKey
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
@@ -3019,29 +3022,55 @@ class AppSession(
             publishPendingSignOutFailure(
                 "We couldn't safely reset health sync. Keep Murph open and try again.",
             )
-            return
+            return null
         }
-        try {
-            auth.signOut()
+        val authState = try {
+            auth.currentState()
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            publishPendingSignOutFailure("We couldn't finish signing out. Try once more.")
-            return
+            AuthSessionState.TemporarilyUnavailable
+        }
+        if (authState == AuthSessionState.TemporarilyUnavailable) {
+            publishPendingSignOutFailure(
+                "We couldn't verify which account is signed in. Check your connection and try again.",
+            )
+            return null
+        }
+        if (
+            authState is AuthSessionState.SignedIn &&
+            authState.memberKey == expectedMemberKey
+        ) {
+            try {
+                auth.signOut()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                publishPendingSignOutFailure("We couldn't finish signing out. Try once more.")
+                return null
+            }
         }
         if (!localState.completeSignOut(expectedMemberKey)) {
             publishPendingSignOutFailure(
                 "We couldn't safely finish signing out. Keep Murph open and try again.",
             )
-            return
+            return null
         }
         pendingAutomaticMemberReset = null
         currentMemberKey = null
+        if (
+            authState is AuthSessionState.SignedIn &&
+            authState.memberKey != expectedMemberKey
+        ) {
+            clearInitialOnboardingState()
+            return authState
+        }
         _state.value = AppUiState(
             phase = AppPhase.NeedsLogin,
             healthAvailability = health.availability(),
             totalResourceCount = health.totalResourceCount,
         )
+        return null
     }
 
     private fun publishPendingSignOutFailure(message: String) {
@@ -3933,7 +3962,10 @@ class AppSession(
         closeProductAuthorityForBoundary()
         pendingAutomaticMemberReset = boundary
         invalidateSessionEpoch(acceptedConsentOwner)
-        localState.beginSignOut(boundary.expectedMemberKey)
+        if (!localState.beginSignOut(boundary.expectedMemberKey)) {
+            publishHealthResetFailure()
+            return false
+        }
         val sdkResetSucceeded = if (healthAlreadySignedOut) {
             true
         } else {

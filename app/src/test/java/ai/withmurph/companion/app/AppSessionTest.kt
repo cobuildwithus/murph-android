@@ -679,7 +679,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun terminalAdmissionStillTearsDownJunctionWhenBoundaryWriteFails() = runTest {
+    fun terminalAdmissionStopsBeforeJunctionWhenBoundaryWriteFails() = runTest {
         val fixture = fixture()
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(1)
@@ -690,11 +690,12 @@ class AppSessionTest {
         fixture.session.start()
 
         val failure = fixture.session.state.value.phase as AppPhase.Failed
-        assertFalse(failure.canRetry)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.healthAccessRequestedAt)
-        assertFalse(fixture.health.signedIn)
-        assertEquals(1, fixture.health.signOutCalls)
+        assertTrue(failure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(0, fixture.health.signOutCalls)
+        assertFalse(fixture.localState.signOutPending)
         assertNoPostAdmissionProductWork(fixture)
     }
 
@@ -729,6 +730,16 @@ class AppSessionTest {
         assertEquals(0, replacementHealth.syncCalls)
 
         replacementHealth.signOutError = null
+        val unavailableReplacement = recreatedSession(fixture, replacementHealth)
+        unavailableReplacement.start()
+
+        assertTrue(unavailableReplacement.state.value.phase is AppPhase.Failed)
+        assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(0, replacementHealth.syncCalls)
+        assertEquals(0, fixture.auth.signOutCalls)
+
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
         val recoveredReplacement = recreatedSession(fixture, replacementHealth)
         recoveredReplacement.start()
 
@@ -854,6 +865,16 @@ class AppSessionTest {
             assertEquals(0, replacementHealth.syncCalls)
 
             replacementHealth.signOutError = null
+            val unavailableReplacement = recreatedSession(fixture, replacementHealth)
+            unavailableReplacement.start()
+
+            assertTrue(unavailableReplacement.state.value.phase is AppPhase.Failed)
+            assertTrue(fixture.localState.signOutPending)
+            assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+            assertEquals(0, replacementHealth.syncCalls)
+            assertEquals(0, fixture.auth.signOutCalls)
+
+            fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
             val recoveredReplacement = recreatedSession(fixture, replacementHealth)
 
             recoveredReplacement.start()
@@ -868,7 +889,7 @@ class AppSessionTest {
         }
 
     @Test
-    fun accountConflictStillTearsDownJunctionWhenBoundaryWriteFails() = runTest {
+    fun accountConflictStopsBeforeJunctionWhenBoundaryWriteFails() = runTest {
         val fixture = completedHealthFixture()
         val signOutCalls = fixture.health.signOutCalls
         fixture.localState.beginSignOutSucceeds = false
@@ -877,11 +898,12 @@ class AppSessionTest {
         fixture.session.syncNow()
 
         val failure = fixture.session.state.value.phase as AppPhase.Failed
-        assertFalse(failure.canRetry)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.healthAccessRequestedAt)
-        assertFalse(fixture.health.signedIn)
-        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertTrue(failure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(signOutCalls, fixture.health.signOutCalls)
+        assertFalse(fixture.localState.signOutPending)
     }
 
     @Test
@@ -1777,7 +1799,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun terminalConsentBoundaryWriteFailureStillClosesProviderAcrossReconstruction() = runTest {
+    fun terminalConsentBoundaryWriteFailureStopsBeforeProviderTeardownUntilRetry() = runTest {
         val fixture = completedHealthFixture()
         fixture.api.statusError = CompanionApiException.ConsentRequired
         fixture.session.syncNow()
@@ -1789,27 +1811,21 @@ class AppSessionTest {
         fixture.session.acceptLaunchConsent()
 
         val failure = fixture.session.state.value.phase as AppPhase.Failed
-        assertFalse(failure.canRetry)
-        assertNull(fixture.localState.memberKey)
-        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertTrue(failure.canRetry)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertFalse(fixture.localState.signOutPending)
         assertFalse(fixture.health.signedIn)
-        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
-        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertEquals(signOutCalls, fixture.health.signOutCalls)
 
-        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
-        val replacementHealth = FakeHealth(fixture.events).apply {
-            grantedCount = totalResourceCount
-        }
-        val replacement = recreatedSession(fixture, replacementHealth)
+        fixture.localState.beginSignOutSucceeds = true
+        fixture.auth.state = AuthSessionState.SignedOut
+        fixture.session.retry()
 
-        replacement.start()
-
-        assertTrue(replacement.state.value.phase is AppPhase.Failed)
+        assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertNull(fixture.localState.memberKey)
-        assertFalse(replacementHealth.signedIn)
-        assertEquals(0, replacementHealth.identifyCalls)
-        assertEquals(0, replacementHealth.configureCalls)
-        assertEquals(0, replacementHealth.syncCalls)
+        assertFalse(fixture.localState.signOutPending)
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
     }
 
     @Test
@@ -3317,7 +3333,7 @@ class AppSessionTest {
         }
 
     @Test
-    fun changedMemberStillTearsDownJunctionWhenBoundaryWriteFails() = runTest {
+    fun changedMemberStopsBeforeJunctionUntilBoundaryWriteCanBeRetried() = runTest {
         val fixture = pendingOnboardingHealthFixture()
         val signOutCalls = fixture.health.signOutCalls
         fixture.localState.beginSignOutSucceeds = false
@@ -3328,17 +3344,36 @@ class AppSessionTest {
 
         fixture.session.syncNow()
 
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertEquals(InstantValue(1), fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(signOutCalls, fixture.health.signOutCalls)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertFalse(fixture.localState.signOutPending)
+        assertEquals(0, fixture.auth.signOutCalls)
+
+        fixture.localState.beginSignOutSucceeds = true
+        fixture.api.statusError = null
+        fixture.session.retry()
+
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
         assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
         assertEquals("member-b", fixture.localState.memberKey)
+        assertFalse(fixture.localState.signOutPending)
+        assertEquals(0, fixture.auth.signOutCalls)
     }
 
     @Test
     fun changedMemberRevokesHealthAuthorizationBeforeCancelableTeardownAndReconstruction() =
         runTest {
             val fixture = pendingOnboardingHealthFixture()
+            fixture.auth.state = AuthSessionState.SignedIn(
+                "member-b",
+                verifiedOnline = true,
+            )
             fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
                 AuthSessionState.SignedIn("member-b", verifiedOnline = true),
             )
@@ -3353,7 +3388,6 @@ class AppSessionTest {
             assertTrue(fixture.localState.signOutPending)
             sync.cancelAndJoin()
 
-            fixture.auth.state = AuthSessionState.TemporarilyUnavailable
             fixture.api.statusError = null
             val replacementHealth = FakeHealth(fixture.events).apply {
                 signedIn = true
@@ -3371,17 +3405,20 @@ class AppSessionTest {
             assertEquals(0, replacementHealth.syncCalls)
 
             replacementHealth.signOutError = null
+            fixture.events.clear()
+            fixture.auth.recordCurrentStateEvents = true
             val recoveredReplacement = recreatedSession(fixture, replacementHealth)
 
             recoveredReplacement.start()
 
-            assertEquals(AppPhase.NeedsLogin, recoveredReplacement.state.value.phase)
+            assertEquals(listOf("sign-out", "auth-state"), fixture.events.take(2))
+            assertEquals(AppPhase.Ready, recoveredReplacement.state.value.phase)
             assertFalse(fixture.localState.signOutPending)
-            assertNull(fixture.localState.memberKey)
+            assertEquals("member-b", fixture.localState.memberKey)
             assertFalse(replacementHealth.signedIn)
             assertNull(fixture.localState.healthAccessRequestedAt)
             assertEquals(0, replacementHealth.syncCalls)
-            assertEquals(1, fixture.auth.signOutCalls)
+            assertEquals(0, fixture.auth.signOutCalls)
         }
 
     @Test
@@ -5567,7 +5604,7 @@ class AppSessionTest {
         assertEquals(AppPhase.NeedsLogin, replacement.state.value.phase)
         assertEquals(tokenCount, fixture.api.intents.size)
         assertEquals(statusCount, fixture.api.statusSources.size)
-        assertEquals(authStateChecks, fixture.auth.currentStateCalls)
+        assertEquals(authStateChecks + 1, fixture.auth.currentStateCalls)
         assertEquals(0, replacementHealth.identifyCalls)
         assertEquals(0, replacementHealth.configureCalls)
         assertEquals(0, replacementHealth.syncCalls)
@@ -5579,6 +5616,46 @@ class AppSessionTest {
         start.join()
         signOut.join()
         assertEquals(0, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun reconstructedPendingSignOutCompletesLocallyWhenPrivyIsAlreadySignedOut() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        assertTrue(fixture.localState.beginSignOut(MEMBER_KEY))
+        fixture.auth.state = AuthSessionState.SignedOut
+        fixture.health.signedIn = true
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(AppPhase.NeedsLogin, replacement.state.value.phase)
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.memberKey)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertNoHealthOrBackendProductWork(fixture)
+    }
+
+    @Test
+    fun reconstructedPendingSignOutWaitsForPrivyOwnershipBeforeClearingTheFence() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        assertTrue(fixture.localState.beginSignOut(MEMBER_KEY))
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.health.signedIn = true
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertTrue(replacement.state.value.phase is AppPhase.Failed)
+        assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertNoHealthOrBackendProductWork(fixture)
     }
 
     @Test
@@ -7280,9 +7357,11 @@ class AppSessionTest {
         var currentStateCalls = 0
         var identityTokenCalls = 0
         var signOutCalls = 0
+        var recordCurrentStateEvents = false
 
         override suspend fun currentState(): AuthSessionState {
             currentStateCalls += 1
+            if (recordCurrentStateEvents) events += "auth-state"
             currentStateEntered.complete(Unit)
             currentStateGate?.await()
             return state
