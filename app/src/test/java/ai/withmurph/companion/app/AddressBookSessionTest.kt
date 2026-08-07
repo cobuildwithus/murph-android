@@ -1989,7 +1989,10 @@ class AddressBookSessionTest {
             return true
         }
 
-        override fun beginSignOut(expectedMemberKey: String?): Boolean {
+        override fun beginSignOut(
+            expectedMemberKey: String?,
+            preserveMemberState: Boolean,
+        ): Boolean {
             if (memberKey != expectedMemberKey) return false
             signOutPending = true
             healthAccessRequestedAt = null
@@ -1997,8 +2000,10 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
-            initialSetupStep = null
-            clearAddressBookMetadata()
+            if (!preserveMemberState) {
+                initialSetupStep = null
+                clearAddressBookMetadata()
+            }
             return true
         }
 

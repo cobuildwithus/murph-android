@@ -583,12 +583,12 @@ class AppSessionTest {
         assertTrue(fixture.health.signedIn)
         assertEquals(MEMBER_KEY, fixture.localState.memberKey)
         assertTrue(fixture.localState.signOutPending)
-        assertNull(fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertNull(fixture.localState.healthReceiptBaselineAt)
         assertNull(fixture.localState.lastKnownDataReceivedAt)
         assertNull(fixture.localState.lastKnownStatusObservedAt)
-        assertNull(fixture.localState.addressBookRevision)
+        assertEquals(5, fixture.localState.addressBookRevision)
         assertEquals(0, fixture.localState.clearMemberScopedStateCalls)
         assertTrue(fixture.localState.memberKeyWrites.isEmpty())
         assertEquals(listOf(MEMBER_KEY), fixture.api.admissionMemberKeys)
@@ -3236,6 +3236,8 @@ class AppSessionTest {
         val onboarding = fixture.session.state.value.initialOnboarding
         val draft = fixture.session.state.value.initialOnboardingDraft
         val memberKey = fixture.localState.memberKey
+        val initialSetupStep = fixture.localState.initialSetupStep
+        val addressBookRevision = fixture.localState.addressBookRevision
         val signOutCalls = fixture.health.signOutCalls
         fixture.health.signOutError = IllegalStateException("teardown failed")
         fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
@@ -3253,8 +3255,8 @@ class AppSessionTest {
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertNull(fixture.localState.healthReceiptBaselineAt)
         assertNull(fixture.localState.lastKnownStatusObservedAt)
-        assertNull(fixture.localState.initialSetupStep)
-        assertNull(fixture.localState.addressBookRevision)
+        assertEquals(initialSetupStep, fixture.localState.initialSetupStep)
+        assertEquals(addressBookRevision, fixture.localState.addressBookRevision)
         assertEquals(onboarding, fixture.session.state.value.initialOnboarding)
         assertEquals(draft, fixture.session.state.value.initialOnboardingDraft)
 
@@ -3280,6 +3282,8 @@ class AppSessionTest {
             fixture.session.selectInitialOnboardingMainPersona("coach")
             val onboarding = fixture.session.state.value.initialOnboarding
             val draft = fixture.session.state.value.initialOnboardingDraft
+            val initialSetupStep = fixture.localState.initialSetupStep
+            val addressBookRevision = fixture.localState.addressBookRevision
             val signOutCalls = fixture.health.signOutCalls
             fixture.health.signOutError = IllegalStateException("teardown failed")
             fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
@@ -3295,8 +3299,8 @@ class AppSessionTest {
             assertEquals(MEMBER_KEY, fixture.localState.memberKey)
             assertTrue(fixture.localState.signOutPending)
             assertNull(fixture.localState.healthAccessRequestedAt)
-            assertNull(fixture.localState.initialSetupStep)
-            assertNull(fixture.localState.addressBookRevision)
+            assertEquals(initialSetupStep, fixture.localState.initialSetupStep)
+            assertEquals(addressBookRevision, fixture.localState.addressBookRevision)
             assertEquals(onboarding, fixture.session.state.value.initialOnboarding)
             assertEquals(draft, fixture.session.state.value.initialOnboardingDraft)
 
@@ -7804,7 +7808,10 @@ class AppSessionTest {
             return true
         }
 
-        override fun beginSignOut(expectedMemberKey: String?): Boolean {
+        override fun beginSignOut(
+            expectedMemberKey: String?,
+            preserveMemberState: Boolean,
+        ): Boolean {
             if (memberKey != expectedMemberKey) return false
             if (!beginSignOutSucceeds) return false
             signOutPending = true
@@ -7813,10 +7820,12 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
-            initialSetupStep = null
-            storedAddressBookRevision = null
-            storedAddressBookReplacement = null
-            storedAddressBookDeletion = null
+            if (!preserveMemberState) {
+                initialSetupStep = null
+                storedAddressBookRevision = null
+                storedAddressBookReplacement = null
+                storedAddressBookDeletion = null
+            }
             return true
         }
 

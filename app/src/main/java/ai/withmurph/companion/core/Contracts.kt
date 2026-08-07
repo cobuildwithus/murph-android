@@ -175,7 +175,10 @@ interface LocalState {
     ): Boolean
     fun requireHealthReconnect(): Boolean
     fun revokeHealthSetupAuthorization(): Boolean
-    fun beginSignOut(expectedMemberKey: String?): Boolean
+    fun beginSignOut(
+        expectedMemberKey: String?,
+        preserveMemberState: Boolean = false,
+    ): Boolean
     fun completeSignOut(expectedMemberKey: String?): Boolean
     fun clearMemberScopedState()
 }

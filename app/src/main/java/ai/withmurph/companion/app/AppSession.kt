@@ -2574,7 +2574,6 @@ class AppSession(
     private fun finishChangedMemberAuthTransition() {
         currentMemberKey = null
         clearInitialOnboardingState()
-        localState.clearMemberScopedState()
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Failed(
@@ -3962,7 +3961,12 @@ class AppSession(
         closeProductAuthorityForBoundary()
         pendingAutomaticMemberReset = boundary
         invalidateSessionEpoch(acceptedConsentOwner)
-        if (!localState.beginSignOut(boundary.expectedMemberKey)) {
+        if (
+            !localState.beginSignOut(
+                expectedMemberKey = boundary.expectedMemberKey,
+                preserveMemberState = true,
+            )
+        ) {
             publishHealthResetFailure()
             return false
         }

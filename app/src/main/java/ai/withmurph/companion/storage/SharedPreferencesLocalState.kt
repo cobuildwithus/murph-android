@@ -270,7 +270,10 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
-    override fun beginSignOut(expectedMemberKey: String?): Boolean {
+    override fun beginSignOut(
+        expectedMemberKey: String?,
+        preserveMemberState: Boolean,
+    ): Boolean {
         if (memberKey != expectedMemberKey) return false
         val requestedAt = healthAccessRequestedAt
         val receiptBaselineAt = healthReceiptBaselineAt
@@ -281,16 +284,19 @@ class SharedPreferencesLocalState internal constructor(
         val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
         // One durable boundary records the request and revokes member-scoped restoration.
-        val committed = preferences.edit()
+        val editor = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
-            .remove(KEY_INITIAL_SETUP_STEP)
-            .removeAddressBookMetadata()
-            .commit()
+        if (!preserveMemberState) {
+            editor
+                .remove(KEY_INITIAL_SETUP_STEP)
+                .removeAddressBookMetadata()
+        }
+        val committed = editor.commit()
         if (!committed) {
             restoreAuthorizationSnapshot(
                 requestedAt,

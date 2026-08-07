@@ -538,6 +538,37 @@ class SharedPreferencesLocalStateTest {
         assertNull(state.initialSetupStep)
     }
 
+    @Test
+    fun automaticMemberResetFencesRestorationButPreservesMetadataUntilCompletion() {
+        val state = SharedPreferencesLocalState(FaultInjectedPreferences())
+        val replacement = AddressBookMutation(12, MUTATION_ONE)
+        state.memberKey = "member-a"
+        state.healthAccessRequestedAt = InstantValue(800)
+        state.initialSetupStep = InitialSetupStep.FriendlyNames
+        assertTrue(state.recordAddressBookRevision(12))
+        assertTrue(state.beginAddressBookReplacement(replacement))
+
+        assertTrue(
+            state.beginSignOut(
+                expectedMemberKey = "member-a",
+                preserveMemberState = true,
+            ),
+        )
+
+        assertTrue(state.signOutPending)
+        assertNull(state.healthAccessRequestedAt)
+        assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
+        assertEquals(12, state.addressBookRevision)
+        assertEquals(replacement, state.pendingAddressBookReplacement)
+
+        assertTrue(state.completeSignOut("member-a"))
+        assertFalse(state.signOutPending)
+        assertNull(state.memberKey)
+        assertNull(state.initialSetupStep)
+        assertNull(state.addressBookRevision)
+        assertNull(state.pendingAddressBookReplacement)
+    }
+
     private class FaultInjectedPreferences(
         private val persistedValues: MutableMap<String, Any?> = mutableMapOf(),
     ) : SharedPreferences {
