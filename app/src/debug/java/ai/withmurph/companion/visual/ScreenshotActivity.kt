@@ -100,6 +100,7 @@ internal enum class ScreenshotScenario {
     OnboardingSaving,
     OnboardingWelcome,
     FriendlyNames,
+    FriendlyNamesReconnectRequired,
     Failure;
 
     fun appState(now: Instant): AppUiState = when (this) {
@@ -177,6 +178,17 @@ internal enum class ScreenshotScenario {
                 ownedByInstallation = false,
             ),
         )
+        FriendlyNamesReconnectRequired -> ready(HealthSyncState.NotConnected).copy(
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = true,
+            healthMessage = "Health Connect needs to reconnect before syncing can resume.",
+            addressBookSharing = AddressBookSharingState.Server(
+                enabled = false,
+                storedContactCount = 0,
+                canWrite = true,
+                ownedByInstallation = false,
+            ),
+        )
         Failure -> AppUiState(
             phase = AppPhase.Failed(
                 message =
@@ -219,6 +231,7 @@ internal enum class ScreenshotScenario {
         OnboardingSaving,
         OnboardingWelcome,
         FriendlyNames,
+        FriendlyNamesReconnectRequired,
         Failure -> LoginUiState()
     }
 
