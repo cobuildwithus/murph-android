@@ -7,6 +7,9 @@
     "pnpm": "10.34.5"
   },
   "scripts": {
+    "licenses:test": "node --test scripts/check-third-party-licenses.test.mjs",
+    "play:test": "node --test scripts/check-play-release-packet.test.mjs",
+    "play:verify": "node scripts/check-play-release-packet.mjs",
     "review:gpt": "cobuild-review-gpt --config scripts/review-gpt.config.sh",
     "review:pr": "bash scripts/review-pr.sh",
     "review:validate": "bash scripts/validate-review-gpt-response.sh",

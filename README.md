@@ -224,6 +224,15 @@ message.
 
 ## Release requirements
 
+An assembled Release APK or AAB is not authorization to publish. Before any
+Play upload, run `:app:checkPlaySubmissionReadiness` from a clean checkout at
+the exact source commit with the exact signed AAB and the ignored private
+operator assertions. The gate rejects synthetic Privy identifiers and
+non-production backend hosts, verifies the bundle signature, binds the source,
+artifact, merged manifest, and Play packet by digest, and requires the real
+vendor, provider-export, and Pixel/Samsung acceptance evidence. See
+`play/README.md` for the fail-closed procedure.
+
 Before a Play release:
 
 1. Apply for Google Play Health Connect access for sleep, exercise, steps, active calories, and history.
