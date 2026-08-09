@@ -185,6 +185,11 @@ fun InitialOnboardingScreen(
         stageHeadingFocus.requestFocus()
         stageScrollState.scrollTo(0)
     }
+    LaunchedEffect(state.initialOnboardingMessage) {
+        if (state.initialOnboardingMessage != null) {
+            stageScrollState.animateScrollTo(0)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -205,6 +210,38 @@ fun InitialOnboardingScreen(
             verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
+            state.initialOnboardingMessage?.let { message ->
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = message,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Assertive
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MurphColors.Sienna,
+                        textAlign = TextAlign.Center,
+                    )
+                    MurphLinkButton(
+                        text = "Contact support",
+                        onClick = actions.onOpenSupport,
+                        enabled = !state.isInitialOnboardingSaving,
+                    )
+                    MurphLinkButton(
+                        text = "Delete account",
+                        onClick = actions.onDeleteAccount,
+                        enabled = !state.isInitialOnboardingSaving,
+                    )
+                    MurphLinkButton(
+                        text = "Sign out and stop syncing",
+                        onClick = actions.onSignOut,
+                        enabled = !state.isInitialOnboardingSaving,
+                    )
+                }
+            }
             when (stage) {
                 InitialOnboardingStage.Contact -> ContactChoices(
                     avatars = onboarding.contactCard?.avatars.orEmpty(),
@@ -263,29 +300,6 @@ fun InitialOnboardingScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                state.initialOnboardingMessage?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MurphColors.Sienna,
-                        textAlign = TextAlign.Center,
-                    )
-                    MurphLinkButton(
-                        text = "Contact support",
-                        onClick = actions.onOpenSupport,
-                        enabled = !state.isInitialOnboardingSaving,
-                    )
-                    MurphLinkButton(
-                        text = "Delete account",
-                        onClick = actions.onDeleteAccount,
-                        enabled = !state.isInitialOnboardingSaving,
-                    )
-                    MurphLinkButton(
-                        text = "Sign out and stop syncing",
-                        onClick = actions.onSignOut,
-                        enabled = !state.isInitialOnboardingSaving,
-                    )
-                }
                 OnboardingFooter(stage, state.isInitialOnboardingSaving, actions)
             }
         }

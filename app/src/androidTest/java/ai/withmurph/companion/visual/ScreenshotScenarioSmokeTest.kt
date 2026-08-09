@@ -46,9 +46,14 @@ class ScreenshotScenarioSmokeTest {
 
     @Test
     fun onboardingErrorFixtureRendersDirectAccountRecovery() = withScenario("onboardingError") {
-        onNodeWithText("Contact support").assertIsDisplayed().assertHasClickAction()
-        onNodeWithText("Delete account").assertIsDisplayed().assertHasClickAction()
-        onNodeWithText("Sign out and stop syncing").assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Contact support").performScrollTo().assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Delete account").performScrollTo().assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Sign out and stop syncing")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        onNodeWithText("Continue").assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Back").assertIsDisplayed().assertHasClickAction()
         onAllNodesWithText("Settings").assertCountEquals(0)
     }
 
