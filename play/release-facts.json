@@ -61,6 +61,15 @@
     "android.permission.health.READ_SLEEP",
     "android.permission.health.READ_STEPS"
   ],
+  "releaseManifest": {
+    "applicationClass": "ai.withmurph.companion.MurphApplication",
+    "launcherActivity": "ai.withmurph.companion.MainActivity",
+    "forbiddenComponents": [
+      "ai.withmurph.companion.visual.ScreenshotActivity",
+      "io.tryvital.vitalhealthconnect.SyncBroadcastReceiver",
+      "io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService"
+    ]
+  },
   "healthConnect": {
     "resourceOwner": "app/src/main/java/ai/withmurph/companion/health/JunctionHealthSyncService.kt",
     "resourceSetSymbol": "readResources",

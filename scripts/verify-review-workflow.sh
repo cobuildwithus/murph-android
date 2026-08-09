@@ -74,6 +74,9 @@ fi
 
 review_manifest="$(unzip -Z1 "${review_bundle_zips[0]}")"
 required_review_paths=(
+  ".github/workflows/android-ci.yml"
+  ".github/workflows/android-visual-proof.yml"
+  ".github/workflows/review-tooling.yml"
   "AGENTS.md"
   "app/build.gradle.kts"
   "app/src/main/AndroidManifest.xml"
@@ -82,8 +85,20 @@ required_review_paths=(
   "app/src/main/java/ai/withmurph/companion/health/JunctionHealthSyncService.kt"
   "app/src/main/java/ai/withmurph/companion/ui/login/LoginScreen.kt"
   "app/src/test/java/ai/withmurph/companion/app/AppSessionTest.kt"
+  "config/third-party-license-policy.json"
   "gradle/libs.versions.toml"
+  "gradle/play-release.gradle.kts"
   "gradle/wrapper/gradle-wrapper.jar"
+  "play/declarations/contacts.md"
+  "play/declarations/data-safety.md"
+  "play/declarations/health-apps.md"
+  "play/listing/en-US/full-description.txt"
+  "play/listing/en-US/release-notes-1.txt"
+  "play/listing/en-US/short-description.txt"
+  "play/listing/en-US/title.txt"
+  "play/operator-assertions.example.json"
+  "play/release-checklist.md"
+  "play/release-facts.json"
   "scripts/review-gpt-contract.mjs"
   "scripts/review-pr.sh"
   "scripts/validate-review-gpt-response.sh"
@@ -94,6 +109,14 @@ for required_path in "${required_review_paths[@]}"; do
     exit 1
   fi
 done
+
+review_extract_dir="$review_bundle_dir/extracted"
+mkdir -p "$review_extract_dir"
+unzip -q "${review_bundle_zips[0]}" -d "$review_extract_dir"
+(
+  cd "$review_extract_dir"
+  node --test scripts/*.test.mjs
+)
 
 review_file_count="$(wc -l <<<"$review_manifest" | tr -d '[:space:]')"
 if [[ "$review_file_count" -lt 45 ]]; then

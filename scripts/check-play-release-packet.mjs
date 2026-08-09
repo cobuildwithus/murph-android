@@ -18,6 +18,7 @@ const RELEASE_PACKET_PATHS = [
   "play/declarations/contacts.md",
   "play/release-checklist.md",
 ];
+const BUNDLETOOL_MAIN_CLASS = "com.android.tools.build.bundletool.BundleToolMain";
 
 function readText(rootDir, relativePath) {
   return fs.readFileSync(path.join(rootDir, relativePath), "utf8");
@@ -64,10 +65,66 @@ export function validateArtifactSourceMetadata(metadata, sourceHead, configurati
   }
 }
 
-function requireSignedAndroidBundle(releaseArtifactPath, sourceHead, configurationSha256) {
+export function inspectAndroidBundle(
+  releaseArtifactPath,
+  bundletoolClasspath,
+  runCommand = execFileSync,
+) {
+  if (!bundletoolClasspath) {
+    throw new Error("Play submission requires the pinned bundletool classpath.");
+  }
+  try {
+    runCommand(
+      "java",
+      [
+        "-cp",
+        bundletoolClasspath,
+        BUNDLETOOL_MAIN_CLASS,
+        "validate",
+        `--bundle=${releaseArtifactPath}`,
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    throw new Error("The release artifact is not a valid Android App Bundle.");
+  }
+  try {
+    return runCommand(
+      "java",
+      [
+        "-cp",
+        bundletoolClasspath,
+        BUNDLETOOL_MAIN_CLASS,
+        "dump",
+        "manifest",
+        `--bundle=${releaseArtifactPath}`,
+        "--module=base",
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    throw new Error("The Android App Bundle base manifest could not be inspected.");
+  }
+}
+
+function requireSignedAndroidBundle(
+  releaseArtifactPath,
+  sourceHead,
+  configurationSha256,
+  bundletoolClasspath,
+) {
   if (path.extname(releaseArtifactPath).toLowerCase() !== ".aab") {
     throw new Error("Play submission requires the exact signed Android App Bundle (.aab).");
   }
+  const artifactManifest = inspectAndroidBundle(releaseArtifactPath, bundletoolClasspath);
   let verification = "";
   try {
     verification = execFileSync(
@@ -92,6 +149,7 @@ function requireSignedAndroidBundle(releaseArtifactPath, sourceHead, configurati
     throw new Error("The signed Android App Bundle has no source provenance metadata.");
   }
   validateArtifactSourceMetadata(sourceMetadata, sourceHead, configurationSha256);
+  return artifactManifest;
 }
 
 export function releasePacketSha256(rootDir = process.cwd()) {
@@ -237,8 +295,180 @@ export function extractManifestPermissions(source) {
   };
 }
 
+function elementTags(source, elementName) {
+  const pattern = new RegExp(`<${elementName}(?:\\s|>)[^>]*>`, "g");
+  return [...source.matchAll(pattern)].map((match) => match[0]);
+}
+
+function xmlAttributes(tag) {
+  return Object.fromEntries(
+    [...tag.matchAll(/([A-Za-z_][A-Za-z0-9_.:-]*)="([^"]*)"/g)]
+      .map((match) => [match[1], match[2]]),
+  );
+}
+
+function requiredElementAttributes(source, elementName) {
+  const tags = elementTags(source, elementName);
+  if (tags.length !== 1) {
+    throw new Error(`Expected exactly one ${elementName} element; found ${tags.length}.`);
+  }
+  return xmlAttributes(tags[0]);
+}
+
+function qualifiedComponentName(name, packageName) {
+  if (name.startsWith(".")) return `${packageName}${name}`;
+  if (!name.includes(".")) return `${packageName}.${name}`;
+  return name;
+}
+
+const COMPONENT_SECURITY_ATTRIBUTES = [
+  "android:authorities",
+  "android:directBootAware",
+  "android:enabled",
+  "android:exported",
+  "android:foregroundServiceType",
+  "android:grantUriPermissions",
+  "android:permission",
+  "android:process",
+  "android:readPermission",
+  "android:targetActivity",
+  "android:writePermission",
+];
+const FOREGROUND_SERVICE_TYPES = {
+  dataSync: 0x01n,
+  mediaPlayback: 0x02n,
+  phoneCall: 0x04n,
+  location: 0x08n,
+  connectedDevice: 0x10n,
+  mediaProjection: 0x20n,
+  camera: 0x40n,
+  microphone: 0x80n,
+  health: 0x100n,
+  remoteMessaging: 0x200n,
+  systemExempted: 0x400n,
+  shortService: 0x800n,
+  fileManagement: 0x1000n,
+  mediaProcessing: 0x2000n,
+  specialUse: 0x40000000n,
+};
+
+function normalizedSecurityAttribute(attribute, value) {
+  if (attribute !== "android:foregroundServiceType") return value;
+  if (/^0x[0-9a-f]+$/i.test(value)) return `0x${BigInt(value).toString(16)}`;
+  const flags = value.split("|").map((flag) => flag.trim());
+  const unknown = flags.filter((flag) => FOREGROUND_SERVICE_TYPES[flag] === undefined);
+  if (unknown.length > 0) {
+    throw new Error(`Unknown foreground-service types: ${unknown.join(", ")}.`);
+  }
+  const bitmask = flags.reduce(
+    (combined, flag) => combined | FOREGROUND_SERVICE_TYPES[flag],
+    0n,
+  );
+  return `0x${bitmask.toString(16)}`;
+}
+
+function manifestComponents(source, elementName, packageName) {
+  const components = elementTags(source, elementName).map((tag) => {
+    const attributes = xmlAttributes(tag);
+    const rawName = attributes["android:name"];
+    if (!rawName) throw new Error(`A ${elementName} element has no android:name.`);
+    return {
+      name: qualifiedComponentName(rawName, packageName),
+      securityAttributes: Object.fromEntries(
+        COMPONENT_SECURITY_ATTRIBUTES
+          .filter((attribute) => attributes[attribute] !== undefined)
+          .map((attribute) => [
+            attribute,
+            normalizedSecurityAttribute(attribute, attributes[attribute]),
+          ]),
+      ),
+    };
+  });
+  sortedUnique(
+    components.map((component) => component.name),
+    `${elementName} names`,
+  );
+  return components.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function releaseManifestContract(source) {
+  const manifest = requiredElementAttributes(source, "manifest");
+  const application = requiredElementAttributes(source, "application");
+  const packageName = manifest.package;
+  if (!packageName) throw new Error("The release manifest has no package name.");
+  const versionCode = Number(manifest["android:versionCode"]);
+  if (!Number.isSafeInteger(versionCode) || versionCode < 1) {
+    throw new Error("The release manifest has no valid versionCode.");
+  }
+  const versionName = manifest["android:versionName"];
+  if (!versionName) throw new Error("The release manifest has no versionName.");
+
+  return {
+    packageName,
+    versionCode,
+    versionName,
+    debuggable: application["android:debuggable"] === "true",
+    applicationName: qualifiedComponentName(application["android:name"] ?? "", packageName),
+    permissions: extractManifestPermissions(source).requested,
+    activities: manifestComponents(source, "activity", packageName),
+    activityAliases: manifestComponents(source, "activity-alias", packageName),
+    services: manifestComponents(source, "service", packageName),
+    receivers: manifestComponents(source, "receiver", packageName),
+    providers: manifestComponents(source, "provider", packageName),
+  };
+}
+
+function validateReleaseManifestContract(contract, facts, label) {
+  assertEqual(contract.packageName, facts.application.applicationId, `${label} package`);
+  assertEqual(contract.versionCode, facts.application.versionCode, `${label} versionCode`);
+  assertEqual(contract.versionName, facts.application.versionName, `${label} versionName`);
+  assertEqual(contract.debuggable, false, `${label} debuggable state`);
+  assertEqual(
+    contract.applicationName,
+    facts.releaseManifest.applicationClass,
+    `${label} application owner`,
+  );
+  if (!contract.activities.some(
+    (activity) => activity.name === facts.releaseManifest.launcherActivity,
+  )) {
+    throw new Error(`${label} is missing the expected launcher activity.`);
+  }
+  assertStringSet(
+    contract.permissions,
+    facts.mergedManifestPermissions,
+    `${label} permissions`,
+  );
+
+  const componentNames = [
+    ...contract.activities,
+    ...contract.activityAliases,
+    ...contract.services,
+    ...contract.receivers,
+    ...contract.providers,
+  ].map((component) => component.name);
+  const forbiddenComponents = facts.releaseManifest.forbiddenComponents.filter(
+    (name) => componentNames.includes(name),
+  );
+  if (forbiddenComponents.length > 0) {
+    throw new Error(`${label} contains forbidden components: ${forbiddenComponents.join(", ")}.`);
+  }
+}
+
+export function validateArtifactManifest(artifactManifest, localManifest, facts) {
+  const artifact = releaseManifestContract(artifactManifest);
+  const local = releaseManifestContract(localManifest);
+  validateReleaseManifestContract(artifact, facts, "signed AAB manifest");
+  validateReleaseManifestContract(local, facts, "local merged release manifest");
+  assertEqual(
+    JSON.stringify(artifact),
+    JSON.stringify(local),
+    "signed AAB manifest contract",
+  );
+  return artifact;
+}
+
 export function validateOperatorAssertions(assertions, facts, evidence, now = new Date()) {
-  if (assertions.schema !== 2) throw new Error("Unsupported operator-assertions schema.");
+  if (assertions.schema !== 3) throw new Error("Unsupported operator-assertions schema.");
   assertEqual(assertions.releaseVersionCode, facts.application.versionCode, "asserted versionCode");
   assertEqual(assertions.releaseVersionName, facts.application.versionName, "asserted versionName");
 
@@ -263,9 +493,9 @@ export function validateOperatorAssertions(assertions, facts, evidence, now = ne
     "exact source commit",
   );
   assertEqual(
-    assertions.mergedManifestSha256,
-    evidence.mergedManifestSha256,
-    "merged-manifest SHA-256",
+    assertions.artifactManifestSha256,
+    evidence.artifactManifestSha256,
+    "artifact-manifest SHA-256",
   );
   assertEqual(
     assertions.releaseArtifactSha256,
@@ -420,11 +650,16 @@ export function validateReleasePacket(options = {}) {
   let mergedManifest = null;
   if (options.mergedManifestPath) {
     mergedManifest = fs.readFileSync(options.mergedManifestPath, "utf8");
-    assertStringSet(
-      extractManifestPermissions(mergedManifest).requested,
-      facts.mergedManifestPermissions,
-      "merged manifest permissions",
+    validateReleaseManifestContract(
+      releaseManifestContract(mergedManifest),
+      facts,
+      "local merged release manifest",
     );
+  }
+
+  const artifactManifest = options.artifactManifest ?? null;
+  if (artifactManifest && mergedManifest) {
+    validateArtifactManifest(artifactManifest, mergedManifest, facts);
   }
 
   let releaseArtifact = null;
@@ -435,7 +670,7 @@ export function validateReleasePacket(options = {}) {
 
   const evidence = {
     sourceHead: options.sourceHead ?? null,
-    mergedManifestSha256: mergedManifest ? sha256(mergedManifest) : null,
+    artifactManifestSha256: artifactManifest ? sha256(artifactManifest) : null,
     releaseArtifactSha256: releaseArtifact ? sha256(releaseArtifact) : null,
     releasePacketSha256: releasePacketSha256(rootDir),
   };
@@ -443,12 +678,13 @@ export function validateReleasePacket(options = {}) {
   if (options.submission) {
     if (!evidence.sourceHead) throw new Error("Submission verification requires the exact source commit.");
     if (!mergedManifest) throw new Error("Submission verification requires the merged manifest.");
+    if (!artifactManifest) throw new Error("Submission verification requires the signed AAB manifest.");
     if (!releaseArtifact) throw new Error("Submission verification requires the exact release artifact.");
     if (!options.assertions) throw new Error("Submission verification requires operator assertions.");
     validateOperatorAssertions(options.assertions, facts, evidence, options.now);
   }
 
-  return { evidence, facts, mergedManifest };
+  return { evidence, facts, artifactManifest, mergedManifest };
 }
 
 function parseArguments(argv) {
@@ -481,7 +717,9 @@ function main() {
     arguments_.submission ? process.env.MURPH_PLAY_OPERATOR_ASSERTIONS_FILE : undefined
   );
   const releaseArtifactPath = arguments_.release_artifact ?? (
-    arguments_.submission ? process.env.MURPH_PLAY_RELEASE_ARTIFACT : undefined
+    arguments_.submission || arguments_.print_evidence_hashes
+      ? process.env.MURPH_PLAY_RELEASE_ARTIFACT
+      : undefined
   );
   let assertions = null;
   if (assertionsPath) {
@@ -492,18 +730,21 @@ function main() {
     }
   }
   let sourceHead = null;
-  if (arguments_.submission) {
+  let artifactManifest = null;
+  if (arguments_.submission || arguments_.print_evidence_hashes) {
     if (!releaseArtifactPath) {
       throw new Error("Submission verification requires the exact release artifact.");
     }
     sourceHead = exactSourceHead(process.cwd());
-    requireSignedAndroidBundle(
+    artifactManifest = requireSignedAndroidBundle(
       releaseArtifactPath,
       sourceHead,
       process.env.MURPH_PLAY_EXPECTED_CONFIGURATION_SHA256 ?? "",
+      process.env.MURPH_BUNDLETOOL_CLASSPATH ?? "",
     );
   }
   const result = validateReleasePacket({
+    artifactManifest,
     mergedManifestPath: arguments_.merged_manifest,
     releaseArtifactPath,
     submission: arguments_.submission,
@@ -511,9 +752,9 @@ function main() {
     sourceHead,
   });
   if (arguments_.print_evidence_hashes) {
-    if (!result.evidence.mergedManifestSha256 || !result.evidence.releaseArtifactSha256) {
+    if (!result.evidence.artifactManifestSha256 || !result.evidence.releaseArtifactSha256) {
       throw new Error(
-        "Evidence output requires both the merged manifest and exact release artifact.",
+        "Evidence output requires the signed AAB manifest and exact release artifact.",
       );
     }
     process.stdout.write(`${JSON.stringify(result.evidence, null, 2)}\n`);

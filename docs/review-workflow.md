@@ -66,3 +66,10 @@ this policy cannot use its changed copy of ReviewGPT to certify itself. Use a
 fresh independent local review against the fixed checklist from the base
 revision. Keep review control changes separate from product behavior so later
 product PRs inherit a trusted gate.
+
+Both ordinary and exact-PR review use one repository-content boundary. The
+bundle includes Android CI workflows, main/debug/release/synthetic sources,
+instrumentation and unit tests, the applied release Gradle script, and every
+checked-in Play and license-policy input consumed by packaged tests. The review
+workflow verifier extracts a fresh bundle and runs all packaged Node contract
+tests so a missing dependency fails before review.

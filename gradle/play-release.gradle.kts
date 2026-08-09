@@ -28,6 +28,15 @@ val thirdPartyNotices = layout.buildDirectory.file(
 val releaseMergedManifest = layout.buildDirectory.file(
     "intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml",
 )
+val debugMergedManifest = layout.buildDirectory.file(
+    "intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml",
+)
+val debugBundle = layout.buildDirectory.file("outputs/bundle/debug/app-debug.aab")
+val bundletoolCli = configurations.create("bundletoolCli") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+dependencies.add(bundletoolCli.name, "com.android.tools.build:bundletool:1.18.0")
 
 fun playPublicConfigurationSha256(
     appId: String,
@@ -187,7 +196,11 @@ val checkPlayReleasePacket by tasks.registering(Exec::class) {
 val checkPlayReleaseTooling by tasks.registering(Exec::class) {
     description = "Tests the Google Play packet and dependency-license gates."
     group = "verification"
+    dependsOn("bundleDebug")
     inputs.files(
+        bundletoolCli,
+        debugBundle,
+        debugMergedManifest,
         rootProject.file("config/third-party-license-policy.json"),
         rootProject.file("scripts/check-play-release-packet.mjs"),
         rootProject.file("scripts/check-play-release-packet.test.mjs"),
@@ -201,6 +214,14 @@ val checkPlayReleaseTooling by tasks.registering(Exec::class) {
         "scripts/check-play-release-packet.test.mjs",
         "scripts/check-third-party-licenses.test.mjs",
     )
+    doFirst {
+        environment("MURPH_BUNDLETOOL_CLASSPATH", bundletoolCli.asPath)
+        environment("MURPH_BUNDLETOOL_TEST_BUNDLE", debugBundle.get().asFile.absolutePath)
+        environment(
+            "MURPH_BUNDLETOOL_TEST_MANIFEST",
+            debugMergedManifest.get().asFile.absolutePath,
+        )
+    }
 }
 
 val checkPlayReleaseMergedManifest by tasks.registering(Exec::class) {
@@ -217,20 +238,13 @@ val checkPlayReleaseMergedManifest by tasks.registering(Exec::class) {
     )
 }
 
-val checkPlaySubmissionReadiness by tasks.registering(Exec::class) {
-    description = "Fail-closed gate for the exact signed artifact before any Play upload."
-    group = "verification"
-    dependsOn(checkPlayReleaseMergedManifest, checkReleaseThirdPartyLicenses)
-    workingDir(rootProject.projectDir)
-    commandLine(
-        "node",
-        "scripts/check-play-release-packet.mjs",
-        "--submission",
-        "--merged-manifest",
-        "app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml",
-    )
+fun Exec.configurePlayArtifactEnvironment(assertionsRequired: Boolean) {
+    inputs.files(bundletoolCli)
     doFirst {
-        if (providers.environmentVariable("MURPH_PLAY_OPERATOR_ASSERTIONS_FILE").orNull.isNullOrBlank()) {
+        if (
+            assertionsRequired &&
+            providers.environmentVariable("MURPH_PLAY_OPERATOR_ASSERTIONS_FILE").orNull.isNullOrBlank()
+        ) {
             throw GradleException(
                 "MURPH_PLAY_OPERATOR_ASSERTIONS_FILE must point to the ignored exact-candidate assertions file.",
             )
@@ -266,6 +280,7 @@ val checkPlaySubmissionReadiness by tasks.registering(Exec::class) {
                 "Play submission requires the intended production HTTPS backend.",
             )
         }
+        environment("MURPH_BUNDLETOOL_CLASSPATH", bundletoolCli.asPath)
         environment(
             "MURPH_PLAY_EXPECTED_CONFIGURATION_SHA256",
             playPublicConfigurationSha256(
@@ -275,6 +290,36 @@ val checkPlaySubmissionReadiness by tasks.registering(Exec::class) {
             ),
         )
     }
+}
+
+val printPlaySubmissionEvidence by tasks.registering(Exec::class) {
+    description = "Prints safe hashes from the exact signed AAB intended for Play upload."
+    group = "verification"
+    dependsOn(checkPlayReleaseMergedManifest, checkReleaseThirdPartyLicenses)
+    workingDir(rootProject.projectDir)
+    commandLine(
+        "node",
+        "scripts/check-play-release-packet.mjs",
+        "--print-evidence-hashes",
+        "--merged-manifest",
+        "app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml",
+    )
+    configurePlayArtifactEnvironment(assertionsRequired = false)
+}
+
+val checkPlaySubmissionReadiness by tasks.registering(Exec::class) {
+    description = "Fail-closed gate for the exact signed artifact before any Play upload."
+    group = "verification"
+    dependsOn(checkPlayReleaseMergedManifest, checkReleaseThirdPartyLicenses)
+    workingDir(rootProject.projectDir)
+    commandLine(
+        "node",
+        "scripts/check-play-release-packet.mjs",
+        "--submission",
+        "--merged-manifest",
+        "app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml",
+    )
+    configurePlayArtifactEnvironment(assertionsRequired = true)
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
