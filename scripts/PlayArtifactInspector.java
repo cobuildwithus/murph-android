@@ -153,7 +153,7 @@ public final class PlayArtifactInspector {
     }
 
     private static boolean isCustomSignatureControlFile(String topLevelName) {
-        if (!topLevelName.startsWith("SIG-") || topLevelName.length() == 4) {
+        if (!topLevelName.startsWith("SIG-")) {
             return false;
         }
         int extensionSeparator = topLevelName.lastIndexOf('.');

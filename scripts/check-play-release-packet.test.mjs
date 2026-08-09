@@ -421,6 +421,17 @@ test(
       sign(approvedKeystore, "approved");
       assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
 
+      fs.writeFileSync(path.join(contents, "META-INF", "SIG-"), "custom control\n");
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--update",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        "META-INF/SIG-",
+      ]);
+      assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
+
       fs.writeFileSync(
         path.join(contents, "META-INF", "SIG-CUSTOM.A1"),
         "custom signature control\n",
