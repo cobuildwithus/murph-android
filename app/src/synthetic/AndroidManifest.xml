@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission tools:node="removeAll" />
+    <permission tools:node="removeAll" />
+
+    <queries tools:node="remove" />
+
+    <application
+        android:name="android.app.Application"
+        tools:replace="android:name">
+        <activity tools:node="removeAll" />
+        <activity-alias tools:node="removeAll" />
+        <service tools:node="removeAll" />
+        <receiver tools:node="removeAll" />
+        <provider tools:node="removeAll" />
+
+        <activity
+            android:name=".visual.ScreenshotActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Murph" />
+    </application>
+</manifest>

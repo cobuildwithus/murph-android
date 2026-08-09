@@ -18,7 +18,24 @@ if grep -Fq 'LaunchedEffect(value)' app/src/main/java/ai/withmurph/companion/ui/
     exit 1
 fi
 
-./gradlew --no-daemon test lintDebug lintRelease assembleDebug assembleRelease checkPlayReleaseTooling
+./gradlew --no-daemon test lintDebug lintRelease assembleDebug assembleRelease assembleSynthetic checkPlayReleaseTooling
+
+synthetic_manifest=app/build/intermediates/merged_manifest/synthetic/processSyntheticMainManifest/AndroidManifest.xml
+if [ ! -f "$synthetic_manifest" ]; then
+    echo "Synthetic merged manifest missing: $synthetic_manifest" >&2
+    exit 1
+fi
+if grep -Eq 'MurphApplication|MainActivity|Initializer|<(uses-permission|permission|queries|provider|service|receiver|activity-alias)([[:space:]>]|$)' "$synthetic_manifest"; then
+    echo "Synthetic UI fixture can initialize live app or data boundaries: $synthetic_manifest" >&2
+    exit 1
+fi
+if ! grep -Fq 'package="ai.withmurph.app.synthetic"' "$synthetic_manifest" ||
+   ! grep -Fq 'android:name="android.app.Application"' "$synthetic_manifest" ||
+   ! grep -Fq 'android:name="ai.withmurph.companion.visual.ScreenshotActivity"' "$synthetic_manifest" ||
+   [ "$(grep -Ec '<activity([[:space:]>]|$)' "$synthetic_manifest")" -ne 1 ]; then
+    echo "Synthetic UI fixture owners are missing: $synthetic_manifest" >&2
+    exit 1
+fi
 
 for merged_manifest in \
     app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml \

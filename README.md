@@ -75,6 +75,30 @@ The verification script runs unit tests, lint, and assembly for both Debug and
 Release. Release tasks fail before compilation when either public Privy
 identifier is blank or the production backend URL is not absolute HTTPS.
 
+The native UI smoke suite launches the same debug-only synthetic scenarios used
+for exact-head visual evidence, renders the production Compose surfaces, and
+asserts their semantics without pixel snapshots. A uniquely packaged synthetic
+build variant uses a plain `Application`, removes AndroidX Startup providers,
+and has no network, Contacts, or Health Connect data permissions. It therefore
+cannot initialize Privy, Junction, member storage, or network work. Run it on
+an attached device with:
+
+```bash
+./gradlew connectedSyntheticAndroidTest
+```
+
+For the deterministic Pixel 2 / API 30 automated-test device used by GitHub
+Actions, run:
+
+```bash
+./gradlew pixel2Api30SyntheticAndroidTest
+```
+
+On hosts without hardware rendering, append
+`-Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect`.
+`Android Instrumentation / synthetic-ui-smoke` provisions that managed device
+and runs the suite for pull requests and `main`.
+
 Debug builds also include a deterministic screenshot activity for visual
 comparison without using a real account or health data. Supported `scenario`
 values are `login`, `email`, `otp`, `setup`, `awaiting`, `synced`, `delayed`,
@@ -98,7 +122,10 @@ Run its contract tests locally with:
 node --test scripts/check-android-visual-proof.test.mjs
 ```
 
-Health Connect and Junction behavior must be tested on physical Android devices. At minimum test one Pixel and one Samsung device with a real connected health source.
+Health Connect and Junction behavior must still be tested on physical Android
+devices. At minimum test one Pixel and one Samsung device with a real connected
+health source. The synthetic instrumentation suite does not claim SDK or
+provider coverage.
 
 ## ReviewGPT
 
