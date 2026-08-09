@@ -271,6 +271,16 @@ fun InitialOnboardingScreen(
                         textAlign = TextAlign.Center,
                     )
                     MurphLinkButton(
+                        text = "Contact support",
+                        onClick = actions.onOpenSupport,
+                        enabled = !state.isInitialOnboardingSaving,
+                    )
+                    MurphLinkButton(
+                        text = "Delete account",
+                        onClick = actions.onDeleteAccount,
+                        enabled = !state.isInitialOnboardingSaving,
+                    )
+                    MurphLinkButton(
                         text = "Sign out and stop syncing",
                         onClick = actions.onSignOut,
                         enabled = !state.isInitialOnboardingSaving,

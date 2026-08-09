@@ -4,9 +4,12 @@ import ai.withmurph.companion.consumeHealthSyncReminderSettingsIntent
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -36,6 +39,17 @@ class ScreenshotScenarioSmokeTest {
     fun onboardingFixtureRendersProductionChoiceSurface() = withScenario("onboardingPersona") {
         onNodeWithText("Choose Murph’s main personality").assertIsDisplayed()
         onNodeWithText("Classic").assertIsDisplayed()
+        onAllNodesWithText("Contact support").assertCountEquals(0)
+        onAllNodesWithText("Delete account").assertCountEquals(0)
+        onAllNodesWithText("Settings").assertCountEquals(0)
+    }
+
+    @Test
+    fun onboardingErrorFixtureRendersDirectAccountRecovery() = withScenario("onboardingError") {
+        onNodeWithText("Contact support").assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Delete account").assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Sign out and stop syncing").assertIsDisplayed().assertHasClickAction()
+        onAllNodesWithText("Settings").assertCountEquals(0)
     }
 
     @Test
