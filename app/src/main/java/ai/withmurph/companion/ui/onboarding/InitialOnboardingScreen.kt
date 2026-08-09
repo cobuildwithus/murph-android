@@ -187,137 +187,99 @@ fun InitialOnboardingScreen(
         stageScrollState.scrollTo(0)
     }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
             .safeDrawingPadding(),
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .weight(1f)
+                .widthIn(max = 680.dp)
+                .fillMaxWidth()
+                .align(Alignment.CenterHorizontally)
+                .verticalScroll(stageScrollState)
+                .padding(horizontal = 20.dp)
+                .padding(top = 28.dp, bottom = 18.dp)
+                .semantics { paneTitle = stage.onboardingTitle() },
+            verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .widthIn(max = 680.dp)
-                    .fillMaxWidth()
-                    .align(Alignment.CenterHorizontally)
-                    .verticalScroll(stageScrollState)
-                    .padding(horizontal = 20.dp)
-                    .padding(top = 62.dp, bottom = 18.dp)
-                    .semantics { paneTitle = stage.onboardingTitle() },
-                verticalArrangement = Arrangement.spacedBy(22.dp),
-            ) {
-                OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
-                when (stage) {
-                    InitialOnboardingStage.Contact -> ContactChoices(
-                        avatars = onboarding.contactCard?.avatars.orEmpty(),
-                        selectedId = draft.avatarId,
-                        avatarPainters = contactAvatarPainters,
-                        onSelect = actions.onSelectInitialOnboardingAvatar,
-                    )
-                    InitialOnboardingStage.MainPersona -> PersonaChoices(
-                        personas = catalog.personas,
-                        selectedId = draft.mainPersonaId,
-                        onSelect = actions.onSelectInitialOnboardingMainPersona,
-                    )
-                    InitialOnboardingStage.SupportingPersona -> SupportingPersonaChoices(
-                        personas = catalog.personas,
-                        draft = draft,
-                        onSelect = actions.onSelectInitialOnboardingSupportingPersona,
-                    )
-                    InitialOnboardingStage.Voice -> VoiceChoices(
-                        personas = catalog.personas,
-                        voices = catalog.voices,
-                        draft = draft,
-                        loadingVoiceId = loadingVoiceId,
-                        previewingVoiceId = previewingVoiceId,
-                        onSelect = actions.onSelectInitialOnboardingVoice,
-                        onPreview = ::togglePreview,
-                    )
-                    InitialOnboardingStage.Tone -> Column(
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        catalog.tones.forEach { tone ->
-                            ChoiceCard(
-                                title = tone.label,
-                                description = tone.sample,
-                                icon = MurphIconKind.Quote,
-                                selected = draft.toneId == tone.id,
-                                onClick = { actions.onSelectInitialOnboardingTone(tone.id) },
-                            )
-                        }
-                    }
-                    InitialOnboardingStage.Welcome -> Unit
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MurphColors.Cream),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                HorizontalDivider(color = MurphColors.BorderWarm)
-                Column(
-                    modifier = Modifier
-                        .widthIn(max = 680.dp)
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+            OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
+            when (stage) {
+                InitialOnboardingStage.Contact -> ContactChoices(
+                    avatars = onboarding.contactCard?.avatars.orEmpty(),
+                    selectedId = draft.avatarId,
+                    avatarPainters = contactAvatarPainters,
+                    onSelect = actions.onSelectInitialOnboardingAvatar,
+                )
+                InitialOnboardingStage.MainPersona -> PersonaChoices(
+                    personas = catalog.personas,
+                    selectedId = draft.mainPersonaId,
+                    onSelect = actions.onSelectInitialOnboardingMainPersona,
+                )
+                InitialOnboardingStage.SupportingPersona -> SupportingPersonaChoices(
+                    personas = catalog.personas,
+                    draft = draft,
+                    onSelect = actions.onSelectInitialOnboardingSupportingPersona,
+                )
+                InitialOnboardingStage.Voice -> VoiceChoices(
+                    personas = catalog.personas,
+                    voices = catalog.voices,
+                    draft = draft,
+                    loadingVoiceId = loadingVoiceId,
+                    previewingVoiceId = previewingVoiceId,
+                    onSelect = actions.onSelectInitialOnboardingVoice,
+                    onPreview = ::togglePreview,
+                )
+                InitialOnboardingStage.Tone -> Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    state.initialOnboardingMessage?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MurphColors.Sienna,
-                            textAlign = TextAlign.Center,
-                        )
-                        MurphLinkButton(
-                            text = "Sign out and stop syncing",
-                            onClick = actions.onSignOut,
-                            enabled = !state.isInitialOnboardingSaving,
+                    catalog.tones.forEach { tone ->
+                        ChoiceCard(
+                            title = tone.label,
+                            description = tone.sample,
+                            icon = MurphIconKind.Quote,
+                            selected = draft.toneId == tone.id,
+                            onClick = { actions.onSelectInitialOnboardingTone(tone.id) },
                         )
                     }
-                    OnboardingFooter(stage, state.isInitialOnboardingSaving, actions)
                 }
+                InitialOnboardingStage.Welcome -> Unit
             }
         }
 
-        OnboardingSettingsBar(
-            onClick = onOpenSettings,
-            modifier = Modifier.align(Alignment.TopCenter),
-        )
-    }
-}
-
-@Composable
-private fun OnboardingSettingsBar(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .background(MurphColors.Cream),
-    ) {
-        Box(
+        Column(
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 8.dp)
-                .size(48.dp)
-                .clip(CircleShape)
-                .clickable(role = Role.Button, onClick = onClick)
-                .semantics { contentDescription = "Open Settings" },
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .background(MurphColors.Cream),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            MurphIcon(
-                kind = MurphIconKind.GearFilled,
-                modifier = Modifier.size(20.dp),
-                tint = MurphColors.Slate,
-            )
+            HorizontalDivider(color = MurphColors.BorderWarm)
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 680.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                state.initialOnboardingMessage?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MurphColors.Sienna,
+                        textAlign = TextAlign.Center,
+                    )
+                    MurphLinkButton(
+                        text = "Sign out and stop syncing",
+                        onClick = actions.onSignOut,
+                        enabled = !state.isInitialOnboardingSaving,
+                    )
+                }
+                OnboardingFooter(stage, state.isInitialOnboardingSaving, actions)
+                MurphLinkButton(text = "Settings", onClick = onOpenSettings)
+            }
         }
     }
 }
@@ -1032,12 +994,9 @@ private fun WelcomeScreen(
                     text = "Start exploring",
                     onClick = actions.onDismissCompletedInitialOnboarding,
                 )
+                MurphLinkButton(text = "Settings", onClick = onOpenSettings)
             }
         }
-        OnboardingSettingsBar(
-            onClick = onOpenSettings,
-            modifier = Modifier.align(Alignment.TopCenter),
-        )
     }
 }
 
