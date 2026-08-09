@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   REVIEW_CONTRACT,
   buildReviewContext,
+  buildReviewInvocation,
   reviewContextDigest,
   validateReviewResponse,
 } from "./review-gpt-contract.mjs";
@@ -29,7 +30,7 @@ function context(overrides = {}) {
     },
     promptBytes: Buffer.from(overrides.prompt ?? "fixed prompt", "utf8"),
     repository: overrides.repository ?? repository,
-    reviewToolVersion: overrides.reviewToolVersion ?? "0.5.114",
+    reviewToolVersion: overrides.reviewToolVersion ?? "0.5.124",
   });
 }
 
@@ -48,7 +49,7 @@ function response(reviewContext, { findings = [], outcome = findings.length ? "F
 
 test("accepts a zero-finding response bound to the complete review context", () => {
   const expected = context();
-  assert.equal(expected.prompt.mode, "fixed-preset-only");
+  assert.equal(expected.prompt.mode, "fixed-preset-with-attested-invocation");
   assert.deepEqual(validateReviewResponse({ response: response(expected), context: expected }), {
     contextSha256: reviewContextDigest(expected),
     findings: 0,
@@ -84,18 +85,33 @@ for (const [label, movedContext] of [
     "pushed head",
     () => context({ metadata: { headRefOid: "4".repeat(40) } }),
   ],
-  ["PR body", () => context({ metadata: { body: "Changed after packaging." } })],
+  ["PR body", () => context({ metadata: { body: "Changed after attestation." } })],
   ["prompt bytes", () => context({ prompt: "changed prompt" })],
-  ["ReviewGPT version", () => context({ reviewToolVersion: "0.5.115" })],
+  ["ReviewGPT version", () => context({ reviewToolVersion: "0.5.125" })],
 ]) {
   test(`rejects a response after the ${label} changes`, () => {
-    const packaged = context();
+    const attested = context();
     assert.throws(
-      () => validateReviewResponse({ response: response(packaged), context: movedContext() }),
+      () => validateReviewResponse({ response: response(attested), context: movedContext() }),
       /does not match the current PR review context/u,
     );
   });
 }
+
+test("builds a connector-only invocation bound to the exact review context", () => {
+  const expected = context();
+  const invocation = buildReviewInvocation(expected);
+
+  assert.match(invocation, new RegExp(`Pull request: ${expected.prUrl}`, "u"));
+  assert.match(invocation, new RegExp(`Base commit: ${baseSha}`, "u"));
+  assert.match(invocation, new RegExp(`Head commit: ${headSha}`, "u"));
+  assert.match(
+    invocation,
+    new RegExp(`REVIEW_CONTEXT_SHA256: ${reviewContextDigest(expected)}`, "u"),
+  );
+  assert.match(invocation, /Use the connected GitHub app as the sole repository-content source\./u);
+  assert.doesNotMatch(invocation, /zip|attachment/iu);
+});
 
 test("rejects a checked head that disagrees with the context", () => {
   const expected = context();

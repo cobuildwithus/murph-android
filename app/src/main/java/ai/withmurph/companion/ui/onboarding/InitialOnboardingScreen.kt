@@ -91,7 +91,6 @@ import java.net.URL
 fun InitialOnboardingScreen(
     state: AppUiState,
     actions: MurphActions,
-    onOpenSettings: () -> Unit,
     contactAvatarPainters: Map<String, Painter> = emptyMap(),
 ) {
     val onboarding = state.initialOnboarding ?: return
@@ -176,7 +175,7 @@ fun InitialOnboardingScreen(
     }
 
     if (stage == InitialOnboardingStage.Welcome) {
-        WelcomeScreen(state, actions, onOpenSettings)
+        WelcomeScreen(state, actions)
         return
     }
 
@@ -278,7 +277,6 @@ fun InitialOnboardingScreen(
                     )
                 }
                 OnboardingFooter(stage, state.isInitialOnboardingSaving, actions)
-                MurphLinkButton(text = "Settings", onClick = onOpenSettings)
             }
         }
     }
@@ -923,7 +921,6 @@ private fun OnboardingFooter(
 private fun WelcomeScreen(
     state: AppUiState,
     actions: MurphActions,
-    onOpenSettings: () -> Unit,
 ) {
     val action = state.initialOnboarding?.contactAction
     BoxWithConstraints(
@@ -994,7 +991,6 @@ private fun WelcomeScreen(
                     text = "Start exploring",
                     onClick = actions.onDismissCompletedInitialOnboarding,
                 )
-                MurphLinkButton(text = "Settings", onClick = onOpenSettings)
             }
         }
     }

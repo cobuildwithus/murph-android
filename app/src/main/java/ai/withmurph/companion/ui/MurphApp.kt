@@ -341,7 +341,6 @@ private fun ReadyApp(
                             InitialOnboardingScreen(
                                 state = state,
                                 actions = actions,
-                                onOpenSettings = { selectedTab = AppTab.Settings },
                                 contactAvatarPainters = initialOnboardingContactAvatarPainters,
                             )
                         } else {
