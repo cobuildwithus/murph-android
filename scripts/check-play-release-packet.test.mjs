@@ -47,13 +47,40 @@ const manifestFacts = {
     applicationSecurityAttributes: {
       "android:allowBackup": "false",
       "android:dataExtractionRules": "@xml/data_extraction_rules",
+      "android:debuggable": null,
+      "android:directBootAware": null,
       "android:fullBackupContent": "false",
+      "android:networkSecurityConfig": null,
+      "android:testOnly": null,
+      "android:usesCleartextTraffic": null,
     },
+    usesSdkAttributes: {
+      "android:minSdkVersion": "28",
+      "android:targetSdkVersion": "36",
+    },
+    declaredPermissions: [
+      {
+        "android:name": "ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android:protectionLevel": "0x2",
+      },
+    ],
+    permissionGroups: [],
+    permissionTrees: [],
     launcherActivity: "ai.withmurph.companion.MainActivity",
     forbiddenComponents: [
       "ai.withmurph.companion.visual.ScreenshotActivity",
       "io.tryvital.vitalhealthconnect.SyncBroadcastReceiver",
       "io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService",
+    ],
+    componentSecurityAttributes: [
+      {
+        componentType: "activities",
+        component: "ai.withmurph.companion.MainActivity",
+        attributes: {
+          "android:exported": "true",
+          "android:taskAffinity": null,
+        },
+      },
     ],
     requiredIntentFilters: [
       {
@@ -73,13 +100,16 @@ function releaseManifest({
   versionName = "1.2.3",
   minSdk = 28,
   targetSdk = 36,
+  maxSdk = null,
   debuggable = false,
   permissions = ["android.permission.INTERNET"],
   permissionAttributes = "",
   allowBackup = "false",
   dataExtractionRules = "@xml/data_extraction_rules",
   fullBackupContent = "false",
-  launcherAttributes = "",
+  applicationAttributes = "",
+  permissionProtectionLevel = "signature",
+  launcherAttributes = ' android:exported="true"',
   launcherIntentFilters = `
     <intent-filter>
       <action android:name="android.intent.action.MAIN" />
@@ -94,18 +124,24 @@ function releaseManifest({
       `<uses-permission android:name="${permission}"${index === 0 ? permissionAttributes : ""} />`
     )
     .join("\n");
+  const maxSdkAttribute = maxSdk === null ? "" : ` android:maxSdkVersion="${maxSdk}"`;
   return `
     <manifest xmlns:android="http://schemas.android.com/apk/res/android"
       package="${packageName}"
       android:versionCode="${versionCode}"
       android:versionName="${versionName}">
-      <uses-sdk android:minSdkVersion="${minSdk}" android:targetSdkVersion="${targetSdk}" />
+      <uses-sdk
+        android:minSdkVersion="${minSdk}"
+        android:targetSdkVersion="${targetSdk}"${maxSdkAttribute} />
+      <permission
+        android:name="ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        android:protectionLevel="${permissionProtectionLevel}" />
       ${permissionElements}
       <application
         android:name="ai.withmurph.companion.MurphApplication"
         android:allowBackup="${allowBackup}"
         android:dataExtractionRules="${dataExtractionRules}"
-        android:fullBackupContent="${fullBackupContent}"${debuggableAttribute}>
+        android:fullBackupContent="${fullBackupContent}"${debuggableAttribute}${applicationAttributes}>
         <activity android:name="ai.withmurph.companion.MainActivity"${launcherAttributes}>
           ${launcherIntentFilters}
         </activity>
@@ -128,10 +164,13 @@ test("artifact manifest must match the local release boundary", () => {
     releaseManifest({ versionName: "1.2.4" }),
     releaseManifest({ minSdk: 29 }),
     releaseManifest({ targetSdk: 35 }),
+    releaseManifest({ maxSdk: 35 }),
     releaseManifest({ debuggable: true }),
     releaseManifest({ allowBackup: "true" }),
     releaseManifest({ dataExtractionRules: "@xml/other_extraction_rules" }),
     releaseManifest({ fullBackupContent: "true" }),
+    releaseManifest({ applicationAttributes: ' android:testOnly="true"' }),
+    releaseManifest({ permissionProtectionLevel: "normal" }),
     releaseManifest({
       permissions: [
         "android.permission.INTERNET",
@@ -175,7 +214,17 @@ test("artifact manifest must match the local release boundary", () => {
       clean,
       manifestFacts,
     ),
-    /manifest contract drifted/,
+    /android:exported drifted/,
+  );
+  assert.throws(
+    () => validateArtifactManifest(
+      releaseManifest({
+        launcherAttributes: ' android:exported="true" android:taskAffinity="example.task"',
+      }),
+      clean,
+      manifestFacts,
+    ),
+    /unexpectedly defines android:taskAffinity/,
   );
   assert.throws(
     () => validateArtifactManifest(
@@ -187,6 +236,18 @@ test("artifact manifest must match the local release boundary", () => {
       manifestFacts,
     ),
     /forbidden components/,
+  );
+});
+
+test("manifest parsing rejects document types and external entities", () => {
+  assert.throws(
+    () => releaseManifestContract(`
+      <!DOCTYPE manifest [<!ENTITY probe SYSTEM "file:///etc/passwd">]>
+      <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+        &probe;
+      </manifest>
+    `),
+    /security contract could not be parsed/,
   );
 });
 
@@ -281,7 +342,12 @@ test(
       fs.mkdirSync(path.join(contents, "base", "assets", "murph-play"), {
         recursive: true,
       });
+      fs.mkdirSync(path.join(contents, "META-INF", "services"), { recursive: true });
       fs.writeFileSync(path.join(contents, "app-code.bin"), "approved app code\n");
+      fs.writeFileSync(
+        path.join(contents, "META-INF", "services", "example.Service"),
+        "example.ApprovedImplementation\n",
+      );
       fs.writeFileSync(
         path.join(contents, "base", "assets", "murph-play", "source.properties"),
         "schema=1\nsourceHead=example\n",
@@ -313,6 +379,25 @@ test(
         () => verifyAndroidBundleSigners(artifact, "00".repeat(32)),
         /approved upload certificate/,
       );
+
+      fs.writeFileSync(
+        path.join(contents, "META-INF", "services", "example.Service"),
+        "example.UnsignedReplacement\n",
+      );
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--update",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        "META-INF/services/example.Service",
+      ]);
+      assert.throws(
+        () => verifyAndroidBundleSigners(artifact, approvedFingerprint),
+        /completely signed/,
+      );
+      sign(approvedKeystore, "approved");
+      assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
 
       fs.writeFileSync(
         path.join(contents, "base", "assets", "murph-play", "source.properties"),

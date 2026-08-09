@@ -66,13 +66,49 @@
     "applicationSecurityAttributes": {
       "android:allowBackup": "false",
       "android:dataExtractionRules": "@xml/data_extraction_rules",
-      "android:fullBackupContent": "false"
+      "android:debuggable": null,
+      "android:directBootAware": null,
+      "android:fullBackupContent": "false",
+      "android:networkSecurityConfig": null,
+      "android:testOnly": null,
+      "android:usesCleartextTraffic": null
     },
+    "usesSdkAttributes": {
+      "android:minSdkVersion": "28",
+      "android:targetSdkVersion": "36"
+    },
+    "declaredPermissions": [
+      {
+        "android:name": "ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android:protectionLevel": "0x2"
+      }
+    ],
+    "permissionGroups": [],
+    "permissionTrees": [],
     "launcherActivity": "ai.withmurph.companion.MainActivity",
     "forbiddenComponents": [
       "ai.withmurph.companion.visual.ScreenshotActivity",
       "io.tryvital.vitalhealthconnect.SyncBroadcastReceiver",
       "io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService"
+    ],
+    "componentSecurityAttributes": [
+      {
+        "componentType": "activities",
+        "component": "ai.withmurph.companion.MainActivity",
+        "attributes": {
+          "android:exported": "true",
+          "android:taskAffinity": null
+        }
+      },
+      {
+        "componentType": "activityAliases",
+        "component": "ai.withmurph.companion.HealthPermissionUsageActivity",
+        "attributes": {
+          "android:exported": "true",
+          "android:permission": "android.permission.START_VIEW_PERMISSION_USAGE",
+          "android:targetActivity": "ai.withmurph.companion.MainActivity"
+        }
+      }
     ],
     "requiredIntentFilters": [
       {

@@ -26,36 +26,6 @@ import org.w3c.dom.NodeList;
 public final class PlayArtifactInspector {
     private static final String ANDROID_NAMESPACE =
         "http://schemas.android.com/apk/res/android";
-    private static final Set<String> APPLICATION_SECURITY_ATTRIBUTES = Set.of(
-        "allowBackup",
-        "backupAgent",
-        "dataExtractionRules",
-        "debuggable",
-        "fullBackupContent",
-        "hasFragileUserData",
-        "killAfterRestore",
-        "networkSecurityConfig",
-        "permission",
-        "restoreAnyVersion",
-        "usesCleartextTraffic"
-    );
-    private static final Set<String> COMPONENT_SECURITY_ATTRIBUTES = Set.of(
-        "authorities",
-        "directBootAware",
-        "enabled",
-        "exported",
-        "externalService",
-        "foregroundServiceType",
-        "grantUriPermissions",
-        "isolatedProcess",
-        "permission",
-        "process",
-        "readPermission",
-        "singleUser",
-        "targetActivity",
-        "visibleToInstantApps",
-        "writePermission"
-    );
     private static final Map<String, Long> FOREGROUND_SERVICE_TYPES = Map.ofEntries(
         Map.entry("dataSync", 0x01L),
         Map.entry("mediaPlayback", 0x02L),
@@ -72,6 +42,28 @@ public final class PlayArtifactInspector {
         Map.entry("fileManagement", 0x1000L),
         Map.entry("mediaProcessing", 0x2000L),
         Map.entry("specialUse", 0x40000000L)
+    );
+    private static final Map<String, Long> CONFIG_CHANGES = Map.ofEntries(
+        Map.entry("mcc", 0x0001L),
+        Map.entry("mnc", 0x0002L),
+        Map.entry("locale", 0x0004L),
+        Map.entry("touchscreen", 0x0008L),
+        Map.entry("keyboard", 0x0010L),
+        Map.entry("keyboardHidden", 0x0020L),
+        Map.entry("navigation", 0x0040L),
+        Map.entry("orientation", 0x0080L),
+        Map.entry("screenLayout", 0x0100L),
+        Map.entry("uiMode", 0x0200L),
+        Map.entry("screenSize", 0x0400L),
+        Map.entry("smallestScreenSize", 0x0800L),
+        Map.entry("density", 0x1000L),
+        Map.entry("layoutDirection", 0x2000L),
+        Map.entry("colorMode", 0x4000L),
+        Map.entry("grammaticalGender", 0x8000L),
+        Map.entry("resourcesUnused", 0x08000000L),
+        Map.entry("fontWeightAdjustment", 0x10000000L),
+        Map.entry("fontScale", 0x40000000L),
+        Map.entry("assetsPaths", 0x80000000L)
     );
 
     private PlayArtifactInspector() {}
@@ -106,7 +98,7 @@ public final class PlayArtifactInspector {
             Enumeration<JarEntry> entries = jar.entries();
             while (entries.hasMoreElements()) {
                 JarEntry entry = entries.nextElement();
-                if (entry.isDirectory() || entry.getName().startsWith("META-INF/")) {
+                if (entry.isDirectory() || isJarSignatureMetadata(entry.getName())) {
                     continue;
                 }
                 contentEntries += 1;
@@ -139,6 +131,25 @@ public final class PlayArtifactInspector {
         if (!expectedSigners.equals(commonSigners)) {
             throw new SecurityException("the artifact signer does not match the approved upload certificate");
         }
+    }
+
+    private static boolean isJarSignatureMetadata(String name) {
+        String normalized = name.toUpperCase(java.util.Locale.ROOT);
+        if (normalized.equals("META-INF/MANIFEST.MF")) {
+            return true;
+        }
+        if (!normalized.startsWith("META-INF/")) {
+            return false;
+        }
+        String topLevelName = normalized.substring("META-INF/".length());
+        if (topLevelName.contains("/")) {
+            return false;
+        }
+        return topLevelName.endsWith(".SF") ||
+            topLevelName.endsWith(".RSA") ||
+            topLevelName.endsWith(".DSA") ||
+            topLevelName.endsWith(".EC") ||
+            topLevelName.startsWith("SIG-");
     }
 
     private static String manifestContract(InputStream input) throws Exception {
@@ -176,15 +187,19 @@ public final class PlayArtifactInspector {
             "targetSdk",
             parseInteger(requiredAndroidAttribute(usesSdk, "targetSdkVersion"), "targetSdkVersion")
         );
+        contract.put("usesSdkAttributes", allAndroidAttributes(usesSdk));
         contract.put(
             "applicationName",
             qualifyComponent(requiredAndroidAttribute(application, "name"), packageName)
         );
         contract.put(
             "applicationSecurityAttributes",
-            selectedAndroidAttributes(application, APPLICATION_SECURITY_ATTRIBUTES, packageName)
+            componentAndroidAttributes(application, packageName)
         );
         contract.put("permissions", permissionContracts(manifest));
+        contract.put("declaredPermissions", topLevelContracts(manifest, "permission"));
+        contract.put("permissionGroups", topLevelContracts(manifest, "permission-group"));
+        contract.put("permissionTrees", topLevelContracts(manifest, "permission-tree"));
         contract.put("activities", componentContracts(application, "activity", packageName));
         contract.put(
             "activityAliases",
@@ -194,6 +209,23 @@ public final class PlayArtifactInspector {
         contract.put("receivers", componentContracts(application, "receiver", packageName));
         contract.put("providers", componentContracts(application, "provider", packageName));
         return json(contract);
+    }
+
+    private static List<Map<String, String>> topLevelContracts(
+        Element manifest,
+        String elementName
+    ) {
+        List<Map<String, String>> values = new ArrayList<>();
+        for (Element element : directChildren(manifest, elementName)) {
+            Map<String, String> attributes = allAndroidAttributes(element);
+            if (!attributes.containsKey("android:name")) {
+                throw new IllegalArgumentException("a " + elementName + " element has no name");
+            }
+            values.add(attributes);
+        }
+        values.sort(Comparator.comparing(PlayArtifactInspector::json));
+        rejectDuplicateNames(values, elementName);
+        return values;
     }
 
     private static List<Map<String, String>> permissionContracts(Element manifest) {
@@ -224,7 +256,7 @@ public final class PlayArtifactInspector {
             value.put("name", name);
             value.put(
                 "securityAttributes",
-                selectedAndroidAttributes(component, COMPONENT_SECURITY_ATTRIBUTES, packageName)
+                componentAndroidAttributes(component, packageName)
             );
             value.put("intentFilters", intentFilterContracts(component));
             components.add(value);
@@ -269,25 +301,17 @@ public final class PlayArtifactInspector {
         return new ArrayList<>(names);
     }
 
-    private static Map<String, String> selectedAndroidAttributes(
+    private static Map<String, String> componentAndroidAttributes(
         Element element,
-        Set<String> names,
         String packageName
     ) {
-        Map<String, String> attributes = new TreeMap<>();
-        for (String name : names) {
-            if (!element.hasAttributeNS(ANDROID_NAMESPACE, name)) {
-                continue;
+        Map<String, String> attributes = allAndroidAttributes(element);
+        for (String name : List.of("android:name", "android:targetActivity")) {
+            if (attributes.containsKey(name)) {
+                attributes.put(name, qualifyComponent(attributes.get(name), packageName));
             }
-            String value = element.getAttributeNS(ANDROID_NAMESPACE, name);
-            if (name.equals("name") || name.equals("targetActivity")) {
-                value = qualifyComponent(value, packageName);
-            }
-            if (name.equals("foregroundServiceType")) {
-                value = normalizeForegroundServiceType(value);
-            }
-            attributes.put("android:" + name, value);
         }
+        attributes.remove("android:name");
         return attributes;
     }
 
@@ -297,22 +321,54 @@ public final class PlayArtifactInspector {
         for (int index = 0; index < nodes.getLength(); index += 1) {
             Node node = nodes.item(index);
             if (ANDROID_NAMESPACE.equals(node.getNamespaceURI())) {
-                attributes.put("android:" + node.getLocalName(), node.getNodeValue());
+                String name = node.getLocalName();
+                String value = node.getNodeValue();
+                if (name.equals("foregroundServiceType")) {
+                    value = normalizeForegroundServiceType(value);
+                }
+                if (name.equals("configChanges")) {
+                    value = normalizeFlags(value, CONFIG_CHANGES, "configuration change");
+                }
+                if (name.equals("protectionLevel")) {
+                    value = normalizeProtectionLevel(value);
+                }
+                attributes.put("android:" + name, value);
             }
         }
         return attributes;
     }
 
+    private static String normalizeProtectionLevel(String value) {
+        if (value.matches("(?i)^0x[0-9a-f]+$")) {
+            return "0x" + Long.toHexString(Long.decode(value));
+        }
+        return switch (value) {
+            case "normal" -> "0x0";
+            case "dangerous" -> "0x1";
+            case "signature" -> "0x2";
+            case "signatureOrSystem" -> "0x3";
+            default -> throw new IllegalArgumentException("unknown permission protection level");
+        };
+    }
+
     private static String normalizeForegroundServiceType(String value) {
+        return normalizeFlags(value, FOREGROUND_SERVICE_TYPES, "foreground-service type");
+    }
+
+    private static String normalizeFlags(
+        String value,
+        Map<String, Long> flags,
+        String label
+    ) {
         if (value.matches("(?i)^0x[0-9a-f]+$")) {
             return "0x" + Long.toHexString(Long.decode(value));
         }
         long combined = 0;
         for (String rawFlag : value.split("\\|")) {
             String flag = rawFlag.trim();
-            Long bit = FOREGROUND_SERVICE_TYPES.get(flag);
+            Long bit = flags.get(flag);
             if (bit == null) {
-                throw new IllegalArgumentException("unknown foreground-service type");
+                throw new IllegalArgumentException("unknown " + label);
             }
             combined |= bit;
         }

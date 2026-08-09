@@ -352,6 +352,18 @@ export function releaseManifestContract(source, runCommand = execFileSync) {
   return contract;
 }
 
+function assertAttributeExpectations(actual, expected, label) {
+  for (const [name, expectedValue] of Object.entries(expected)) {
+    if (expectedValue === null) {
+      if (Object.hasOwn(actual, name)) {
+        throw new Error(`${label} unexpectedly defines ${name}.`);
+      }
+      continue;
+    }
+    assertEqual(actual[name], expectedValue, `${label} ${name}`);
+  }
+}
+
 function validateReleaseManifestContract(contract, facts, label) {
   assertEqual(contract.packageName, facts.application.applicationId, `${label} package`);
   assertEqual(contract.versionCode, facts.application.versionCode, `${label} versionCode`);
@@ -359,9 +371,14 @@ function validateReleaseManifestContract(contract, facts, label) {
   assertEqual(contract.minSdk, facts.application.minSdk, `${label} minSdk`);
   assertEqual(contract.targetSdk, facts.application.targetSdk, `${label} targetSdk`);
   assertEqual(
-    JSON.stringify(contract.applicationSecurityAttributes),
-    JSON.stringify(facts.releaseManifest.applicationSecurityAttributes),
-    `${label} application security attributes`,
+    JSON.stringify(contract.usesSdkAttributes),
+    JSON.stringify(facts.releaseManifest.usesSdkAttributes),
+    `${label} uses-sdk attributes`,
+  );
+  assertAttributeExpectations(
+    contract.applicationSecurityAttributes,
+    facts.releaseManifest.applicationSecurityAttributes,
+    `${label} application`,
   );
   assertEqual(
     contract.applicationName,
@@ -391,6 +408,32 @@ function validateReleaseManifestContract(contract, facts, label) {
   );
   if (forbiddenComponents.length > 0) {
     throw new Error(`${label} contains forbidden components: ${forbiddenComponents.join(", ")}.`);
+  }
+  assertEqual(
+    JSON.stringify(contract.declaredPermissions),
+    JSON.stringify(facts.releaseManifest.declaredPermissions),
+    `${label} declared permissions`,
+  );
+  assertEqual(
+    JSON.stringify(contract.permissionGroups),
+    JSON.stringify(facts.releaseManifest.permissionGroups),
+    `${label} permission groups`,
+  );
+  assertEqual(
+    JSON.stringify(contract.permissionTrees),
+    JSON.stringify(facts.releaseManifest.permissionTrees),
+    `${label} permission trees`,
+  );
+  for (const expectedComponent of facts.releaseManifest.componentSecurityAttributes) {
+    const component = contract[expectedComponent.componentType].find(
+      (candidate) => candidate.name === expectedComponent.component,
+    );
+    if (!component) throw new Error(`${label} is missing an expected component.`);
+    assertAttributeExpectations(
+      component.securityAttributes,
+      expectedComponent.attributes,
+      `${label} ${expectedComponent.component}`,
+    );
   }
   for (const requiredFilter of facts.releaseManifest.requiredIntentFilters) {
     const components = contract[requiredFilter.componentType];
