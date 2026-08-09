@@ -14,6 +14,7 @@ Every unchecked item is a release blocker. Keep private evidence in the approved
 - [ ] Enroll the app in Play App Signing and establish a separate upload key following [Android app-signing guidance](https://developer.android.com/studio/publish/app-signing).
 - [ ] Keep the keystore and passwords in the approved secret manager/CI boundary. Never commit, print, or pass secret values on a shared command line.
 - [ ] Verify the upload certificate fingerprint against Play Console using secret-safe tooling.
+- [ ] Set `MURPH_PLAY_UPLOAD_CERT_SHA256` to that exact public SHA-256 for both evidence generation and the final readiness check.
 - [ ] Increment `versionCode` monotonically and set the intended `versionName`; update `release-facts.json` and release notes in the same candidate.
 - [ ] Supply the public production Privy native-client values and the production HTTPS backend.
 - [ ] Deploy a Murph backend compatible with Android's lifecycle-neutral canonical admission request, then prove new-account admission end to end from the exact signed candidate. Do not submit listing copy that advertises account creation until `canonicalAccountAdmissionVerified` is true.

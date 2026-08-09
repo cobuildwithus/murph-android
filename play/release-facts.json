@@ -63,11 +63,49 @@
   ],
   "releaseManifest": {
     "applicationClass": "ai.withmurph.companion.MurphApplication",
+    "applicationSecurityAttributes": {
+      "android:allowBackup": "false",
+      "android:dataExtractionRules": "@xml/data_extraction_rules",
+      "android:fullBackupContent": "false"
+    },
     "launcherActivity": "ai.withmurph.companion.MainActivity",
     "forbiddenComponents": [
       "ai.withmurph.companion.visual.ScreenshotActivity",
       "io.tryvital.vitalhealthconnect.SyncBroadcastReceiver",
       "io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService"
+    ],
+    "requiredIntentFilters": [
+      {
+        "componentType": "activities",
+        "component": "ai.withmurph.companion.MainActivity",
+        "actions": [
+          "android.intent.action.MAIN"
+        ],
+        "categories": [
+          "android.intent.category.LAUNCHER"
+        ],
+        "data": []
+      },
+      {
+        "componentType": "activities",
+        "component": "ai.withmurph.companion.MainActivity",
+        "actions": [
+          "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"
+        ],
+        "categories": [],
+        "data": []
+      },
+      {
+        "componentType": "activityAliases",
+        "component": "ai.withmurph.companion.HealthPermissionUsageActivity",
+        "actions": [
+          "android.intent.action.VIEW_PERMISSION_USAGE"
+        ],
+        "categories": [
+          "android.intent.category.HEALTH_PERMISSIONS"
+        ],
+        "data": []
+      }
     ]
   },
   "healthConnect": {

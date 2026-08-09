@@ -29,10 +29,12 @@
   durable evidence URLs, and an explicit physical-device gap declaration.
 - Fail-closed Play submission readiness bound to a clean source commit and the
   exact signed AAB. The pinned bundletool validates that artifact and treats its
-  base manifest as authoritative; synthetic vendor/backend configuration is
-  rejected, and private operator evidence is required for production Privy
-  registration, real provider export, and the Pixel/Samsung device matrix
-  before upload.
+  base manifest as authoritative, while the gate requires complete approved
+  upload-signer coverage and an exact SDK, backup/network, permission,
+  component, and intent-filter security contract. Synthetic vendor/backend
+  configuration is rejected, and private operator evidence is required for
+  production Privy registration, real provider export, and the Pixel/Samsung
+  device matrix before upload.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.

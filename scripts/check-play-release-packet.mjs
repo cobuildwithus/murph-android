@@ -3,9 +3,10 @@
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const RELEASE_PACKET_PATHS = [
   "play/release-facts.json",
@@ -19,6 +20,10 @@ const RELEASE_PACKET_PATHS = [
   "play/release-checklist.md",
 ];
 const BUNDLETOOL_MAIN_CLASS = "com.android.tools.build.bundletool.BundleToolMain";
+const PLAY_ARTIFACT_INSPECTOR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "PlayArtifactInspector.java",
+);
 
 function readText(rootDir, relativePath) {
   return fs.readFileSync(path.join(rootDir, relativePath), "utf8");
@@ -120,24 +125,13 @@ function requireSignedAndroidBundle(
   sourceHead,
   configurationSha256,
   bundletoolClasspath,
+  expectedSignerSha256,
 ) {
   if (path.extname(releaseArtifactPath).toLowerCase() !== ".aab") {
     throw new Error("Play submission requires the exact signed Android App Bundle (.aab).");
   }
   const artifactManifest = inspectAndroidBundle(releaseArtifactPath, bundletoolClasspath);
-  let verification = "";
-  try {
-    verification = execFileSync(
-      "jarsigner",
-      ["-verify", releaseArtifactPath],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-  } catch {
-    throw new Error("The exact Android App Bundle signature could not be verified.");
-  }
-  if (!/jar verified\./i.test(verification) || /jar is unsigned/i.test(verification)) {
-    throw new Error("Play submission requires a signed Android App Bundle.");
-  }
+  verifyAndroidBundleSigners(releaseArtifactPath, expectedSignerSha256);
   let sourceMetadata = "";
   try {
     sourceMetadata = execFileSync(
@@ -150,6 +144,42 @@ function requireSignedAndroidBundle(
   }
   validateArtifactSourceMetadata(sourceMetadata, sourceHead, configurationSha256);
   return artifactManifest;
+}
+
+function javaExecutable() {
+  return process.env.MURPH_JAVA_EXECUTABLE ?? (
+    process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, "bin", "java") : "java"
+  );
+}
+
+export function verifyAndroidBundleSigners(
+  releaseArtifactPath,
+  expectedSignerSha256,
+  runCommand = execFileSync,
+) {
+  if (!/^(?:[0-9a-f]{2}:){31}[0-9a-f]{2}$|^[0-9a-f]{64}$/i.test(expectedSignerSha256)) {
+    throw new Error("Play submission requires the approved upload-certificate SHA-256.");
+  }
+  try {
+    runCommand(
+      javaExecutable(),
+      [
+        PLAY_ARTIFACT_INSPECTOR,
+        "verify-signers",
+        releaseArtifactPath,
+        expectedSignerSha256,
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    throw new Error(
+      "The Android App Bundle is not completely signed by the approved upload certificate.",
+    );
+  }
 }
 
 export function releasePacketSha256(rootDir = process.cwd()) {
@@ -295,134 +325,44 @@ export function extractManifestPermissions(source) {
   };
 }
 
-function elementTags(source, elementName) {
-  const pattern = new RegExp(`<${elementName}(?:\\s|>)[^>]*>`, "g");
-  return [...source.matchAll(pattern)].map((match) => match[0]);
-}
+const manifestContractCache = new Map();
 
-function xmlAttributes(tag) {
-  return Object.fromEntries(
-    [...tag.matchAll(/([A-Za-z_][A-Za-z0-9_.:-]*)="([^"]*)"/g)]
-      .map((match) => [match[1], match[2]]),
-  );
-}
-
-function requiredElementAttributes(source, elementName) {
-  const tags = elementTags(source, elementName);
-  if (tags.length !== 1) {
-    throw new Error(`Expected exactly one ${elementName} element; found ${tags.length}.`);
+export function releaseManifestContract(source, runCommand = execFileSync) {
+  const cacheKey = sha256(source);
+  if (runCommand === execFileSync && manifestContractCache.has(cacheKey)) {
+    return manifestContractCache.get(cacheKey);
   }
-  return xmlAttributes(tags[0]);
-}
-
-function qualifiedComponentName(name, packageName) {
-  if (name.startsWith(".")) return `${packageName}${name}`;
-  if (!name.includes(".")) return `${packageName}.${name}`;
-  return name;
-}
-
-const COMPONENT_SECURITY_ATTRIBUTES = [
-  "android:authorities",
-  "android:directBootAware",
-  "android:enabled",
-  "android:exported",
-  "android:foregroundServiceType",
-  "android:grantUriPermissions",
-  "android:permission",
-  "android:process",
-  "android:readPermission",
-  "android:targetActivity",
-  "android:writePermission",
-];
-const FOREGROUND_SERVICE_TYPES = {
-  dataSync: 0x01n,
-  mediaPlayback: 0x02n,
-  phoneCall: 0x04n,
-  location: 0x08n,
-  connectedDevice: 0x10n,
-  mediaProjection: 0x20n,
-  camera: 0x40n,
-  microphone: 0x80n,
-  health: 0x100n,
-  remoteMessaging: 0x200n,
-  systemExempted: 0x400n,
-  shortService: 0x800n,
-  fileManagement: 0x1000n,
-  mediaProcessing: 0x2000n,
-  specialUse: 0x40000000n,
-};
-
-function normalizedSecurityAttribute(attribute, value) {
-  if (attribute !== "android:foregroundServiceType") return value;
-  if (/^0x[0-9a-f]+$/i.test(value)) return `0x${BigInt(value).toString(16)}`;
-  const flags = value.split("|").map((flag) => flag.trim());
-  const unknown = flags.filter((flag) => FOREGROUND_SERVICE_TYPES[flag] === undefined);
-  if (unknown.length > 0) {
-    throw new Error(`Unknown foreground-service types: ${unknown.join(", ")}.`);
+  let contract;
+  try {
+    const output = runCommand(
+      javaExecutable(),
+      [PLAY_ARTIFACT_INSPECTOR, "manifest-contract"],
+      {
+        encoding: "utf8",
+        input: source,
+        maxBuffer: 4 * 1024 * 1024,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    contract = JSON.parse(output);
+  } catch {
+    throw new Error("The Android manifest security contract could not be parsed.");
   }
-  const bitmask = flags.reduce(
-    (combined, flag) => combined | FOREGROUND_SERVICE_TYPES[flag],
-    0n,
-  );
-  return `0x${bitmask.toString(16)}`;
-}
-
-function manifestComponents(source, elementName, packageName) {
-  const components = elementTags(source, elementName).map((tag) => {
-    const attributes = xmlAttributes(tag);
-    const rawName = attributes["android:name"];
-    if (!rawName) throw new Error(`A ${elementName} element has no android:name.`);
-    return {
-      name: qualifiedComponentName(rawName, packageName),
-      securityAttributes: Object.fromEntries(
-        COMPONENT_SECURITY_ATTRIBUTES
-          .filter((attribute) => attributes[attribute] !== undefined)
-          .map((attribute) => [
-            attribute,
-            normalizedSecurityAttribute(attribute, attributes[attribute]),
-          ]),
-      ),
-    };
-  });
-  sortedUnique(
-    components.map((component) => component.name),
-    `${elementName} names`,
-  );
-  return components.sort((left, right) => left.name.localeCompare(right.name));
-}
-
-export function releaseManifestContract(source) {
-  const manifest = requiredElementAttributes(source, "manifest");
-  const application = requiredElementAttributes(source, "application");
-  const packageName = manifest.package;
-  if (!packageName) throw new Error("The release manifest has no package name.");
-  const versionCode = Number(manifest["android:versionCode"]);
-  if (!Number.isSafeInteger(versionCode) || versionCode < 1) {
-    throw new Error("The release manifest has no valid versionCode.");
-  }
-  const versionName = manifest["android:versionName"];
-  if (!versionName) throw new Error("The release manifest has no versionName.");
-
-  return {
-    packageName,
-    versionCode,
-    versionName,
-    debuggable: application["android:debuggable"] === "true",
-    applicationName: qualifiedComponentName(application["android:name"] ?? "", packageName),
-    permissions: extractManifestPermissions(source).requested,
-    activities: manifestComponents(source, "activity", packageName),
-    activityAliases: manifestComponents(source, "activity-alias", packageName),
-    services: manifestComponents(source, "service", packageName),
-    receivers: manifestComponents(source, "receiver", packageName),
-    providers: manifestComponents(source, "provider", packageName),
-  };
+  if (runCommand === execFileSync) manifestContractCache.set(cacheKey, contract);
+  return contract;
 }
 
 function validateReleaseManifestContract(contract, facts, label) {
   assertEqual(contract.packageName, facts.application.applicationId, `${label} package`);
   assertEqual(contract.versionCode, facts.application.versionCode, `${label} versionCode`);
   assertEqual(contract.versionName, facts.application.versionName, `${label} versionName`);
-  assertEqual(contract.debuggable, false, `${label} debuggable state`);
+  assertEqual(contract.minSdk, facts.application.minSdk, `${label} minSdk`);
+  assertEqual(contract.targetSdk, facts.application.targetSdk, `${label} targetSdk`);
+  assertEqual(
+    JSON.stringify(contract.applicationSecurityAttributes),
+    JSON.stringify(facts.releaseManifest.applicationSecurityAttributes),
+    `${label} application security attributes`,
+  );
   assertEqual(
     contract.applicationName,
     facts.releaseManifest.applicationClass,
@@ -434,7 +374,7 @@ function validateReleaseManifestContract(contract, facts, label) {
     throw new Error(`${label} is missing the expected launcher activity.`);
   }
   assertStringSet(
-    contract.permissions,
+    contract.permissions.map((permission) => permission["android:name"]),
     facts.mergedManifestPermissions,
     `${label} permissions`,
   );
@@ -451,6 +391,19 @@ function validateReleaseManifestContract(contract, facts, label) {
   );
   if (forbiddenComponents.length > 0) {
     throw new Error(`${label} contains forbidden components: ${forbiddenComponents.join(", ")}.`);
+  }
+  for (const requiredFilter of facts.releaseManifest.requiredIntentFilters) {
+    const components = contract[requiredFilter.componentType];
+    const component = components.find((candidate) => candidate.name === requiredFilter.component);
+    if (!component) {
+      throw new Error(`${label} is missing an intent-filter owner.`);
+    }
+    const present = component.intentFilters.some((filter) =>
+      JSON.stringify(filter.actions) === JSON.stringify(requiredFilter.actions) &&
+      JSON.stringify(filter.categories) === JSON.stringify(requiredFilter.categories) &&
+      JSON.stringify(filter.data) === JSON.stringify(requiredFilter.data)
+    );
+    if (!present) throw new Error(`${label} is missing a required intent filter.`);
   }
 }
 
@@ -662,9 +615,11 @@ export function validateReleasePacket(options = {}) {
     validateArtifactManifest(artifactManifest, mergedManifest, facts);
   }
 
-  let releaseArtifact = null;
-  if (options.releaseArtifactPath) {
+  let releaseArtifact = options.releaseArtifact ?? null;
+  if (!releaseArtifact && options.releaseArtifactPath) {
     releaseArtifact = fs.readFileSync(options.releaseArtifactPath);
+  }
+  if (releaseArtifact) {
     if (releaseArtifact.length === 0) throw new Error("The release artifact is empty.");
   }
 
@@ -731,22 +686,39 @@ function main() {
   }
   let sourceHead = null;
   let artifactManifest = null;
+  let releaseArtifact = null;
   if (arguments_.submission || arguments_.print_evidence_hashes) {
     if (!releaseArtifactPath) {
       throw new Error("Submission verification requires the exact release artifact.");
     }
     sourceHead = exactSourceHead(process.cwd());
-    artifactManifest = requireSignedAndroidBundle(
-      releaseArtifactPath,
-      sourceHead,
-      process.env.MURPH_PLAY_EXPECTED_CONFIGURATION_SHA256 ?? "",
-      process.env.MURPH_BUNDLETOOL_CLASSPATH ?? "",
+    if (path.extname(releaseArtifactPath).toLowerCase() !== ".aab") {
+      throw new Error("Play submission requires the exact signed Android App Bundle (.aab).");
+    }
+    releaseArtifact = fs.readFileSync(releaseArtifactPath);
+    if (releaseArtifact.length === 0) throw new Error("The release artifact is empty.");
+    const snapshotDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "murph-play-artifact-"),
     );
+    const snapshotPath = path.join(snapshotDirectory, "candidate.aab");
+    try {
+      fs.writeFileSync(snapshotPath, releaseArtifact, { mode: 0o600 });
+      artifactManifest = requireSignedAndroidBundle(
+        snapshotPath,
+        sourceHead,
+        process.env.MURPH_PLAY_EXPECTED_CONFIGURATION_SHA256 ?? "",
+        process.env.MURPH_BUNDLETOOL_CLASSPATH ?? "",
+        process.env.MURPH_PLAY_EXPECTED_UPLOAD_CERT_SHA256 ?? "",
+      );
+    } finally {
+      fs.rmSync(snapshotDirectory, { force: true, recursive: true });
+    }
   }
   const result = validateReleasePacket({
     artifactManifest,
     mergedManifestPath: arguments_.merged_manifest,
-    releaseArtifactPath,
+    releaseArtifact: releaseArtifact ?? undefined,
+    releaseArtifactPath: releaseArtifact ? undefined : releaseArtifactPath,
     submission: arguments_.submission,
     assertions,
     sourceHead,

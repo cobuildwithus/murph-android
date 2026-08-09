@@ -16,6 +16,10 @@ val playPrivyAppId = providers.gradleProperty("MURPH_PRIVY_APP_ID").orElse("")
 val playPrivyAppClientId = providers.gradleProperty("MURPH_PRIVY_APP_CLIENT_ID").orElse("")
 val playProductionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
     .orElse("https://www.withmurph.ai")
+val playUploadCertificateSha256 = providers.environmentVariable(
+    "MURPH_PLAY_UPLOAD_CERT_SHA256",
+)
+val javaBinDirectory = File(System.getProperty("java.home"), "bin")
 val releaseRuntimeClasspath = providers.provider {
     configurations.getByName("releaseRuntimeClasspath")
 }
@@ -182,6 +186,7 @@ val checkPlayReleasePacket by tasks.registering(Exec::class) {
         rootProject.file("play/declarations/contacts.md"),
         rootProject.file("play/release-checklist.md"),
         rootProject.file("scripts/check-play-release-packet.mjs"),
+        rootProject.file("scripts/PlayArtifactInspector.java"),
         project.file("build.gradle.kts"),
         project.file("src/main/AndroidManifest.xml"),
         project.file("src/main/java/ai/withmurph/companion/app/AppConfig.kt"),
@@ -204,6 +209,7 @@ val checkPlayReleaseTooling by tasks.registering(Exec::class) {
         rootProject.file("config/third-party-license-policy.json"),
         rootProject.file("scripts/check-play-release-packet.mjs"),
         rootProject.file("scripts/check-play-release-packet.test.mjs"),
+        rootProject.file("scripts/PlayArtifactInspector.java"),
         rootProject.file("scripts/check-third-party-licenses.mjs"),
         rootProject.file("scripts/check-third-party-licenses.test.mjs"),
     )
@@ -215,6 +221,19 @@ val checkPlayReleaseTooling by tasks.registering(Exec::class) {
         "scripts/check-third-party-licenses.test.mjs",
     )
     doFirst {
+        environment(
+            "MURPH_JAVA_EXECUTABLE",
+            javaBinDirectory.resolve("java").absolutePath,
+        )
+        environment("MURPH_JAR_EXECUTABLE", javaBinDirectory.resolve("jar").absolutePath)
+        environment(
+            "MURPH_JARSIGNER_EXECUTABLE",
+            javaBinDirectory.resolve("jarsigner").absolutePath,
+        )
+        environment(
+            "MURPH_KEYTOOL_EXECUTABLE",
+            javaBinDirectory.resolve("keytool").absolutePath,
+        )
         environment("MURPH_BUNDLETOOL_CLASSPATH", bundletoolCli.asPath)
         environment("MURPH_BUNDLETOOL_TEST_BUNDLE", debugBundle.get().asFile.absolutePath)
         environment(
@@ -254,6 +273,12 @@ fun Exec.configurePlayArtifactEnvironment(assertionsRequired: Boolean) {
                 "MURPH_PLAY_RELEASE_ARTIFACT must point to the exact release artifact intended for upload.",
             )
         }
+        val uploadCertificateSha256 = playUploadCertificateSha256.orNull.orEmpty()
+        if (!uploadCertificateSha256.matches(Regex("(?i)(?:[0-9a-f]{2}:){31}[0-9a-f]{2}|[0-9a-f]{64}"))) {
+            throw GradleException(
+                "MURPH_PLAY_UPLOAD_CERT_SHA256 must be the approved upload-certificate SHA-256.",
+            )
+        }
 
         val publicIds = listOf(playPrivyAppId.get(), playPrivyAppClientId.get())
         if (publicIds.any { value ->
@@ -281,6 +306,11 @@ fun Exec.configurePlayArtifactEnvironment(assertionsRequired: Boolean) {
             )
         }
         environment("MURPH_BUNDLETOOL_CLASSPATH", bundletoolCli.asPath)
+        environment(
+            "MURPH_JAVA_EXECUTABLE",
+            javaBinDirectory.resolve("java").absolutePath,
+        )
+        environment("MURPH_PLAY_EXPECTED_UPLOAD_CERT_SHA256", uploadCertificateSha256)
         environment(
             "MURPH_PLAY_EXPECTED_CONFIGURATION_SHA256",
             playPublicConfigurationSha256(

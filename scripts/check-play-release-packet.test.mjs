@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -12,6 +15,7 @@ import {
   validateArtifactSourceMetadata,
   validateOperatorAssertions,
   validateReleasePacket,
+  verifyAndroidBundleSigners,
 } from "./check-play-release-packet.mjs";
 
 test("the checked-in source packet matches the app", () => {
@@ -32,17 +36,33 @@ test("manifest extraction distinguishes requested and explicitly removed permiss
 const manifestFacts = {
   application: {
     applicationId: "ai.withmurph.app",
+    minSdk: 28,
+    targetSdk: 36,
     versionCode: 7,
     versionName: "1.2.3",
   },
   mergedManifestPermissions: ["android.permission.INTERNET"],
   releaseManifest: {
     applicationClass: "ai.withmurph.companion.MurphApplication",
+    applicationSecurityAttributes: {
+      "android:allowBackup": "false",
+      "android:dataExtractionRules": "@xml/data_extraction_rules",
+      "android:fullBackupContent": "false",
+    },
     launcherActivity: "ai.withmurph.companion.MainActivity",
     forbiddenComponents: [
       "ai.withmurph.companion.visual.ScreenshotActivity",
       "io.tryvital.vitalhealthconnect.SyncBroadcastReceiver",
       "io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService",
+    ],
+    requiredIntentFilters: [
+      {
+        componentType: "activities",
+        component: "ai.withmurph.companion.MainActivity",
+        actions: ["android.intent.action.MAIN"],
+        categories: ["android.intent.category.LAUNCHER"],
+        data: [],
+      },
     ],
   },
 };
@@ -51,23 +71,44 @@ function releaseManifest({
   packageName = "ai.withmurph.app",
   versionCode = 7,
   versionName = "1.2.3",
+  minSdk = 28,
+  targetSdk = 36,
   debuggable = false,
   permissions = ["android.permission.INTERNET"],
+  permissionAttributes = "",
+  allowBackup = "false",
+  dataExtractionRules = "@xml/data_extraction_rules",
+  fullBackupContent = "false",
   launcherAttributes = "",
+  launcherIntentFilters = `
+    <intent-filter>
+      <action android:name="android.intent.action.MAIN" />
+      <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
+  `,
   extraComponents = "",
 } = {}) {
   const debuggableAttribute = debuggable ? ' android:debuggable="true"' : "";
   const permissionElements = permissions
-    .map((permission) => `<uses-permission android:name="${permission}" />`)
+    .map((permission, index) =>
+      `<uses-permission android:name="${permission}"${index === 0 ? permissionAttributes : ""} />`
+    )
     .join("\n");
   return `
     <manifest xmlns:android="http://schemas.android.com/apk/res/android"
       package="${packageName}"
       android:versionCode="${versionCode}"
       android:versionName="${versionName}">
+      <uses-sdk android:minSdkVersion="${minSdk}" android:targetSdkVersion="${targetSdk}" />
       ${permissionElements}
-      <application android:name="ai.withmurph.companion.MurphApplication"${debuggableAttribute}>
-        <activity android:name="ai.withmurph.companion.MainActivity"${launcherAttributes} />
+      <application
+        android:name="ai.withmurph.companion.MurphApplication"
+        android:allowBackup="${allowBackup}"
+        android:dataExtractionRules="${dataExtractionRules}"
+        android:fullBackupContent="${fullBackupContent}"${debuggableAttribute}>
+        <activity android:name="ai.withmurph.companion.MainActivity"${launcherAttributes}>
+          ${launcherIntentFilters}
+        </activity>
         ${extraComponents}
       </application>
     </manifest>
@@ -85,7 +126,12 @@ test("artifact manifest must match the local release boundary", () => {
     releaseManifest({ packageName: "ai.withmurph.other" }),
     releaseManifest({ versionCode: 8 }),
     releaseManifest({ versionName: "1.2.4" }),
+    releaseManifest({ minSdk: 29 }),
+    releaseManifest({ targetSdk: 35 }),
     releaseManifest({ debuggable: true }),
+    releaseManifest({ allowBackup: "true" }),
+    releaseManifest({ dataExtractionRules: "@xml/other_extraction_rules" }),
+    releaseManifest({ fullBackupContent: "true" }),
     releaseManifest({
       permissions: [
         "android.permission.INTERNET",
@@ -99,6 +145,22 @@ test("artifact manifest must match the local release boundary", () => {
     );
   }
 
+  assert.throws(
+    () => validateArtifactManifest(
+      releaseManifest({ permissionAttributes: ' android:maxSdkVersion="32"' }),
+      clean,
+      manifestFacts,
+    ),
+    /manifest contract drifted/,
+  );
+  assert.throws(
+    () => validateArtifactManifest(
+      releaseManifest({ launcherIntentFilters: "" }),
+      clean,
+      manifestFacts,
+    ),
+    /required intent filter/,
+  );
   assert.throws(
     () => validateArtifactManifest(
       releaseManifest({ extraComponents: '<service android:name="example.Unexpected" />' }),
@@ -159,13 +221,125 @@ test(
     );
     const contract = releaseManifestContract(manifest);
     assert.equal(contract.packageName, "ai.withmurph.app.dev");
-    assert.equal(contract.debuggable, true);
+    assert.equal(contract.applicationSecurityAttributes["android:debuggable"], "true");
     assert.deepEqual(
       contract,
       releaseManifestContract(
         fs.readFileSync(process.env.MURPH_BUNDLETOOL_TEST_MANIFEST, "utf8"),
       ),
     );
+  },
+);
+
+test(
+  "every artifact entry must share the approved upload signer",
+  { skip: !process.env.MURPH_KEYTOOL_EXECUTABLE },
+  () => {
+    const temporaryDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "murph-play-signers-"),
+    );
+    const contents = path.join(temporaryDirectory, "contents");
+    const artifact = path.join(temporaryDirectory, "candidate.aab");
+    const approvedKeystore = path.join(temporaryDirectory, "approved.p12");
+    const secondKeystore = path.join(temporaryDirectory, "second.p12");
+    const password = "changeit";
+    const run = (executable, arguments_, options = {}) => execFileSync(
+      executable,
+      arguments_,
+      { stdio: ["ignore", "pipe", "pipe"], ...options },
+    );
+    const createKey = (keystore, alias) => run(
+      process.env.MURPH_KEYTOOL_EXECUTABLE,
+      [
+        "-genkeypair",
+        "-alias",
+        alias,
+        "-keyalg",
+        "RSA",
+        "-keysize",
+        "2048",
+        "-validity",
+        "1",
+        "-dname",
+        `CN=${alias}`,
+        "-keystore",
+        keystore,
+        "-storetype",
+        "PKCS12",
+        "-storepass",
+        password,
+        "-keypass",
+        password,
+        "-noprompt",
+      ],
+    );
+    const sign = (keystore, alias) => run(
+      process.env.MURPH_JARSIGNER_EXECUTABLE,
+      ["-keystore", keystore, "-storepass", password, artifact, alias],
+    );
+    try {
+      fs.mkdirSync(path.join(contents, "base", "assets", "murph-play"), {
+        recursive: true,
+      });
+      fs.writeFileSync(path.join(contents, "app-code.bin"), "approved app code\n");
+      fs.writeFileSync(
+        path.join(contents, "base", "assets", "murph-play", "source.properties"),
+        "schema=1\nsourceHead=example\n",
+      );
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--create",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        ".",
+      ]);
+      createKey(approvedKeystore, "approved");
+      sign(approvedKeystore, "approved");
+      const approvedCertificate = run(process.env.MURPH_KEYTOOL_EXECUTABLE, [
+        "-exportcert",
+        "-alias",
+        "approved",
+        "-keystore",
+        approvedKeystore,
+        "-storepass",
+        password,
+      ]);
+      const approvedFingerprint = new crypto.X509Certificate(approvedCertificate)
+        .fingerprint256.replaceAll(":", "").toLowerCase();
+
+      assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
+      assert.throws(
+        () => verifyAndroidBundleSigners(artifact, "00".repeat(32)),
+        /approved upload certificate/,
+      );
+
+      fs.writeFileSync(
+        path.join(contents, "base", "assets", "murph-play", "source.properties"),
+        "schema=1\nsourceHead=spoofed-current-head\n",
+      );
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--update",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        "base/assets/murph-play/source.properties",
+      ]);
+      assert.throws(
+        () => verifyAndroidBundleSigners(artifact, approvedFingerprint),
+        /completely signed/,
+      );
+
+      createKey(secondKeystore, "second");
+      sign(secondKeystore, "second");
+      assert.throws(
+        () => verifyAndroidBundleSigners(artifact, approvedFingerprint),
+        /completely signed/,
+      );
+    } finally {
+      fs.rmSync(temporaryDirectory, { force: true, recursive: true });
+    }
   },
 );
 

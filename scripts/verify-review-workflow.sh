@@ -5,6 +5,19 @@ umask 077
 root_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root_dir"
 
+if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/java" ]]; then
+  play_java_bin="$JAVA_HOME/bin"
+elif command -v java >/dev/null 2>&1 && java -version >/dev/null 2>&1; then
+  play_java_bin="$(dirname "$(command -v java)")"
+else
+  printf '%s\n' "Review workflow verification requires a working JDK." >&2
+  exit 1
+fi
+export MURPH_JAVA_EXECUTABLE="$play_java_bin/java"
+export MURPH_JAR_EXECUTABLE="$play_java_bin/jar"
+export MURPH_JARSIGNER_EXECUTABLE="$play_java_bin/jarsigner"
+export MURPH_KEYTOOL_EXECUTABLE="$play_java_bin/keytool"
+
 bash -n scripts/review-gpt.config.sh
 bash -n scripts/repo-tools.config.sh
 bash -n scripts/package-review-context.sh
@@ -99,6 +112,7 @@ required_review_paths=(
   "play/operator-assertions.example.json"
   "play/release-checklist.md"
   "play/release-facts.json"
+  "scripts/PlayArtifactInspector.java"
   "scripts/review-gpt-contract.mjs"
   "scripts/review-pr.sh"
   "scripts/validate-review-gpt-response.sh"
