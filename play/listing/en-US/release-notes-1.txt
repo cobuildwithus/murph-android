@@ -1,0 +1,1 @@
+First Android companion release with OTP account creation and sign-in, contact-card and personality setup, explicit Health Connect access for sleep, exercise, steps, and active calories, backend-confirmed sync status, optional Friendly Names, and privacy controls.

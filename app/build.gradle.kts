@@ -1,10 +1,55 @@
 import java.net.URI
+import java.security.MessageDigest
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.TaskAction
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+abstract class WritePlaySourceMetadata : DefaultTask() {
+    @get:Input
+    abstract val sourceHead: Property<String>
+
+    @get:Input
+    abstract val workingTreeState: Property<String>
+
+    @get:Input
+    abstract val releaseConfigurationSha256: Property<String>
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun writeMetadata() {
+        val head = sourceHead.get()
+        val state = workingTreeState.get()
+        val configurationSha256 = releaseConfigurationSha256.get()
+        require(Regex("[0-9a-f]{40}").matches(head)) {
+            "Could not derive the exact source commit for the Release artifact."
+        }
+        require(state == "clean" || state == "dirty") {
+            "Could not derive the Release working-tree state."
+        }
+        require(Regex("[0-9a-f]{64}").matches(configurationSha256)) {
+            "Could not derive the Release public-configuration digest."
+        }
+        val output = outputDirectory.file("murph-play/source.properties").get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(
+            "schema=1\nsourceHead=$head\nworkingTreeClean=${state == "clean"}\n" +
+                "configurationSha256=$configurationSha256\n",
+        )
+    }
+}
+
+apply(from = rootProject.file("gradle/play-release.gradle.kts"))
 
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -15,6 +60,14 @@ val developmentBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_DEV")
     .orElse("https://linq-webhook-dev.ourrevolution.wtf")
 val productionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
     .orElse("https://www.withmurph.ai")
+
+fun publicReleaseConfigurationSha256(
+    appId: String,
+    appClientId: String,
+    backend: String,
+): String = MessageDigest.getInstance("SHA-256")
+    .digest("$appId\u0000$appClientId\u0000$backend".toByteArray(Charsets.UTF_8))
+    .joinToString("") { byte -> "%02x".format(byte) }
 
 val validateReleaseConfiguration by tasks.registering {
     doLast {
@@ -118,6 +171,42 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = false
+    }
+}
+
+val playSourceHead = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine("git", "rev-parse", "HEAD")
+}.standardOutput.asText.map(String::trim)
+val playWorkingTreeState = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine(
+        "sh",
+        "-c",
+        "if ! git diff-index --quiet HEAD -- || test -n \"$(git ls-files --others --exclude-standard | head -n 1)\"; then printf dirty; else printf clean; fi",
+    )
+}.standardOutput.asText.map(String::trim)
+val writePlaySourceMetadata = tasks.register<WritePlaySourceMetadata>("writePlaySourceMetadata") {
+    sourceHead.set(playSourceHead)
+    workingTreeState.set(playWorkingTreeState)
+    releaseConfigurationSha256.set(providers.provider {
+        publicReleaseConfigurationSha256(
+            privyAppId.get(),
+            privyAppClientId.get(),
+            productionBackend.get(),
+        )
+    })
+    outputDirectory.set(layout.buildDirectory.dir("generated/play-release-metadata"))
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val assets = requireNotNull(variant.sources.assets) {
+            "Release assets are required for Play source provenance."
+        }
+        assets.addGeneratedSourceDirectory(writePlaySourceMetadata) {
+            it.outputDirectory
+        }
     }
 }
 

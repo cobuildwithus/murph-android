@@ -15,6 +15,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
@@ -41,7 +42,9 @@ class MainActivity : ComponentActivity() {
         val historyPermissionLauncher = registerForActivityResult(
             graph.health.extendedPermissionContract(),
         ) {
-            graph.applicationScope.launch { graph.session.syncNow() }
+            graph.applicationScope.launch {
+                graph.session.completeHealthHistoryPermissionFlow()
+            }
         }
 
         val contactsPermissionLauncher = registerForActivityResult(
@@ -64,15 +67,7 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) {
                     false
                 }
-                val connected = graph.session.completeHealthPermissionFlow(completed)
-                if (connected) {
-                    val historyPermissions = graph.health.supportedHistoryPermissions()
-                    if (historyPermissions.isNotEmpty() && canLaunchExternalFlow()) {
-                        historyPermissionLauncher.launch(historyPermissions)
-                    } else {
-                        graph.session.syncNow()
-                    }
-                }
+                graph.session.completeHealthPermissionFlow(completed)
             }
         }
 
@@ -97,6 +92,25 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            LaunchedEffect(appState.pendingHealthHistoryPermissionRequestId) {
+                val requestId = appState.pendingHealthHistoryPermissionRequestId
+                    ?: return@LaunchedEffect
+                lifecycle.withResumed {
+                    if (graph.session.consumeHealthHistoryPermissionLaunchRequest(requestId)) {
+                        launchHealthHistoryPermissionsOrComplete(
+                            supportedPermissions = graph.health::supportedHistoryPermissions,
+                            launchPermissions = { permissions ->
+                                historyPermissionLauncher.launch(permissions)
+                            },
+                            complete = {
+                                graph.applicationScope.launch {
+                                    graph.session.completeHealthHistoryPermissionFlow()
+                                }
+                            },
+                        )
+                    }
+                }
+            }
             LaunchedEffect(appState.pendingAddressBookPermissionRequestId) {
                 val requestId = appState.pendingAddressBookPermissionRequestId
                     ?: return@LaunchedEffect
@@ -113,6 +127,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            LaunchedEffect(appState.initialOnboardingContactCardHandoff?.id) {
+                val event = appState.initialOnboardingContactCardHandoff
+                    ?: return@LaunchedEffect
+                lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    graph.session.launchInitialOnboardingContactCardHandoff(
+                        event.id,
+                        ::openUri,
+                    )
+                }
+            }
             MurphTheme {
                 MurphApp(
                     appState = appState,
@@ -120,7 +144,13 @@ class MainActivity : ComponentActivity() {
                     actions = MurphActions(
                         onLoginMethodChanged = graph.login::setMethod,
                         onPhoneCountryChanged = graph.login::setPhoneCountry,
-                        onLoginDestinationChanged = graph.login::setDestination,
+                        onLoginDestinationChanged = { destination ->
+                            if (graph.login.setDestination(destination)) {
+                                graph.applicationScope.launch {
+                                    graph.login.sendCode(fromAutomaticPhoneFill = true)
+                                }
+                            }
+                        },
                         onLoginCodeChanged = graph.login::setCode,
                         onSendLoginCode = {
                             graph.applicationScope.launch { graph.login.sendCode() }
@@ -141,9 +171,24 @@ class MainActivity : ComponentActivity() {
                                 graph.session.prepareHealthConnection()
                             }
                         },
+                        onDeferHealthConnectInitialSetup = {
+                            graph.applicationScope.launch {
+                                graph.session.deferHealthConnectInitialSetup()
+                            }
+                        },
                         onOpenHealthConnect = ::openHealthConnect,
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
+                        },
+                        onPrepareInitialAddressBookSharing = {
+                            graph.applicationScope.launch {
+                                graph.session.prepareInitialAddressBookSharing()
+                            }
+                        },
+                        onDeferAddressBookSharingInitialSetup = {
+                            graph.applicationScope.launch {
+                                graph.session.deferAddressBookSharingInitialSetup()
+                            }
                         },
                         onShareAddressBook = {
                             graph.applicationScope.launch {
@@ -172,7 +217,41 @@ class MainActivity : ComponentActivity() {
                                 graph.session.acceptLaunchConsent()
                             }
                         },
-                        onOpenConsentDocument = ::openUri,
+                        onSelectInitialOnboardingAvatar =
+                            graph.session::selectInitialOnboardingAvatar,
+                        onSelectInitialOnboardingMainPersona =
+                            graph.session::selectInitialOnboardingMainPersona,
+                        onSelectInitialOnboardingSupportingPersona =
+                            graph.session::selectInitialOnboardingSupportingPersona,
+                        onSelectInitialOnboardingVoice =
+                            graph.session::selectInitialOnboardingVoice,
+                        onSelectInitialOnboardingTone =
+                            graph.session::selectInitialOnboardingTone,
+                        onSetInitialOnboardingStage =
+                            graph.session::setInitialOnboardingStage,
+                        onPrepareInitialOnboardingContactCard = {
+                            graph.applicationScope.launch {
+                                graph.session.prepareInitialOnboardingContactCard()
+                            }
+                        },
+                        onSkipInitialOnboarding = {
+                            graph.applicationScope.launch {
+                                graph.session.skipInitialOnboarding()
+                            }
+                        },
+                        onSaveInitialOnboarding = {
+                            graph.applicationScope.launch {
+                                graph.session.saveInitialOnboarding()
+                            }
+                        },
+                        onDismissCompletedInitialOnboarding =
+                            graph.session::dismissCompletedInitialOnboarding,
+                        onOpenInitialOnboardingContact = { url ->
+                            if (openUri(url)) {
+                                graph.session.dismissCompletedInitialOnboarding()
+                            }
+                        },
+                        onOpenConsentDocument = { openUri(it) },
                         onOpenAppSettings = ::openAppSettings,
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
@@ -248,7 +327,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openUri(value: String) {
+    private fun openUri(value: String): Boolean {
         val uri = Uri.parse(value)
         val action = if (uri.scheme == "mailto") {
             Intent.ACTION_SENDTO
@@ -257,17 +336,19 @@ class MainActivity : ComponentActivity() {
         }
         try {
             startActivity(Intent(action, uri))
+            return true
         } catch (_: ActivityNotFoundException) {
-            val destination = if (uri.scheme == "mailto") {
-                Uri.decode(uri.schemeSpecificPart.substringBefore('?'))
+            val message = if (uri.scheme == "mailto") {
+                "No installed email app can open this link."
             } else {
-                value
+                "No installed app can open this link."
             }
             Toast.makeText(
                 this,
-                "No installed app can open $destination",
+                message,
                 Toast.LENGTH_LONG,
             ).show()
+            return false
         }
     }
 
@@ -276,11 +357,6 @@ class MainActivity : ComponentActivity() {
         graph.session.reportHealthConnectLaunchFailure(message)
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
-
-    private fun canLaunchExternalFlow(): Boolean =
-        !isFinishing &&
-            !isDestroyed &&
-            lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
 
     private fun setLoginSnapshotProtection(enabled: Boolean) {
         if (enabled) {
@@ -295,4 +371,23 @@ class MainActivity : ComponentActivity() {
         return action == "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" ||
             action == "android.intent.action.VIEW_PERMISSION_USAGE"
     }
+}
+
+internal fun launchHealthHistoryPermissionsOrComplete(
+    supportedPermissions: () -> Set<String>,
+    launchPermissions: (Set<String>) -> Unit,
+    complete: () -> Unit,
+) {
+    val needsCompletion = try {
+        val permissions = supportedPermissions()
+        if (permissions.isEmpty()) {
+            true
+        } else {
+            launchPermissions(permissions)
+            false
+        }
+    } catch (_: Exception) {
+        true
+    }
+    if (needsCompletion) complete()
 }

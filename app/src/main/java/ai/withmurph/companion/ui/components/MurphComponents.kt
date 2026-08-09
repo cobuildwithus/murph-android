@@ -41,6 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
@@ -53,12 +55,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -76,30 +79,50 @@ fun MurphLogo(
 }
 
 @Composable
+fun MurphMark(modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(R.drawable.murph_mark),
+        contentDescription = null,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
+}
+
+@Composable
 fun MurphPrimaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    leadingContent: @Composable (() -> Unit)? = null,
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .alpha(if (enabled) 1f else 0.5f),
         shape = RoundedCornerShape(22.dp),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = MurphColors.SageDark,
             contentColor = Color.White,
-            disabledContainerColor = MurphColors.SageDark.copy(alpha = 0.5f),
-            disabledContentColor = Color.White.copy(alpha = 0.7f),
+            disabledContainerColor = MurphColors.SageDark,
+            disabledContentColor = Color.White,
         ),
     ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leadingContent?.invoke()
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
     }
 }
 
@@ -127,6 +150,28 @@ fun MurphOutlineButton(
 }
 
 @Composable
+fun MurphGhostButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().heightIn(min = 44.dp),
+        shape = RoundedCornerShape(16.dp),
+        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = MurphColors.Slate,
+            disabledContentColor = MurphColors.SlateMuted.copy(alpha = 0.5f),
+        ),
+    ) {
+        Text(text = text, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable
 fun MurphLinkButton(
     text: String,
     onClick: () -> Unit,
@@ -137,12 +182,16 @@ fun MurphLinkButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.heightIn(min = 44.dp),
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 10.dp),
         colors = ButtonDefaults.textButtonColors(
             contentColor = MurphColors.SageDark,
             disabledContentColor = MurphColors.SageDark.copy(alpha = 0.5f),
         ),
     ) {
-        Text(text = text, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+        )
     }
 }
 
@@ -172,11 +221,13 @@ fun MurphCard(
 fun MurphTextField(
     value: String,
     onValueChange: (String) -> Unit,
+    label: String,
     placeholder: String,
     keyboardOptions: KeyboardOptions,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    autofillContentType: ContentType? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(22.dp)
@@ -186,7 +237,10 @@ fun MurphTextField(
         onValueChange = onValueChange,
         modifier = modifier
             .height(56.dp)
-            .clip(shape)
+            .semantics {
+                contentDescription = label
+                autofillContentType?.let { contentType = it }
+            }
             .drawWithContent {
                 val radius = 22.dp.toPx()
                 drawRoundRect(
@@ -196,22 +250,21 @@ fun MurphTextField(
                 if (focused) {
                     val ringWidth = 3.dp.toPx()
                     drawRoundRect(
-                        color = MurphColors.Sage.copy(alpha = 0.55f),
-                        topLeft = Offset(ringWidth / 2f, ringWidth / 2f),
-                        size = Size(size.width - ringWidth, size.height - ringWidth),
-                        cornerRadius = CornerRadius(radius - ringWidth / 2f),
+                        color = MurphColors.Ring.copy(alpha = 0.5f),
+                        topLeft = Offset(-ringWidth / 2f, -ringWidth / 2f),
+                        size = Size(size.width + ringWidth, size.height + ringWidth),
+                        cornerRadius = CornerRadius(radius + ringWidth / 2f),
                         style = Stroke(ringWidth),
                     )
                     val borderWidth = 1.dp.toPx()
-                    val inset = ringWidth + borderWidth / 2f
                     drawRoundRect(
-                        color = MurphColors.SageDark,
-                        topLeft = Offset(inset, inset),
+                        color = MurphColors.Ring,
+                        topLeft = Offset(borderWidth / 2f, borderWidth / 2f),
                         size = Size(
-                            width = size.width - (inset * 2f),
-                            height = size.height - (inset * 2f),
+                            width = size.width - borderWidth,
+                            height = size.height - borderWidth,
                         ),
-                        cornerRadius = CornerRadius(radius - inset),
+                        cornerRadius = CornerRadius(radius - borderWidth / 2f),
                         style = Stroke(borderWidth),
                     )
                 } else {
@@ -271,6 +324,20 @@ enum class MurphIconKind {
     Envelope,
     Trash,
     SignOut,
+    RadioCircle,
+    Waveform,
+    Minus,
+    PersonaClassic,
+    PersonaScope,
+    PersonaMountains,
+    PersonaAtom,
+    PersonaBolt,
+    PersonaChat,
+    People,
+    Lock,
+    Quote,
+    Play,
+    Pause,
 }
 
 @Composable
@@ -465,6 +532,255 @@ fun MurphIcon(
                 drawLine(tint, Offset(unit * 0.42f, unit * 0.5f), Offset(unit * 0.88f, unit * 0.5f), stroke, StrokeCap.Round)
                 drawLine(tint, Offset(unit * 0.88f, unit * 0.5f), Offset(unit * 0.72f, unit * 0.34f), stroke, StrokeCap.Round)
                 drawLine(tint, Offset(unit * 0.88f, unit * 0.5f), Offset(unit * 0.72f, unit * 0.66f), stroke, StrokeCap.Round)
+            }
+
+            MurphIconKind.RadioCircle -> {
+                drawCircle(
+                    color = tint,
+                    radius = unit * 0.4f,
+                    center = Offset(unit * 0.5f, unit * 0.5f),
+                    style = outline,
+                )
+            }
+
+            MurphIconKind.Waveform -> {
+                val starts = listOf(0.35f, 0.2f, 0.08f, 0.25f, 0.36f)
+                val ends = listOf(0.65f, 0.8f, 0.92f, 0.75f, 0.64f)
+                repeat(5) { index ->
+                    val x = unit * (0.2f + index * 0.15f)
+                    drawLine(
+                        tint,
+                        Offset(x, unit * starts[index]),
+                        Offset(x, unit * ends[index]),
+                        stroke,
+                        StrokeCap.Round,
+                    )
+                }
+            }
+
+            MurphIconKind.Minus -> {
+                drawLine(
+                    tint,
+                    Offset(unit * 0.23f, unit * 0.5f),
+                    Offset(unit * 0.77f, unit * 0.5f),
+                    stroke,
+                    StrokeCap.Round,
+                )
+            }
+
+            MurphIconKind.PersonaClassic -> {
+                val radius = unit * 0.105f
+                val centers = listOf(
+                    Offset(unit * 0.5f, unit * 0.5f),
+                    Offset(unit * 0.5f, unit * 0.2f),
+                    Offset(unit * 0.76f, unit * 0.35f),
+                    Offset(unit * 0.76f, unit * 0.65f),
+                    Offset(unit * 0.5f, unit * 0.8f),
+                    Offset(unit * 0.24f, unit * 0.65f),
+                    Offset(unit * 0.24f, unit * 0.35f),
+                )
+                centers.forEach { center ->
+                    drawCircle(tint, radius, center, style = outline)
+                }
+            }
+
+            MurphIconKind.PersonaScope -> {
+                drawCircle(
+                    tint,
+                    unit * 0.28f,
+                    Offset(unit * 0.5f, unit * 0.5f),
+                    style = outline,
+                )
+                drawLine(tint, Offset(unit * 0.08f, unit * 0.5f), Offset(unit * 0.92f, unit * 0.5f), stroke, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.5f, unit * 0.08f), Offset(unit * 0.5f, unit * 0.92f), stroke, StrokeCap.Round)
+            }
+
+            MurphIconKind.PersonaMountains -> {
+                val mountains = Path().apply {
+                    moveTo(unit * 0.08f, unit * 0.75f)
+                    lineTo(unit * 0.34f, unit * 0.37f)
+                    lineTo(unit * 0.5f, unit * 0.56f)
+                    lineTo(unit * 0.66f, unit * 0.28f)
+                    lineTo(unit * 0.92f, unit * 0.75f)
+                    close()
+                }
+                drawPath(mountains, tint, style = outline)
+                drawLine(tint, Offset(unit * 0.22f, unit * 0.56f), Offset(unit * 0.34f, unit * 0.5f), stroke * 0.75f, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.34f, unit * 0.5f), Offset(unit * 0.42f, unit * 0.58f), stroke * 0.75f, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.57f, unit * 0.44f), Offset(unit * 0.66f, unit * 0.38f), stroke * 0.75f, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.66f, unit * 0.38f), Offset(unit * 0.74f, unit * 0.48f), stroke * 0.75f, StrokeCap.Round)
+            }
+
+            MurphIconKind.PersonaAtom -> {
+                repeat(3) { index ->
+                    rotate(index * 60f, Offset(unit * 0.5f, unit * 0.5f)) {
+                        drawOval(
+                            color = tint,
+                            topLeft = Offset(unit * 0.18f, unit * 0.36f),
+                            size = Size(unit * 0.64f, unit * 0.28f),
+                            style = outline,
+                        )
+                    }
+                }
+                drawCircle(tint, unit * 0.065f, Offset(unit * 0.5f, unit * 0.5f))
+            }
+
+            MurphIconKind.PersonaBolt -> {
+                val bolt = Path().apply {
+                    moveTo(unit * 0.61f, unit * 0.08f)
+                    lineTo(unit * 0.25f, unit * 0.55f)
+                    lineTo(unit * 0.48f, unit * 0.55f)
+                    lineTo(unit * 0.37f, unit * 0.92f)
+                    lineTo(unit * 0.76f, unit * 0.42f)
+                    lineTo(unit * 0.53f, unit * 0.42f)
+                    close()
+                }
+                drawPath(bolt, tint, style = outline)
+            }
+
+            MurphIconKind.PersonaChat -> {
+                val leftBubble = Path().apply {
+                    moveTo(unit * 0.08f, unit * 0.28f)
+                    quadraticTo(unit * 0.08f, unit * 0.17f, unit * 0.2f, unit * 0.17f)
+                    lineTo(unit * 0.57f, unit * 0.17f)
+                    quadraticTo(unit * 0.69f, unit * 0.17f, unit * 0.69f, unit * 0.29f)
+                    lineTo(unit * 0.69f, unit * 0.46f)
+                    quadraticTo(unit * 0.69f, unit * 0.58f, unit * 0.57f, unit * 0.58f)
+                    lineTo(unit * 0.31f, unit * 0.58f)
+                    lineTo(unit * 0.19f, unit * 0.7f)
+                    lineTo(unit * 0.2f, unit * 0.58f)
+                    quadraticTo(unit * 0.08f, unit * 0.58f, unit * 0.08f, unit * 0.46f)
+                    close()
+                }
+                val rightBubble = Path().apply {
+                    moveTo(unit * 0.43f, unit * 0.43f)
+                    lineTo(unit * 0.8f, unit * 0.43f)
+                    quadraticTo(unit * 0.92f, unit * 0.43f, unit * 0.92f, unit * 0.55f)
+                    lineTo(unit * 0.92f, unit * 0.72f)
+                    quadraticTo(unit * 0.92f, unit * 0.83f, unit * 0.8f, unit * 0.83f)
+                    lineTo(unit * 0.76f, unit * 0.83f)
+                    lineTo(unit * 0.84f, unit * 0.92f)
+                    lineTo(unit * 0.65f, unit * 0.83f)
+                    lineTo(unit * 0.43f, unit * 0.83f)
+                    quadraticTo(unit * 0.31f, unit * 0.83f, unit * 0.31f, unit * 0.72f)
+                    lineTo(unit * 0.31f, unit * 0.55f)
+                    quadraticTo(unit * 0.31f, unit * 0.43f, unit * 0.43f, unit * 0.43f)
+                    close()
+                }
+                drawPath(rightBubble, tint, style = outline)
+                drawPath(leftBubble, tint, style = outline)
+            }
+
+            MurphIconKind.People -> {
+                drawCircle(
+                    tint,
+                    unit * 0.14f,
+                    Offset(unit * 0.34f, unit * 0.3f),
+                    style = outline,
+                )
+                drawCircle(
+                    tint,
+                    unit * 0.14f,
+                    Offset(unit * 0.66f, unit * 0.3f),
+                    style = outline,
+                )
+                val shoulders = Path().apply {
+                    moveTo(unit * 0.08f, unit * 0.82f)
+                    cubicTo(
+                        unit * 0.1f,
+                        unit * 0.58f,
+                        unit * 0.24f,
+                        unit * 0.5f,
+                        unit * 0.39f,
+                        unit * 0.5f,
+                    )
+                    cubicTo(
+                        unit * 0.45f,
+                        unit * 0.5f,
+                        unit * 0.48f,
+                        unit * 0.51f,
+                        unit * 0.5f,
+                        unit * 0.53f,
+                    )
+                    cubicTo(
+                        unit * 0.52f,
+                        unit * 0.51f,
+                        unit * 0.55f,
+                        unit * 0.5f,
+                        unit * 0.61f,
+                        unit * 0.5f,
+                    )
+                    cubicTo(
+                        unit * 0.76f,
+                        unit * 0.5f,
+                        unit * 0.9f,
+                        unit * 0.58f,
+                        unit * 0.92f,
+                        unit * 0.82f,
+                    )
+                }
+                drawPath(shoulders, tint, style = outline)
+                drawLine(
+                    tint,
+                    Offset(unit * 0.08f, unit * 0.82f),
+                    Offset(unit * 0.92f, unit * 0.82f),
+                    stroke,
+                    StrokeCap.Round,
+                )
+            }
+
+            MurphIconKind.Lock -> {
+                drawArc(
+                    color = tint,
+                    startAngle = 180f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = Offset(unit * 0.29f, unit * 0.1f),
+                    size = Size(unit * 0.42f, unit * 0.48f),
+                    style = outline,
+                )
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(unit * 0.2f, unit * 0.42f),
+                    size = Size(unit * 0.6f, unit * 0.46f),
+                    cornerRadius = CornerRadius(unit * 0.08f),
+                    style = outline,
+                )
+            }
+
+            MurphIconKind.Quote -> {
+                drawCircle(tint, unit * 0.07f, Offset(unit * 0.22f, unit * 0.33f), style = outline)
+                drawCircle(tint, unit * 0.07f, Offset(unit * 0.42f, unit * 0.33f), style = outline)
+                drawLine(tint, Offset(unit * 0.16f, unit * 0.39f), Offset(unit * 0.12f, unit * 0.5f), stroke * 0.75f, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.36f, unit * 0.39f), Offset(unit * 0.32f, unit * 0.5f), stroke * 0.75f, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.53f, unit * 0.27f), Offset(unit * 0.86f, unit * 0.27f), stroke, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.18f, unit * 0.6f), Offset(unit * 0.86f, unit * 0.6f), stroke, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.18f, unit * 0.78f), Offset(unit * 0.74f, unit * 0.78f), stroke, StrokeCap.Round)
+            }
+
+            MurphIconKind.Play -> {
+                val play = Path().apply {
+                    moveTo(unit * 0.35f, unit * 0.22f)
+                    lineTo(unit * 0.78f, unit * 0.5f)
+                    lineTo(unit * 0.35f, unit * 0.78f)
+                    close()
+                }
+                drawPath(play, tint)
+            }
+
+            MurphIconKind.Pause -> {
+                drawRoundRect(
+                    tint,
+                    Offset(unit * 0.27f, unit * 0.22f),
+                    Size(unit * 0.16f, unit * 0.56f),
+                    CornerRadius(unit * 0.04f),
+                )
+                drawRoundRect(
+                    tint,
+                    Offset(unit * 0.57f, unit * 0.22f),
+                    Size(unit * 0.16f, unit * 0.56f),
+                    CornerRadius(unit * 0.04f),
+                )
             }
         }
     }

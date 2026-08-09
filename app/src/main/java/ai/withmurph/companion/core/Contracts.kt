@@ -1,6 +1,7 @@
 package ai.withmurph.companion.core
 
 import android.content.Intent
+import kotlinx.coroutines.CancellationException
 
 interface AuthProvider {
     suspend fun currentState(): AuthSessionState
@@ -9,32 +10,71 @@ interface AuthProvider {
     suspend fun identityToken(): String
 
     suspend fun identityTokenForMember(memberKey: String): String {
-        val before = currentState()
+        val before = observedStateForTokenCapture()
         if (
             before !is AuthSessionState.SignedIn ||
             !before.verifiedOnline ||
             before.memberKey != memberKey
         ) {
-            throw IllegalStateException("Privy member changed before token capture")
+            throw CompanionApiException.LocalAuthUnavailable(before)
         }
-        val token = identityToken()
-        val after = currentState()
+        val token = try {
+            identityToken()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            throw CompanionApiException.LocalAuthUnavailable(
+                observedStateForTokenCapture(),
+            )
+        }
+        val after = observedStateForTokenCapture()
         if (
             after !is AuthSessionState.SignedIn ||
             !after.verifiedOnline ||
             after.memberKey != memberKey
         ) {
-            throw IllegalStateException("Privy member changed during token capture")
+            throw CompanionApiException.LocalAuthUnavailable(after)
         }
         return token
+    }
+
+    private suspend fun observedStateForTokenCapture(): AuthSessionState = try {
+        currentState()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        AuthSessionState.TemporarilyUnavailable
     }
 
     suspend fun signOut()
 }
 
 interface CompanionApi {
-    suspend fun createJunctionSignInToken(request: SignInTokenRequest): SignInTokenResponse
-    suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus
+    suspend fun admitCompanion(memberKey: String, timeZone: String)
+
+    suspend fun createJunctionSignInToken(
+        memberKey: String,
+        request: SignInTokenRequest,
+    ): SignInTokenResponse
+
+    suspend fun fetchSyncStatus(
+        memberKey: String,
+        sourceProviderSlug: String,
+    ): CompanionSyncStatus
+
+    suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding =
+        throw CompanionApiException.InvalidResponse
+
+    suspend fun completeInitialOnboarding(
+        memberKey: String,
+        request: InitialOnboardingCompletionRequest,
+    ): InitialOnboarding = throw CompanionApiException.InvalidResponse
+
+    suspend fun prepareInitialOnboardingContactCard(
+        memberKey: String,
+        request: InitialOnboardingContactCardRequest,
+    ): InitialOnboardingContactCardHandoff = throw CompanionApiException.InvalidResponse
+
     suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus =
         throw CompanionApiException.InvalidResponse
 
@@ -95,9 +135,14 @@ interface HealthSyncing {
 interface LocalState {
     val installationId: String
     var memberKey: String?
+    var initialSetupStep: InitialSetupStep?
     var healthAccessRequestedAt: InstantValue?
+    var healthReceiptBaselineAt: InstantValue?
     var lastKnownDataReceivedAt: InstantValue?
+    var lastKnownStatusObservedAt: InstantValue?
+    var healthReconnectRequired: Boolean
     val signOutPending: Boolean
+    val pendingPrivySignOutMemberKey: String?
     val addressBookRevision: Int?
         get() = null
     val pendingAddressBookReplacement: AddressBookMutation?
@@ -105,18 +150,38 @@ interface LocalState {
     val pendingAddressBookDeletion: AddressBookMutation?
         get() = null
 
+    fun advanceInitialSetupStep(
+        expected: InitialSetupStep,
+        next: InitialSetupStep,
+        abandonPendingAddressBookReplacement: Boolean = false,
+    ): Boolean
     fun recordAddressBookRevision(revision: Int): Boolean = false
     fun recordDisabledAddressBookRevision(revision: Int): Boolean = false
     fun beginAddressBookReplacement(mutation: AddressBookMutation): Boolean = false
-    fun completeAddressBookReplacement(mutationId: String, revision: Int): Boolean = false
+    fun completeAddressBookReplacement(
+        mutationId: String,
+        revision: Int,
+        completesInitialSetup: Boolean = false,
+    ): Boolean = false
     fun abandonAddressBookReplacement(mutationId: String): Boolean = false
     fun beginAddressBookDeletion(mutation: AddressBookMutation): Boolean = false
     fun completeAddressBookDeletion(mutationId: String, revision: Int): Boolean = false
     fun abandonAddressBookDeletion(mutationId: String): Boolean = false
 
+    fun completeHealthSetupAuthorization(
+        requestedAt: InstantValue,
+        receiptBaselineAt: InstantValue?,
+        statusObservedAt: InstantValue,
+        completesInitialSetup: Boolean = false,
+    ): Boolean
+    fun requireHealthReconnect(): Boolean
     fun revokeHealthSetupAuthorization(): Boolean
-    fun beginSignOut(): Boolean
-    fun completeSignOut(): Boolean
+    fun beginSignOut(
+        expectedMemberKey: String?,
+        privySignOutMemberKey: String? = null,
+        preserveMemberState: Boolean = false,
+    ): Boolean
+    fun completeSignOut(expectedMemberKey: String?): Boolean
     fun clearMemberScopedState()
 }
 

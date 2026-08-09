@@ -3,6 +3,7 @@ package ai.withmurph.companion.auth
 import ai.withmurph.companion.core.LoginMethod
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -19,6 +20,27 @@ class CountryDialCodeTest {
         val country = CountryDialCode("US", "+1")
 
         assertEquals("+442071838750", country.compose("+44 20 7183 8750"))
+    }
+
+    @Test
+    fun `explicit international input finds the longest curated dial code`() {
+        val compact = CountryDialCode.compactExplicitInternational(
+            "\u200E+\u206644 20 7946-0958\u2069",
+        )
+
+        assertEquals("+442079460958", compact)
+        assertEquals("GB", CountryDialCode.longestCuratedMatch(compact!!)?.region)
+    }
+
+    @Test
+    fun `uncurated international input remains one compact explicit target`() {
+        val compact = CountryDialCode.compactExplicitInternational(
+            "\u200E+7 000 000 0000\u2069",
+        )
+
+        assertEquals("+70000000000", compact)
+        assertNull(CountryDialCode.longestCuratedMatch(compact!!))
+        assertEquals(compact, CountryDialCode("US", "+1").compose(compact))
     }
 
     @Test

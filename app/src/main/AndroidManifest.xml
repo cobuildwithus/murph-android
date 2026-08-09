@@ -12,7 +12,7 @@
         android:name="android.permission.RECEIVE_BOOT_COMPLETED"
         tools:node="remove" />
 
-    <!-- Minimum read-only Health Connect scope for the WHOOP bridge. -->
+    <!-- Minimum read-only Health Connect scope. -->
     <uses-permission android:name="android.permission.health.READ_EXERCISE" />
     <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
     <uses-permission android:name="android.permission.health.READ_STEPS" />

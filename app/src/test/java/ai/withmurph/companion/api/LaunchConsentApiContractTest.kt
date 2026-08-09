@@ -29,6 +29,23 @@ class LaunchConsentApiContractTest {
                     ),
                 ),
             ),
+            scopes = listOf(
+                scope(
+                    "launch.legal",
+                    granted = true,
+                    missing = emptyList(),
+                    documents = listOf(
+                        document("legal", "Terms", "2026-07-01", "/legal/terms"),
+                    ),
+                ),
+                scope(
+                    "launch.health-data",
+                    granted = false,
+                    missing = listOf(
+                        document("health", "Health Notice", "2026-07-01", "notices/health"),
+                    ),
+                ),
+            ),
             backendOrigin = ORIGIN,
         )
 
@@ -180,6 +197,24 @@ class LaunchConsentApiContractTest {
         }
     }
 
+    @Test
+    fun mapsOnlyCanonicalAccountConflictCodes() {
+        listOf("PRIVY_IDENTITY_CONFLICT", "PRIVY_USER_MISMATCH").forEach { code ->
+            assertSame(
+                CompanionApiException.AccountConflict,
+                mapCompanionApiErrorCode(409, code),
+            )
+            assertSame(
+                CompanionApiException.AccountConflict,
+                mapCompanionApiErrorCode(409, code, revisionConflict = true),
+            )
+        }
+        assertEquals(
+            CompanionApiException.Server(409),
+            mapCompanionApiErrorCode(409, "PRIVY_CONFLICT"),
+        )
+    }
+
     private fun parse(
         schema: Any? = "murph.hosted-consent-status.v1",
         launchGranted: Any? = false,
@@ -188,12 +223,14 @@ class LaunchConsentApiContractTest {
             scope("launch.legal"),
             scope("launch.health-data"),
         ),
+        scopes: List<Map<String, Any?>> = launchScopes,
     ) {
         LaunchConsentApiContract.parseStatus(
             schema = schema,
             launchGranted = launchGranted,
             documents = documents,
             launchScopes = launchScopes,
+            scopes = scopes,
             backendOrigin = ORIGIN,
         )
     }
@@ -215,9 +252,15 @@ class LaunchConsentApiContractTest {
         value: String,
         granted: Boolean = false,
         missing: List<Map<String, Any?>> = listOf(document()),
+        documents: List<Map<String, Any?>> = if (missing.isEmpty()) {
+            listOf(document())
+        } else {
+            missing
+        },
     ): Map<String, Any?> = mapOf(
         "scope" to value,
         "granted" to granted,
+        "documents" to documents,
         "missingDocuments" to missing,
     )
 

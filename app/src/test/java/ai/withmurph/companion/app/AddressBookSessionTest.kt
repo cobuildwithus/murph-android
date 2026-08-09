@@ -18,6 +18,10 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.core.InitialOnboarding
+import ai.withmurph.companion.core.InitialOnboardingPreferences
+import ai.withmurph.companion.core.InitialOnboardingStatus
 import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
@@ -37,12 +41,273 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AddressBookSessionTest {
     @Test
-    fun explicitShareFetchesStatusBeforeReadingAndPublishesServerSuccess() = runTest {
+    fun terminalReplacementFailuresResetTheWholeMemberBoundary() = runTest {
+        val cases = listOf(
+            CompanionApiException.Unauthorized to "Sign in again",
+            CompanionApiException.NoAccount to "Try a different sign-in",
+            CompanionApiException.AccessRequired to "Try a different sign-in",
+            CompanionApiException.MemberSuspended to "Try a different sign-in",
+            CompanionApiException.AdmissionSupportRequired to "Try a different sign-in",
+        )
+
+        cases.forEach { (rejection, signOutLabel) ->
+            val fixture = fixture()
+            fixture.session.start()
+            fixture.contacts.permissionGranted = true
+            fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+            fixture.health.signedIn = true
+            assertTrue(fixture.session.prepareAddressBookSharing())
+            fixture.api.replaceHandler = { _, _ -> throw rejection }
+
+            assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+            val failure = fixture.session.state.value.phase as AppPhase.Failed
+            assertFalse(failure.canRetry)
+            assertEquals(signOutLabel, failure.signOutLabel)
+            assertNull(fixture.localState.memberKey)
+            assertNull(fixture.localState.addressBookRevision)
+            assertNull(fixture.localState.pendingAddressBookReplacement)
+            assertNull(fixture.localState.pendingAddressBookDeletion)
+            assertFalse(fixture.health.signedIn)
+        }
+    }
+
+    @Test
+    fun accountConflictDuringAddressBookStatusClosesMemberAuthority() = runTest {
         val fixture = fixture()
+        fixture.api.beforeStatusReturn = { _, _ ->
+            throw CompanionApiException.AccountConflict
+        }
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertNull(fixture.localState.memberKey)
+    }
+
+    @Test
+    fun foregroundStatusUnauthorizedResetsMemberBeforeHealthCanSyncAgain() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCallsBeforeRejection = fixture.health.syncCalls
+        val signOutCallsBeforeRejection = fixture.health.signOutCalls
+        fixture.api.beforeStatusReturn = { _, _ ->
+            throw CompanionApiException.Unauthorized
+        }
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
+        assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertTrue(fixture.api.replacements.isEmpty())
+        assertTrue(fixture.api.deletions.isEmpty())
+    }
+
+    @Test
+    fun backendRejectionClosesAddressAuthorityBeforeWaitingForHealthTeardown() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.syncGate = CompletableDeferred()
+
+        val startup = async { fixture.session.start() }
+        fixture.health.syncEntered.await()
+        assertEquals(1, fixture.api.addressStatusMembers.size)
+
+        val rejectionObserved = CompletableDeferred<Unit>()
+        fixture.api.beforeStatusReturn = { call, _ ->
+            if (call == 2) {
+                rejectionObserved.complete(Unit)
+                throw CompanionApiException.Unauthorized
+            }
+        }
+        val rejectedRefresh = async { fixture.session.refreshAddressBookSharing() }
+        rejectionObserved.await()
+        runCurrent()
+
+        val secondRefresh = async { fixture.session.refreshAddressBookSharing() }
+        runCurrent()
+        val addressCallsWhileTeardownWaited = fixture.api.addressStatusMembers.size
+        val authorityStayedOpen =
+            fixture.session.state.value.phase == AppPhase.Ready &&
+                fixture.session.state.value.authVerifiedOnline
+
+        fixture.health.syncGate?.complete(Unit)
+        startup.await()
+        rejectedRefresh.await()
+        secondRefresh.await()
+
+        assertFalse(authorityStayedOpen)
+        assertEquals(2, addressCallsWhileTeardownWaited)
+        assertFalse(fixture.health.signedIn)
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
+    }
+
+    @Test
+    fun acceptedConsentReplacementUnauthorizedResetsTheWholeMemberBoundary() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 0
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        var syncCallsAtRejection = -1
+        var signOutCallsAtRejection = -1
+        fixture.api.replaceHandler = { _, _ ->
+            when (fixture.api.replacements.size) {
+                1 -> throw CompanionApiException.ConsentRequired
+                2 -> {
+                    syncCallsAtRejection = fixture.health.syncCalls
+                    signOutCallsAtRejection = fixture.health.signOutCalls
+                    throw CompanionApiException.Unauthorized
+                }
+                else -> error("Unexpected replacement replay")
+            }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val savedMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
+
+        fixture.session.acceptLaunchConsent()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertFalse(failure.canRetry)
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
+        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(signOutCallsAtRejection + 1, fixture.health.signOutCalls)
+        assertEquals(syncCallsAtRejection, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun explicitDeletionUnauthorizedResetsTheWholeMemberBoundary() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCallsBeforeRejection = fixture.health.syncCalls
+        val signOutCallsBeforeRejection = fixture.health.signOutCalls
+        fixture.api.deleteHandler = { _, _ ->
+            throw CompanionApiException.Unauthorized
+        }
+
+        fixture.session.stopAddressBookSharing()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        val attemptedMutation = fixture.api.deletions.single().second.mutation
+        assertFalse(failure.canRetry)
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(5, attemptedMutation.baseRevision)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
+        assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun automaticForegroundDeletionUnauthorizedResetsMemberBeforeHealthSync() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCallsBeforeRejection = fixture.health.syncCalls
+        val signOutCallsBeforeRejection = fixture.health.signOutCalls
+        fixture.contacts.permissionGranted = false
+        fixture.api.deleteHandler = { _, _ ->
+            throw CompanionApiException.Unauthorized
+        }
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        val attemptedMutation = fixture.api.deletions.single().second.mutation
+        assertFalse(failure.canRetry)
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(5, attemptedMutation.baseRevision)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertTrue(fixture.session.state.value.contactsPermissionDenied)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
+        assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun explicitShareFetchesStatusBeforeReadingAndPublishesServerSuccess() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
         fixture.session.start()
         fixture.events.clear()
 
@@ -76,6 +341,11 @@ class AddressBookSessionTest {
         )
         assertEquals(1, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
         assertEquals(
             AddressBookSharingState.Server(
                 enabled = true,
@@ -86,6 +356,136 @@ class AddressBookSessionTest {
             fixture.session.state.value.addressBookSharing,
         )
         assertFalse(fixture.session.state.value.isAddressBookBusy)
+    }
+
+    @Test
+    fun initialShareCompletesFriendlyNamesOnlyAfterTheExactLocalCommit() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(1, fixture.localState.addressBookRevision)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+    }
+
+    @Test
+    fun initialShareStaysOnFriendlyNamesWhenTheLocalRevisionCommitFails() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.localState.completeAddressBookReplacementSucceeds = false
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertTrue(fixture.localState.pendingAddressBookReplacement != null)
+    }
+
+    @Test
+    fun friendlyNamesDeferralKeepsAnInterruptedReplacementVisibleUntilCleanup() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 1, count = 1),
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                revision = 0
+                replacement = AddressBookMutation(0, MUTATION_ONE)
+            },
+        )
+        fixture.contacts.permissionGranted = false
+        fixture.session.start()
+
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
+        assertTrue(fixture.session.state.value.addressBookHasInterruptedReplacement)
+        assertTrue(
+            fixture.session.state.value.addressBookMessage.orEmpty()
+                .contains("stop and delete"),
+        )
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(false))
+        assertEquals(0, fixture.contacts.readCalls)
+        assertTrue(fixture.api.deletions.isEmpty())
+        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
+
+        fixture.session.stopAddressBookSharing()
+
+        assertEquals(listOf(1), fixture.api.deletions.map { it.second.mutation.baseRevision })
+        assertEquals(2, fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertFalse(fixture.session.state.value.addressBookHasInterruptedReplacement)
+        assertTrue(fixture.session.deferAddressBookSharingInitialSetup())
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+    }
+
+    @Test
+    fun friendlyNamesDeferralStaysVisibleWhileRetryIsPending() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                replacement = AddressBookMutation(0, MUTATION_ONE)
+            },
+        )
+        fixture.session.start()
+
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
+        assertTrue(
+            fixture.session.state.value.addressBookMessage.orEmpty()
+                .contains("stop and delete"),
+        )
+    }
+
+    @Test
+    fun friendlyNamesDeferralSurfacesAPlainSetupChoiceCommitFailure() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                advanceInitialSetupSucceeds = false
+            },
+        )
+        fixture.session.start()
+
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(
+            "Murph couldn't save that Friendly Names setup choice. Try again.",
+            fixture.session.state.value.addressBookMessage,
+        )
     }
 
     @Test
@@ -427,12 +827,20 @@ class AddressBookSessionTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = false,
-            initializeLocal = { memberKey = MEMBER_ONE },
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
         )
 
         fixture.session.start()
 
         assertNull(fixture.localState.addressBookRevision)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
         assertTrue(fixture.api.deletions.isEmpty())
         assertEquals(
             AddressBookSharingState.Server(
@@ -451,6 +859,30 @@ class AddressBookSessionTest {
         val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
         assertFalse(sharing.enabled)
         assertTrue(sharing.ownedByInstallation)
+    }
+
+    @Test
+    fun ownedServerStatusDoesNotInventInitialShareProvenance() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                initialSetupStep = InitialSetupStep.FriendlyNames
+                revision = 5
+            },
+        )
+
+        fixture.session.start()
+
+        val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
+        assertTrue(sharing.enabled)
+        assertTrue(sharing.ownedByInstallation)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
     }
 
     @Test
@@ -676,7 +1108,11 @@ class AddressBookSessionTest {
 
     @Test
     fun preflightConsentRecoveryResumesOnlyTheAddressBookPermissionRequest() = runTest {
-        val fixture = fixture()
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
         fixture.session.start()
         var blocked = true
         fixture.api.beforeStatusReturn = { _, _ ->
@@ -686,7 +1122,7 @@ class AddressBookSessionTest {
             }
         }
 
-        assertFalse(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.prepareInitialAddressBookSharing())
         assertEquals(
             LaunchConsentRecoveryPhase.Required,
             fixture.session.state.value.launchConsentRecovery?.phase,
@@ -694,6 +1130,11 @@ class AddressBookSessionTest {
         assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
         assertEquals(0, fixture.contacts.readCalls)
         assertTrue(fixture.api.replacements.isEmpty())
+        assertFalse(fixture.session.deferAddressBookSharingInitialSetup())
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
 
         fixture.session.acceptLaunchConsent()
 
@@ -710,6 +1151,49 @@ class AddressBookSessionTest {
         assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
         assertEquals(1, fixture.contacts.readCalls)
         assertEquals(1, fixture.api.replacements.size)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+    }
+
+    @Test
+    fun settingsPreflightConsentRecoveryLeavesFriendlyNamesSetupUnchanged() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        var blocked = true
+        fixture.api.beforeStatusReturn = { _, _ ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+        }
+
+        assertFalse(fixture.session.prepareAddressBookSharing())
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
+
+        fixture.session.acceptLaunchConsent()
+
+        val requestId = requireNotNull(
+            fixture.session.state.value.pendingAddressBookPermissionRequestId,
+        )
+        assertTrue(fixture.session.consumeAddressBookPermissionLaunchRequest(requestId))
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+        assertEquals(1, fixture.contacts.readCalls)
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
     }
 
     @Test
@@ -757,7 +1241,49 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun stopConsentRecoveryReplaysTheExactDurableDeletionMutation() = runTest {
+    fun stopRequestedDuringAcceptedHealthRestoreSupersedesAddressPermission() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCalls = fixture.health.syncCalls
+        var blocked = true
+        fixture.api.beforeStatusReturn = { _, _ ->
+            if (blocked) {
+                blocked = false
+                throw CompanionApiException.ConsentRequired
+            }
+        }
+        assertFalse(fixture.session.prepareAddressBookSharing())
+        val restoreGate = CompletableDeferred<Unit>()
+        fixture.health.identifyGate = restoreGate
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        fixture.health.identifyEntered.await()
+        fixture.session.stopAddressBookSharing()
+        restoreGate.complete(Unit)
+        acceptance.await()
+
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(5, fixture.api.deletions.single().second.mutation.baseRevision)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertNull(fixture.session.state.value.pendingAddressBookPermissionRequestId)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun stopRequestedWhileAcceptedReplacementProjectsContactsPreventsTheUpload() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = true,
@@ -767,6 +1293,122 @@ class AddressBookSessionTest {
             },
         )
         fixture.session.start()
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        var blockedByConsent = true
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (blockedByConsent) {
+                blockedByConsent = false
+                throw CompanionApiException.ConsentRequired
+            }
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        assertEquals(1, fixture.api.replacements.size)
+
+        val projectedContact = person("Anna", "Smith", "+12125550101")
+        val projectionEntered = CountDownLatch(1)
+        val projectionGate = CountDownLatch(1)
+        fixture.contacts.rows = object : AbstractList<AddressBookPersonContact>() {
+            override val size: Int = 1
+
+            override fun get(index: Int): AddressBookPersonContact {
+                assertEquals(0, index)
+                projectionEntered.countDown()
+                check(projectionGate.await(5, TimeUnit.SECONDS))
+                return projectedContact
+            }
+        }
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        runCurrent()
+        assertTrue(projectionEntered.await(5, TimeUnit.SECONDS))
+
+        fixture.session.stopAddressBookSharing()
+        assertEquals(1, fixture.api.replacements.size)
+        projectionGate.countDown()
+        acceptance.await()
+
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(5, fixture.api.deletions.single().second.mutation.baseRevision)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun stopRequestedAfterAcceptedReplacementStartsDeletesTheSavedRevision() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val resumedPutEntered = CompletableDeferred<Unit>()
+        val resumedPutGate = CompletableDeferred<Unit>()
+        var blockedByConsent = true
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (blockedByConsent) {
+                blockedByConsent = false
+                throw CompanionApiException.ConsentRequired
+            }
+            resumedPutEntered.complete(Unit)
+            resumedPutGate.await()
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        resumedPutEntered.await()
+        fixture.session.stopAddressBookSharing()
+
+        assertTrue(fixture.api.deletions.isEmpty())
+        resumedPutGate.complete(Unit)
+        acceptance.await()
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(1, fixture.api.deletions.size)
+        assertEquals(6, fixture.api.deletions.single().second.mutation.baseRevision)
+        assertEquals(7, fixture.localState.addressBookRevision)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertEquals(
+            listOf("address-put:$MEMBER_ONE", "address-delete:$MEMBER_ONE"),
+            fixture.events.filter { it.startsWith("address-put:") || it.startsWith("address-delete:") }
+                .takeLast(2),
+        )
+    }
+
+    @Test
+    fun stopConsentRecoveryReplaysTheExactDurableDeletionMutation() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCalls = fixture.health.syncCalls
         var blocked = true
         fixture.api.deleteHandler = { memberKey, request ->
             if (blocked) {
@@ -793,6 +1435,60 @@ class AddressBookSessionTest {
         assertEquals(savedMutation, fixture.api.deletions[0].second.mutation)
         assertEquals(savedMutation, fixture.api.deletions[1].second.mutation)
         assertNull(fixture.localState.pendingAddressBookDeletion)
+        assertEquals(6, fixture.localState.addressBookRevision)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertTrue(fixture.health.signedIn)
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun foregroundDefersHealthRestoreUntilAcceptedDeletionFinishes() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val syncCalls = fixture.health.syncCalls
+        val resumedDeletionEntered = CompletableDeferred<Unit>()
+        val resumedDeletionGate = CompletableDeferred<Unit>()
+        var blockedByConsent = true
+        fixture.api.deleteHandler = { memberKey, request ->
+            if (blockedByConsent) {
+                blockedByConsent = false
+                throw CompanionApiException.ConsentRequired
+            }
+            resumedDeletionEntered.complete(Unit)
+            resumedDeletionGate.await()
+            disabledStatus(request.mutation.baseRevision + 1).also {
+                fixture.api.statuses[memberKey] = it
+            }
+        }
+        fixture.session.stopAddressBookSharing()
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        resumedDeletionEntered.await()
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertFalse(fixture.health.signedIn)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Saving,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        resumedDeletionGate.complete(Unit)
+        acceptance.await()
+
+        assertTrue(fixture.health.signedIn)
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
         assertEquals(6, fixture.localState.addressBookRevision)
         assertNull(fixture.session.state.value.launchConsentRecovery)
     }
@@ -869,7 +1565,50 @@ class AddressBookSessionTest {
 
     @Test
     fun acceptingLaunchConsentResumesSavedAddressBookReplacementMutation() = runTest {
-        val fixture = fixture()
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        var blockedOnce = false
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (!blockedOnce) {
+                blockedOnce = true
+                throw CompanionApiException.ConsentRequired
+            }
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareInitialAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val savedMutation = fixture.localState.pendingAddressBookReplacement
+        assertTrue(savedMutation != null)
+
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
+        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertEquals(null, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(1, fixture.localState.addressBookRevision)
+        assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
+        assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
+        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun settingsReplacementConsentContinuationLeavesFriendlyNamesSetupUnchanged() = runTest {
+        val fixture = fixture(
+            initializeLocal = {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            },
+        )
         fixture.session.start()
         fixture.contacts.permissionGranted = true
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
@@ -887,17 +1626,21 @@ class AddressBookSessionTest {
 
         assertTrue(fixture.session.prepareAddressBookSharing())
         assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
-        val savedMutation = fixture.localState.pendingAddressBookReplacement
-        assertTrue(savedMutation != null)
+        val savedMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
 
         fixture.session.acceptLaunchConsent()
 
         assertEquals(2, fixture.api.replacements.size)
         assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
         assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
-        assertEquals(null, fixture.localState.pendingAddressBookReplacement)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
         assertEquals(1, fixture.localState.addressBookRevision)
-        assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+        assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
+        assertEquals(
+            InitialSetupStep.FriendlyNames,
+            fixture.session.state.value.initialSetupStep,
+        )
+        assertNull(fixture.session.state.value.launchConsentRecovery)
     }
 
     private fun fixture(
@@ -912,11 +1655,12 @@ class AddressBookSessionTest {
             this.permissionGranted = permissionGranted
         }
         val localState = FakeLocalState().apply(initializeLocal)
+        val health = FakeHealth()
         var mutationSequence = 0
         val session = AppSession(
             auth = auth,
             api = api,
-            health = FakeHealth(),
+            health = health,
             contacts = contacts,
             localState = localState,
             config = AppConfig(
@@ -933,7 +1677,7 @@ class AddressBookSessionTest {
                 "00000000-0000-4000-8000-${mutationSequence.toString().padStart(12, '0')}"
             },
         )
-        return Fixture(session, auth, api, contacts, localState, events)
+        return Fixture(session, auth, api, contacts, localState, health, events)
     }
 
     private data class Fixture(
@@ -942,6 +1686,7 @@ class AddressBookSessionTest {
         val api: FakeApi,
         val contacts: FakeContacts,
         val localState: FakeLocalState,
+        val health: FakeHealth,
         val events: MutableList<String>,
     )
 
@@ -994,13 +1739,26 @@ class AddressBookSessionTest {
             disabledStatus(request.mutation.baseRevision + 1).also { statuses[memberKey] = it }
         }
 
+        override suspend fun admitCompanion(memberKey: String, timeZone: String) = Unit
+
         override suspend fun createJunctionSignInToken(
+            memberKey: String,
             request: SignInTokenRequest,
         ): SignInTokenResponse = SignInTokenResponse("token", "sandbox")
 
         override suspend fun fetchSyncStatus(
+            memberKey: String,
             sourceProviderSlug: String,
-        ): CompanionSyncStatus = CompanionSyncStatus(null, emptyMap())
+        ): CompanionSyncStatus = CompanionSyncStatus(null, Instant.EPOCH, emptyMap())
+
+        override suspend fun fetchInitialOnboarding(memberKey: String) = InitialOnboarding(
+            status = InitialOnboardingStatus.Completed,
+            completedNow = null,
+            preferences = InitialOnboardingPreferences(null, null, null),
+            catalog = null,
+            contactCard = null,
+            contactAction = null,
+        )
 
         override suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus {
             launchConsentFetches += memberKey
@@ -1067,28 +1825,87 @@ class AddressBookSessionTest {
 
     private class FakeHealth : HealthSyncing {
         override val totalResourceCount = 4
+        var signedIn = false
+        var grantedCount = 0
+        var syncCalls = 0
+        var signOutCalls = 0
+        var identifyGate: CompletableDeferred<Unit>? = null
+        val identifyEntered = CompletableDeferred<Unit>()
+        var syncGate: CompletableDeferred<Unit>? = null
+        val syncEntered = CompletableDeferred<Unit>()
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
-        override fun isSignedIn(): Boolean = false
+        override fun isSignedIn(): Boolean = signedIn
         override fun configure() = Unit
-        override fun grantedResourceCount(): Int = 0
-        override suspend fun identify(memberKey: String, authenticate: suspend () -> String) = Unit
-        override suspend fun connectAfterPermissionRequest() = Unit
+        override fun grantedResourceCount(): Int = grantedCount
+        override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
+            authenticate()
+            identifyEntered.complete(Unit)
+            identifyGate?.await()
+            signedIn = true
+        }
+        override suspend fun connectAfterPermissionRequest() {
+            grantedCount = totalResourceCount
+        }
         override suspend fun refreshPermissionState() = Unit
-        override suspend fun syncAllGrantedResources() = Unit
-        override suspend fun signOutSdk() = Unit
+        override suspend fun syncAllGrantedResources() {
+            syncCalls += 1
+            syncEntered.complete(Unit)
+            syncGate?.await()
+        }
+        override suspend fun signOutSdk() {
+            signOutCalls += 1
+            signedIn = false
+        }
     }
 
     private class FakeLocalState : LocalState {
         override val installationId = "installation-id"
         override var memberKey: String? = null
+        override var initialSetupStep: InitialSetupStep? = null
         override var healthAccessRequestedAt: InstantValue? = null
+        override var healthReceiptBaselineAt: InstantValue? = null
         override var lastKnownDataReceivedAt: InstantValue? = null
+        override var lastKnownStatusObservedAt: InstantValue? = null
+        override var healthReconnectRequired = false
         override var signOutPending = false
             private set
+        override var pendingPrivySignOutMemberKey: String? = null
+            private set
+
+        override fun completeHealthSetupAuthorization(
+            requestedAt: InstantValue,
+            receiptBaselineAt: InstantValue?,
+            statusObservedAt: InstantValue,
+            completesInitialSetup: Boolean,
+        ): Boolean {
+            if (completesInitialSetup && initialSetupStep != InitialSetupStep.HealthConnect) {
+                return false
+            }
+            healthAccessRequestedAt = requestedAt
+            healthReceiptBaselineAt = receiptBaselineAt
+            lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = statusObservedAt
+            healthReconnectRequired = false
+            if (completesInitialSetup) {
+                initialSetupStep = InitialSetupStep.FriendlyNames
+            }
+            return true
+        }
+
+        override fun requireHealthReconnect(): Boolean {
+            healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
+            lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = true
+            return true
+        }
         var revision: Int? = null
         var replacement: AddressBookMutation? = null
         var deletion: AddressBookMutation? = null
+        var completeAddressBookReplacementSucceeds = true
+        var advanceInitialSetupSucceeds = true
 
         override val addressBookRevision: Int?
             get() = revision
@@ -1096,6 +1913,17 @@ class AddressBookSessionTest {
             get() = replacement
         override val pendingAddressBookDeletion: AddressBookMutation?
             get() = deletion
+
+        override fun advanceInitialSetupStep(
+            expected: InitialSetupStep,
+            next: InitialSetupStep,
+            abandonPendingAddressBookReplacement: Boolean,
+        ): Boolean {
+            if (!advanceInitialSetupSucceeds || initialSetupStep != expected) return false
+            initialSetupStep = next
+            if (abandonPendingAddressBookReplacement) replacement = null
+            return true
+        }
 
         override fun recordAddressBookRevision(revision: Int): Boolean {
             this.revision = revision
@@ -1118,12 +1946,18 @@ class AddressBookSessionTest {
         override fun completeAddressBookReplacement(
             mutationId: String,
             revision: Int,
+            completesInitialSetup: Boolean,
         ): Boolean {
+            if (!completeAddressBookReplacementSucceeds) return false
             val pending = replacement ?: return false
             if (pending.mutationId != mutationId || revision <= pending.baseRevision) return false
+            if (completesInitialSetup && initialSetupStep != InitialSetupStep.FriendlyNames) {
+                return false
+            }
             this.revision = revision
             replacement = null
             deletion = null
+            if (completesInitialSetup) initialSetupStep = InitialSetupStep.Complete
             return true
         }
 
@@ -1156,20 +1990,37 @@ class AddressBookSessionTest {
 
         override fun revokeHealthSetupAuthorization(): Boolean {
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
             return true
         }
 
-        override fun beginSignOut(): Boolean {
+        override fun beginSignOut(
+            expectedMemberKey: String?,
+            privySignOutMemberKey: String?,
+            preserveMemberState: Boolean,
+        ): Boolean {
+            if (memberKey != expectedMemberKey) return false
             signOutPending = true
+            pendingPrivySignOutMemberKey = privySignOutMemberKey
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
-            clearAddressBookMetadata()
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
+            if (!preserveMemberState) {
+                initialSetupStep = null
+                clearAddressBookMetadata()
+            }
             return true
         }
 
-        override fun completeSignOut(): Boolean {
+        override fun completeSignOut(expectedMemberKey: String?): Boolean {
+            if (memberKey != expectedMemberKey) return false
             signOutPending = false
+            pendingPrivySignOutMemberKey = null
             clearMemberScopedState()
             return true
         }
@@ -1177,7 +2028,11 @@ class AddressBookSessionTest {
         override fun clearMemberScopedState() {
             memberKey = null
             healthAccessRequestedAt = null
+            healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
+            lastKnownStatusObservedAt = null
+            healthReconnectRequired = false
+            initialSetupStep = null
             clearAddressBookMetadata()
         }
 
@@ -1252,11 +2107,13 @@ class AddressBookSessionTest {
                     LaunchConsentScopeStatus(
                         scope = LaunchConsentScope.Legal,
                         granted = granted,
+                        documents = listOf(legal),
                         missingDocuments = if (granted) emptyList() else listOf(legal),
                     ),
                     LaunchConsentScopeStatus(
                         scope = LaunchConsentScope.HealthData,
                         granted = granted,
+                        documents = listOf(health),
                         missingDocuments = if (granted) emptyList() else listOf(health),
                     ),
                 ),

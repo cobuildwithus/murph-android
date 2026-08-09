@@ -19,7 +19,7 @@
   replacement, live-member revalidation before each contact read,
   consent-aware preflight/replacement/Stop continuations, durable exact-revision
   permission-loss deletion replay, and no persisted contact values.
-- Compose login, setup, status, WHOOP guidance, consent, settings, and failure
+- Compose login, setup, provider-neutral status guidance, consent, settings, and failure
   screens matched to the shared `murph-ios` visual system.
 - Debug-only deterministic visual fixtures for phone login, email login, OTP,
   setup, waiting, synced, delayed, attention, consent required, consent load
@@ -27,6 +27,10 @@
 - Exact-head visual-proof enforcement for every shipped `main` or `release`
   app-path change, using a base-owned verifier, strict raw-emulator PNGs,
   durable evidence URLs, and an explicit physical-device gap declaration.
+- Fail-closed Play submission readiness bound to a clean source commit and the
+  exact signed AAB, with synthetic vendor/backend configuration rejected and
+  private operator evidence required for production Privy registration, real
+  provider export, and the Pixel/Samsung device matrix before upload.
 - Scrollable compact-height login and OTP layouts, plus an explicit country-picker close action.
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
@@ -38,7 +42,7 @@ The project has now been resolved and compiled with JDK 17, Gradle 8.11.1,
 Android Gradle Plugin 8.10.1, compile SDK 36, and the real vendor artifacts:
 
 - Privy Android `0.12.0` APIs (`Privy.init`, `getAuthState`, `getUser`, `user.identityToken`, SMS/email OTP, `logout`).
-- Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the four-resource WHOOP bridge, and manual sync).
+- Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the four-resource Health Connect bridge, and manual sync).
 
 The visual-proof contract tests pass directly and now run first in
 `./scripts/verify.sh`. The prior executable Android verification covered Debug
@@ -63,7 +67,7 @@ address-book change.
 
 ## Required real-device gates
 
-- WHOOP data appears in Health Connect before Murph setup.
+- Data from a connected health source appears in Health Connect before Murph setup.
 - Each granted Junction resource reaches the backend without orphaned webhooks.
 - Status receives only Health Connect receipts when both iOS and Android sources exist.
 - Practical history depth within Junction's documented 30-day Health Connect window.

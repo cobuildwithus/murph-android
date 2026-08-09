@@ -4,9 +4,25 @@ import ai.withmurph.companion.core.AddressBookDeletionRequest
 import ai.withmurph.companion.core.AddressBookReplacementRequest
 import ai.withmurph.companion.core.AddressBookServerStatus
 import ai.withmurph.companion.core.AddressBookWriteCapability
+import ai.withmurph.companion.core.AuthSessionState
 import ai.withmurph.companion.core.CompanionApi
 import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
+import ai.withmurph.companion.core.InitialOnboarding
+import ai.withmurph.companion.core.InitialOnboardingCatalog
+import ai.withmurph.companion.core.InitialOnboardingCompletionRequest
+import ai.withmurph.companion.core.InitialOnboardingContactAction
+import ai.withmurph.companion.core.InitialOnboardingContactAvatar
+import ai.withmurph.companion.core.InitialOnboardingContactAvatarKind
+import ai.withmurph.companion.core.InitialOnboardingContactCard
+import ai.withmurph.companion.core.InitialOnboardingContactCardHandoff
+import ai.withmurph.companion.core.InitialOnboardingContactCardRequest
+import ai.withmurph.companion.core.InitialOnboardingContactKind
+import ai.withmurph.companion.core.InitialOnboardingPersona
+import ai.withmurph.companion.core.InitialOnboardingPreferences
+import ai.withmurph.companion.core.InitialOnboardingStatus
+import ai.withmurph.companion.core.InitialOnboardingTone
+import ai.withmurph.companion.core.InitialOnboardingVoice
 import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
@@ -28,15 +44,28 @@ import java.time.Instant
 
 class HttpCompanionApi(
     baseUrl: String,
-    private val identityToken: suspend () -> String,
-    private val identityTokenForMember: suspend (String) -> String = { identityToken() },
+    private val identityTokenForMember: suspend (String) -> String,
 ) : CompanionApi {
     private val baseUri = URI(baseUrl.trimEnd('/')).also { uri ->
         require(uri.scheme == "https") { "Murph backend URL must use HTTPS" }
         require(uri.host != null) { "Murph backend URL must have a host" }
     }
 
+    override suspend fun admitCompanion(memberKey: String, timeZone: String) {
+        val response = requestJson(
+            method = "POST",
+            path = COMPANION_ADMISSION_PATH,
+            body = JSONObject(mapOf("timeZone" to timeZone)),
+            authenticate = { identityTokenForMember(memberKey) },
+        )
+        CompanionAdmissionApiContract.validateResponse(
+            keys = response.keys().asSequence().toSet(),
+            ok = response.opt("ok"),
+        )
+    }
+
     override suspend fun createJunctionSignInToken(
+        memberKey: String,
         request: SignInTokenRequest,
     ): SignInTokenResponse {
         val sdkVersionsJson = JSONObject().apply {
@@ -46,13 +75,15 @@ class HttpCompanionApi(
             put("platform", request.platform.wireValue)
             put("appInstallationId", request.appInstallationId)
             put("appVersion", request.appVersion)
-            put("connectionIntent", request.connectionIntent.wireValue)
+            request.connectionIntent?.let { put("connectionIntent", it.wireValue) }
             put("sdkVersions", sdkVersionsJson)
+            put("timeZone", request.timeZone)
         }
         val response = requestJson(
             method = "POST",
             path = "/api/device-sync/companion/sign-in-token",
             body = body,
+            authenticate = { identityTokenForMember(memberKey) },
         )
         val token = response.optString("signInToken").takeIf(String::isNotBlank)
             ?: throw CompanionApiException.InvalidResponse
@@ -61,13 +92,19 @@ class HttpCompanionApi(
         return SignInTokenResponse(token, environment)
     }
 
-    override suspend fun fetchSyncStatus(sourceProviderSlug: String): CompanionSyncStatus {
+    override suspend fun fetchSyncStatus(
+        memberKey: String,
+        sourceProviderSlug: String,
+    ): CompanionSyncStatus {
         val encodedSource = URLEncoder.encode(sourceProviderSlug, StandardCharsets.UTF_8.name())
         val response = requestJson(
             method = "GET",
             path = "/api/device-sync/companion/status?sourceProviderSlug=$encodedSource",
+            authenticate = { identityTokenForMember(memberKey) },
         )
         val lastReceivedAt = response.optNullableString("lastDataReceivedAt")?.parseInstant()
+        val observedAt = response.optString("observedAt").takeIf(String::isNotBlank)?.parseInstant()
+            ?: throw CompanionApiException.InvalidResponse
         val resourcesObject = response.optJSONObject("resources") ?: JSONObject()
         val resources = buildMap {
             resourcesObject.keys().forEach { key ->
@@ -80,8 +117,44 @@ class HttpCompanionApi(
                 )
             }
         }
-        return CompanionSyncStatus(lastReceivedAt, resources)
+        return CompanionSyncStatus(lastReceivedAt, observedAt, resources)
     }
+
+    override suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding =
+        InitialOnboardingApiJson.parse(
+            requestJson(
+                method = "GET",
+                path = INITIAL_ONBOARDING_PATH,
+                authenticate = { identityTokenForMember(memberKey) },
+            ),
+            baseUri,
+        )
+
+    override suspend fun completeInitialOnboarding(
+        memberKey: String,
+        request: InitialOnboardingCompletionRequest,
+    ): InitialOnboarding = InitialOnboardingApiJson.parse(
+        requestJson(
+            method = "POST",
+            path = INITIAL_ONBOARDING_PATH,
+            body = InitialOnboardingApiJson.completionBody(request),
+            authenticate = { identityTokenForMember(memberKey) },
+        ),
+        baseUri,
+    )
+
+    override suspend fun prepareInitialOnboardingContactCard(
+        memberKey: String,
+        request: InitialOnboardingContactCardRequest,
+    ): InitialOnboardingContactCardHandoff = InitialOnboardingApiJson.parseContactCardHandoff(
+        requestJson(
+            method = "POST",
+            path = INITIAL_ONBOARDING_CONTACT_CARD_PATH,
+            body = JSONObject(mapOf("avatarId" to request.avatarId)),
+            authenticate = { identityTokenForMember(memberKey) },
+        ),
+        baseUri,
+    )
 
     override suspend fun fetchLaunchConsentStatus(memberKey: String): LaunchConsentStatus =
         LaunchConsentApiJson.parseStatus(
@@ -152,15 +225,19 @@ class HttpCompanionApi(
         method: String,
         path: String,
         body: JSONObject? = null,
-        authenticate: suspend () -> String = identityToken,
+        authenticate: suspend () -> String,
         revisionConflict: Boolean = false,
     ): JSONObject = withContext(Dispatchers.IO) {
         val token = try {
             authenticate()
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionApiException.LocalAuthUnavailable) {
+            throw error
         } catch (_: Exception) {
-            throw CompanionApiException.Unauthorized
+            throw CompanionApiException.LocalAuthUnavailable(
+                observedState = AuthSessionState.TemporarilyUnavailable,
+            )
         }
 
         val connection = (baseUri.resolve(path).toURL().openConnection() as HttpURLConnection).apply {
@@ -200,13 +277,6 @@ class HttpCompanionApi(
         }
     }
 
-    private fun readResponseBody(connection: HttpURLConnection, status: Int): String {
-        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-        return stream?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
-            reader.readText().take(MAX_RESPONSE_CHARS)
-        }.orEmpty()
-    }
-
     private fun JSONObject.optNullableString(key: String): String? {
         if (isNull(key)) return null
         return optString(key).takeIf(String::isNotBlank)
@@ -219,10 +289,373 @@ class HttpCompanionApi(
     }
 
     private companion object {
+        const val COMPANION_ADMISSION_PATH = "/api/device-sync/companion/admission"
         const val ADDRESS_BOOK_PATH = "/api/device-sync/companion/address-book"
+        const val INITIAL_ONBOARDING_PATH = "/api/device-sync/companion/initial-onboarding"
+        const val INITIAL_ONBOARDING_CONTACT_CARD_PATH =
+            "/api/device-sync/companion/initial-onboarding/contact-card"
         const val LAUNCH_CONSENT_PATH = "/api/device-sync/companion/legal-consent"
-        const val MAX_RESPONSE_CHARS = 128 * 1024
     }
+}
+
+internal const val MAX_RESPONSE_CHARS = 128 * 1024
+private const val MAX_UTF8_BYTES_PER_RESPONSE_CHAR = 4L
+
+internal fun readResponseBody(connection: HttpURLConnection, status: Int): String {
+    if (connection.contentLengthLong > MAX_RESPONSE_CHARS * MAX_UTF8_BYTES_PER_RESPONSE_CHAR) {
+        throw CompanionApiException.InvalidResponse
+    }
+
+    val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+    return stream?.reader(StandardCharsets.UTF_8)?.use { reader ->
+        val body = StringBuilder()
+        val chunk = CharArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val remaining = MAX_RESPONSE_CHARS - body.length
+            val read = reader.read(chunk, 0, minOf(chunk.size, remaining + 1))
+            if (read < 0) break
+            if (read > remaining) throw CompanionApiException.InvalidResponse
+            body.append(chunk, 0, read)
+        }
+        body.toString()
+    }.orEmpty()
+}
+
+internal object CompanionAdmissionApiContract {
+    fun validateResponse(keys: Set<String>, ok: Any?) {
+        if (keys != setOf("ok") || ok != true) {
+            throw CompanionApiException.InvalidResponse
+        }
+    }
+}
+
+internal object InitialOnboardingApiJson {
+    fun parse(json: JSONObject, backendOrigin: URI): InitialOnboarding =
+        InitialOnboardingApiContract.parse(
+            schema = json.strictValue("schema"),
+            status = json.strictValue("status"),
+            completedNow = json.optionalValue("completedNow"),
+            preferences = json.strictObject("preferences").toValueMap(),
+            catalog = json.optionalObject("catalog")?.toCatalogMap(),
+            contactCard = json.optionalObject("contactCard")?.toContactCardMap(),
+            contactAction = json.optionalObject("contactAction")?.toValueMap(),
+            backendOrigin = backendOrigin,
+        )
+
+    fun parseContactCardHandoff(
+        json: JSONObject,
+        backendOrigin: URI,
+    ): InitialOnboardingContactCardHandoff = InitialOnboardingContactCardHandoff(
+        url = InitialOnboardingApiContract.safeSameOriginHttpsUrl(
+            json.strictValue("url"),
+            backendOrigin,
+        ),
+    )
+
+    fun completionBody(request: InitialOnboardingCompletionRequest): JSONObject =
+        JSONObject(InitialOnboardingApiContract.completionBody(request))
+
+    private fun JSONObject.toCatalogMap(): Map<String, Any?> = mapOf(
+        "personas" to strictArray("personas").toObjectMaps(),
+        "voices" to strictArray("voices").toObjectMaps(),
+        "tones" to strictArray("tones").toObjectMaps(),
+    )
+
+    private fun JSONObject.toContactCardMap(): Map<String, Any?> = mapOf(
+        "avatars" to strictArray("avatars").toObjectMaps(),
+        "defaultAvatarId" to strictValue("defaultAvatarId"),
+    )
+
+    private fun JSONObject.strictValue(key: String): Any {
+        if (!has(key) || isNull(key)) throw CompanionApiException.InvalidResponse
+        return try {
+            get(key)
+        } catch (_: org.json.JSONException) {
+            throw CompanionApiException.InvalidResponse
+        }
+    }
+
+    private fun JSONObject.strictObject(key: String): JSONObject {
+        if (!has(key) || isNull(key)) throw CompanionApiException.InvalidResponse
+        return optJSONObject(key) ?: throw CompanionApiException.InvalidResponse
+    }
+
+    private fun JSONObject.optionalObject(key: String): JSONObject? {
+        if (!has(key) || isNull(key)) return null
+        return optJSONObject(key) ?: throw CompanionApiException.InvalidResponse
+    }
+
+    private fun JSONObject.strictArray(key: String): JSONArray {
+        if (!has(key) || isNull(key)) throw CompanionApiException.InvalidResponse
+        return try {
+            getJSONArray(key)
+        } catch (_: org.json.JSONException) {
+            throw CompanionApiException.InvalidResponse
+        }
+    }
+
+    private fun JSONObject.optionalValue(key: String): Any? =
+        if (!has(key) || isNull(key)) null else strictValue(key)
+
+    private fun JSONObject.toValueMap(): Map<String, Any?> = buildMap {
+        keys().forEach { key -> put(key, valueForMap(opt(key))) }
+    }
+
+    private fun JSONArray.toObjectMaps(): List<Map<String, Any?>> = buildList {
+        for (index in 0 until length()) {
+            add(
+                (opt(index) as? JSONObject)?.toValueMap()
+                    ?: throw CompanionApiException.InvalidResponse,
+            )
+        }
+    }
+
+    private fun valueForMap(value: Any?): Any? = when (value) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> value.toValueMap()
+        is JSONArray -> buildList {
+            for (index in 0 until value.length()) {
+                add(valueForMap(value.opt(index)))
+            }
+        }
+        else -> value
+    }
+}
+
+internal object InitialOnboardingApiContract {
+    private const val SCHEMA = "murph.companion.initial-onboarding.v1"
+
+    fun parse(
+        schema: Any?,
+        status: Any?,
+        completedNow: Any?,
+        preferences: Map<String, Any?>,
+        catalog: Map<String, Any?>?,
+        contactCard: Map<String, Any?>?,
+        contactAction: Map<String, Any?>?,
+        backendOrigin: URI,
+    ): InitialOnboarding {
+        if (strictString(schema) != SCHEMA) throw CompanionApiException.InvalidResponse
+        val parsedStatus = when (strictString(status)) {
+            InitialOnboardingStatus.Pending.wireValue -> InitialOnboardingStatus.Pending
+            InitialOnboardingStatus.Completed.wireValue -> InitialOnboardingStatus.Completed
+            else -> throw CompanionApiException.InvalidResponse
+        }
+        val parsedCompletedNow = completedNow?.let {
+            it as? Boolean ?: throw CompanionApiException.InvalidResponse
+        }
+        val parsedPreferences = InitialOnboardingPreferences(
+            persona = optionalString(preferences["persona"]),
+            tone = optionalString(preferences["tone"]),
+            voice = optionalString(preferences["voice"]),
+        )
+        val parsedCatalog = catalog?.let { parseCatalog(it, backendOrigin) }
+        val parsedContactCard = contactCard?.let { parseContactCard(it, backendOrigin) }
+        val parsedContactAction = contactAction?.let(::parseContactAction)
+
+        when (parsedStatus) {
+            InitialOnboardingStatus.Pending -> {
+                if (parsedCompletedNow != null || parsedCatalog == null) {
+                    throw CompanionApiException.InvalidResponse
+                }
+                validatePreferences(parsedPreferences, parsedCatalog)
+            }
+            InitialOnboardingStatus.Completed -> {
+                if (parsedCatalog != null || parsedContactCard != null || parsedContactAction != null) {
+                    throw CompanionApiException.InvalidResponse
+                }
+            }
+        }
+        if (parsedContactCard != null && parsedContactAction?.kind != InitialOnboardingContactKind.Text) {
+            throw CompanionApiException.InvalidResponse
+        }
+        return InitialOnboarding(
+            status = parsedStatus,
+            completedNow = parsedCompletedNow,
+            preferences = parsedPreferences,
+            catalog = parsedCatalog,
+            contactCard = parsedContactCard,
+            contactAction = parsedContactAction,
+        )
+    }
+
+    fun safeSameOriginHttpsUrl(rawValue: Any?, backendOrigin: URI): String =
+        LaunchConsentApiContract.safeDocumentUrl(rawValue, backendOrigin)
+
+    fun completionBody(request: InitialOnboardingCompletionRequest): Map<String, Any> =
+        buildMap {
+            put("action", request.action.wireValue)
+            request.preferences?.let { preferences ->
+                put(
+                    "preferences",
+                    mapOf(
+                        "persona" to preferences.persona,
+                        "tone" to preferences.tone,
+                        "voice" to preferences.voice,
+                    ),
+                )
+            }
+        }
+
+    private fun parseCatalog(
+        catalog: Map<String, Any?>,
+        backendOrigin: URI,
+    ): InitialOnboardingCatalog {
+        val personas = requiredMaps(catalog["personas"]).map { persona ->
+            InitialOnboardingPersona(
+                id = strictString(persona["id"]),
+                label = strictString(persona["label"]),
+                description = strictString(persona["description"]),
+                supportDescription = strictString(persona["supportDescription"]),
+                defaultTone = strictString(persona["defaultTone"]),
+                defaultVoiceId = strictString(persona["defaultVoiceId"]),
+                recommendedVoiceIds = requiredStrings(persona["recommendedVoiceIds"]),
+            )
+        }
+        val voices = requiredMaps(catalog["voices"]).map { voice ->
+            InitialOnboardingVoice(
+                id = strictString(voice["id"]),
+                label = strictString(voice["label"]),
+                description = strictString(voice["description"]),
+                previewUrl = safeSameOriginHttpsUrl(voice["previewURL"], backendOrigin),
+            )
+        }
+        val tones = requiredMaps(catalog["tones"]).map { tone ->
+            InitialOnboardingTone(
+                id = strictString(tone["id"]),
+                label = strictString(tone["label"]),
+                sample = strictString(tone["sample"]),
+            )
+        }
+        requireUniqueNonEmpty(personas.map { it.id })
+        requireUniqueNonEmpty(voices.map { it.id })
+        requireUniqueNonEmpty(tones.map { it.id })
+        val voiceIds = voices.map { it.id }.toSet()
+        val toneIds = tones.map { it.id }.toSet()
+        if (personas.any { persona ->
+                persona.defaultVoiceId !in voiceIds ||
+                    persona.defaultTone !in toneIds ||
+                    persona.recommendedVoiceIds.isEmpty() ||
+                    persona.recommendedVoiceIds.toSet().size != persona.recommendedVoiceIds.size ||
+                    persona.recommendedVoiceIds.any { it !in voiceIds }
+            }
+        ) {
+            throw CompanionApiException.InvalidResponse
+        }
+        return InitialOnboardingCatalog(personas, voices, tones)
+    }
+
+    private fun parseContactCard(
+        contactCard: Map<String, Any?>,
+        backendOrigin: URI,
+    ): InitialOnboardingContactCard {
+        val avatars = requiredMaps(contactCard["avatars"]).map { avatar ->
+            InitialOnboardingContactAvatar(
+                id = strictString(avatar["id"]),
+                kind = when (strictString(avatar["kind"])) {
+                    InitialOnboardingContactAvatarKind.Headshot.wireValue ->
+                        InitialOnboardingContactAvatarKind.Headshot
+                    InitialOnboardingContactAvatarKind.Logo.wireValue ->
+                        InitialOnboardingContactAvatarKind.Logo
+                    InitialOnboardingContactAvatarKind.Blank.wireValue ->
+                        InitialOnboardingContactAvatarKind.Blank
+                    else -> throw CompanionApiException.InvalidResponse
+                },
+                label = strictString(avatar["label"]),
+                imageUrl = avatar["imageURL"]?.let {
+                    safeSameOriginHttpsUrl(it, backendOrigin)
+                },
+            )
+        }
+        requireUniqueNonEmpty(avatars.map { it.id })
+        val defaultAvatarId = strictString(contactCard["defaultAvatarId"])
+        if (avatars.none { it.id == defaultAvatarId }) {
+            throw CompanionApiException.InvalidResponse
+        }
+        return InitialOnboardingContactCard(avatars, defaultAvatarId)
+    }
+
+    private fun parseContactAction(action: Map<String, Any?>): InitialOnboardingContactAction {
+        val kind = when (strictString(action["kind"])) {
+            InitialOnboardingContactKind.Text.wireValue -> InitialOnboardingContactKind.Text
+            InitialOnboardingContactKind.Telegram.wireValue -> InitialOnboardingContactKind.Telegram
+            InitialOnboardingContactKind.Email.wireValue -> InitialOnboardingContactKind.Email
+            else -> throw CompanionApiException.InvalidResponse
+        }
+        val href = strictString(action["href"])
+        val uri = try {
+            URI(href)
+        } catch (_: Exception) {
+            throw CompanionApiException.InvalidResponse
+        }
+        val valid = when (kind) {
+            InitialOnboardingContactKind.Text -> uri.scheme.equals("sms", ignoreCase = true)
+            InitialOnboardingContactKind.Email -> uri.scheme.equals("mailto", ignoreCase = true)
+            InitialOnboardingContactKind.Telegram ->
+                uri.scheme.equals("https", ignoreCase = true) &&
+                    uri.host.equals("t.me", ignoreCase = true)
+        }
+        if (!valid || uri.rawUserInfo != null) throw CompanionApiException.InvalidResponse
+        return InitialOnboardingContactAction(
+            href = uri.toASCIIString(),
+            kind = kind,
+            label = strictString(action["label"]),
+        )
+    }
+
+    private fun validatePreferences(
+        preferences: InitialOnboardingPreferences,
+        catalog: InitialOnboardingCatalog,
+    ) {
+        val personaIds = catalog.personas.map { it.id }.toSet()
+        if (
+            preferences.persona?.let { id -> !isValidPersonaPreference(id, personaIds) } == true ||
+            preferences.voice?.let { id -> catalog.voices.none { it.id == id } } == true ||
+            preferences.tone?.let { id -> catalog.tones.none { it.id == id } } == true
+        ) {
+            throw CompanionApiException.InvalidResponse
+        }
+    }
+
+    private fun isValidPersonaPreference(value: String, personaIds: Set<String>): Boolean {
+        if (value in personaIds) return true
+        return personaIds.any { main ->
+            val prefix = "$main-with-"
+            value.startsWith(prefix) &&
+                value.removePrefix(prefix).let { supporting ->
+                    supporting != main && supporting in personaIds
+                }
+        }
+    }
+
+    private fun requireUniqueNonEmpty(ids: List<String>) {
+        if (ids.isEmpty() || ids.toSet().size != ids.size) {
+            throw CompanionApiException.InvalidResponse
+        }
+    }
+
+    private fun requiredMaps(value: Any?): List<Map<String, Any?>> =
+        (value as? List<*>)?.map { raw ->
+            val source = raw as? Map<*, *> ?: throw CompanionApiException.InvalidResponse
+            buildMap {
+                source.forEach { (key, item) ->
+                    put(key as? String ?: throw CompanionApiException.InvalidResponse, item)
+                }
+            }
+        } ?: throw CompanionApiException.InvalidResponse
+
+    private fun requiredStrings(value: Any?): List<String> =
+        (value as? List<*>)?.map(::strictString)
+            ?: throw CompanionApiException.InvalidResponse
+
+    private fun optionalString(value: Any?): String? = when (value) {
+        null -> null
+        else -> strictString(value)
+    }
+
+    private fun strictString(value: Any?): String =
+        (value as? String)?.trim()?.takeIf(String::isNotBlank)
+            ?: throw CompanionApiException.InvalidResponse
 }
 
 internal object LaunchConsentApiJson {
@@ -232,6 +665,7 @@ internal object LaunchConsentApiJson {
             launchGranted = json.strictValue("launchGranted"),
             documents = json.strictArray("documents").toDocumentMaps(),
             launchScopes = json.strictArray("launchScopes").toScopeMaps(),
+            scopes = json.strictArray("scopes").toCanonicalScopeMaps(),
             backendOrigin = backendOrigin,
         )
 
@@ -286,6 +720,19 @@ internal object LaunchConsentApiJson {
             }
         }
 
+    private fun JSONArray.toCanonicalScopeMaps(): List<Map<String, Any?>> =
+        buildList {
+            for (index in 0 until length()) {
+                val item = optJSONObject(index) ?: throw CompanionApiException.InvalidResponse
+                add(
+                    mapOf(
+                        "scope" to item.strictValue("scope"),
+                        "documents" to item.strictArray("documents").toDocumentMaps(),
+                    ),
+                )
+            }
+        }
+
     private fun JSONObject.optionalValue(key: String): Any? =
         if (!has(key) || isNull(key)) null else try {
             get(key)
@@ -305,6 +752,7 @@ internal object LaunchConsentApiContract {
         launchGranted: Any?,
         documents: List<Map<String, Any?>>,
         launchScopes: List<Map<String, Any?>>,
+        scopes: List<Map<String, Any?>>,
         backendOrigin: URI,
     ): LaunchConsentStatus {
         if (strictString(schema) != SCHEMA) throw CompanionApiException.InvalidResponse
@@ -315,16 +763,28 @@ internal object LaunchConsentApiContract {
         if (documentsById.size != parsedDocuments.size) {
             throw CompanionApiException.InvalidResponse
         }
+        val canonicalScopesById = scopes.associateBy { strictString(it["scope"]) }
+        if (canonicalScopesById.size != scopes.size) {
+            throw CompanionApiException.InvalidResponse
+        }
         val parsedScopes = launchScopes.map { scope ->
             val parsedScope = parseScope(strictString(scope["scope"]))
             val granted = scope["granted"] as? Boolean
+                ?: throw CompanionApiException.InvalidResponse
+            val canonicalScope = canonicalScopesById[parsedScope.wireValue]
+                ?: throw CompanionApiException.InvalidResponse
+            val documents = (canonicalScope["documents"] as? List<Map<String, Any?>>)
+                ?.map { parseDocument(it, backendOrigin) }
                 ?: throw CompanionApiException.InvalidResponse
             val missingDocuments = (scope["missingDocuments"] as? List<Map<String, Any?>>)
                 ?.map { parseDocument(it, backendOrigin) }
                 ?: throw CompanionApiException.InvalidResponse
             if (
+                documents.isEmpty() ||
+                documents.map { it.id }.toSet().size != documents.size ||
+                documents.any { documentsById[it.id] != it } ||
                 missingDocuments.map { it.id }.toSet().size != missingDocuments.size ||
-                missingDocuments.any { documentsById[it.id] != it }
+                missingDocuments.any { it !in documents }
             ) {
                 throw CompanionApiException.InvalidResponse
             }
@@ -337,6 +797,7 @@ internal object LaunchConsentApiContract {
             LaunchConsentScopeStatus(
                 scope = parsedScope,
                 granted = granted,
+                documents = documents,
                 missingDocuments = missingDocuments,
             )
         }
@@ -364,7 +825,7 @@ internal object LaunchConsentApiContract {
     fun acceptanceRequest(scopeStatus: LaunchConsentScopeStatus): LaunchConsentAcceptanceRequest =
         LaunchConsentAcceptanceRequest(
             scope = scopeStatus.scope,
-            acceptedDocumentVersions = scopeStatus.missingDocuments.associate {
+            acceptedDocumentVersions = scopeStatus.documents.associate {
                 it.id to it.version
             },
         )
@@ -561,16 +1022,27 @@ internal fun mapCompanionApiErrorCode(
     401 -> CompanionApiException.Unauthorized
     403 -> when (errorCode) {
         "HOSTED_CONSENT_REQUIRED" -> CompanionApiException.ConsentRequired
+        "HOSTED_ACCESS_REQUIRED" -> CompanionApiException.AccessRequired
+        "HOSTED_MEMBER_SUSPENDED" -> CompanionApiException.MemberSuspended
         "HOSTED_MEMBER_NOT_FOUND" -> CompanionApiException.NoAccount
         else -> CompanionApiException.Server(status)
     }
     409 -> when {
+        errorCode == "PRIVY_IDENTITY_CONFLICT" || errorCode == "PRIVY_USER_MISMATCH" ->
+            CompanionApiException.AccountConflict
         revisionConflict -> CompanionApiException.Conflict
         errorCode == "SDK_SIGN_IN_RECONNECT_REQUIRED" ->
             CompanionApiException.ReconnectRequired
         errorCode == STALE_CONSENT_DOCUMENT_CODE ->
             CompanionApiException.StaleConsentDocuments
+        errorCode == "COMPANION_ADMISSION_SUPPORT_REQUIRED" ->
+            CompanionApiException.AdmissionSupportRequired
         else -> CompanionApiException.Server(status)
+    }
+    503 -> if (errorCode == "COMPANION_ADMISSION_RETRYABLE") {
+        CompanionApiException.AdmissionRetryable
+    } else {
+        CompanionApiException.Server(status)
     }
     else -> CompanionApiException.Server(status)
 }

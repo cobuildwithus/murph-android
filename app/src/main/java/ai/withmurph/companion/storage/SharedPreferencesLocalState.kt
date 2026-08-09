@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.InstantValue
+import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.LocalState
 import java.util.UUID
 
@@ -30,10 +31,30 @@ class SharedPreferencesLocalState internal constructor(
             preferences.edit().putString(KEY_MEMBER_KEY, value).apply()
         }
 
+    override var initialSetupStep: InitialSetupStep?
+        get() = InitialSetupStep.fromWireValue(
+            preferences.getString(KEY_INITIAL_SETUP_STEP, null),
+        )
+        set(value) {
+            preferences.edit().apply {
+                if (value == null) {
+                    remove(KEY_INITIAL_SETUP_STEP)
+                } else {
+                    putString(KEY_INITIAL_SETUP_STEP, value.wireValue)
+                }
+            }.apply()
+        }
+
     override var healthAccessRequestedAt: InstantValue?
         get() = preferences.readInstant(KEY_HEALTH_ACCESS_REQUESTED_AT)
         set(value) {
             preferences.writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, value)
+        }
+
+    override var healthReceiptBaselineAt: InstantValue?
+        get() = preferences.readInstant(KEY_HEALTH_RECEIPT_BASELINE_AT)
+        set(value) {
+            preferences.writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, value)
         }
 
     override var lastKnownDataReceivedAt: InstantValue?
@@ -42,8 +63,23 @@ class SharedPreferencesLocalState internal constructor(
             preferences.writeInstant(KEY_LAST_DATA_RECEIVED_AT, value)
         }
 
+    override var lastKnownStatusObservedAt: InstantValue?
+        get() = preferences.readInstant(KEY_LAST_STATUS_OBSERVED_AT)
+        set(value) {
+            preferences.writeInstant(KEY_LAST_STATUS_OBSERVED_AT, value)
+        }
+
+    override var healthReconnectRequired: Boolean
+        get() = preferences.getBoolean(KEY_HEALTH_RECONNECT_REQUIRED, false)
+        set(value) {
+            preferences.edit().putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, value).apply()
+        }
+
     override val signOutPending: Boolean
         get() = preferences.getBoolean(KEY_SIGN_OUT_PENDING, false)
+
+    override val pendingPrivySignOutMemberKey: String?
+        get() = preferences.getString(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY, null)
 
     override val addressBookRevision: Int?
         get() = preferences.readNonNegativeInt(KEY_ADDRESS_BOOK_REVISION)
@@ -59,6 +95,18 @@ class SharedPreferencesLocalState internal constructor(
             KEY_ADDRESS_BOOK_DELETION_BASE_REVISION,
             KEY_ADDRESS_BOOK_DELETION_MUTATION_ID,
         )
+
+    override fun advanceInitialSetupStep(
+        expected: InitialSetupStep,
+        next: InitialSetupStep,
+        abandonPendingAddressBookReplacement: Boolean,
+    ): Boolean {
+        if (initialSetupStep != expected) return false
+        return commitAddressBookChange {
+            writeInitialSetupStep(next)
+            if (abandonPendingAddressBookReplacement) removeAddressBookReplacement()
+        }
+    }
 
     override fun recordAddressBookRevision(revision: Int): Boolean {
         require(revision >= 0)
@@ -86,13 +134,20 @@ class SharedPreferencesLocalState internal constructor(
     override fun completeAddressBookReplacement(
         mutationId: String,
         revision: Int,
+        completesInitialSetup: Boolean,
     ): Boolean {
         val pending = pendingAddressBookReplacement ?: return false
         if (pending.mutationId != mutationId || revision <= pending.baseRevision) return false
+        if (completesInitialSetup && initialSetupStep != InitialSetupStep.FriendlyNames) {
+            return false
+        }
         return commitAddressBookChange {
             putInt(KEY_ADDRESS_BOOK_REVISION, revision)
             removeAddressBookReplacement()
             removeAddressBookDeletion()
+            if (completesInitialSetup) {
+                writeInitialSetupStep(InitialSetupStep.Complete)
+            }
         }
     }
 
@@ -127,37 +182,141 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
-    override fun revokeHealthSetupAuthorization(): Boolean {
-        val requestedAt = healthAccessRequestedAt
-        val receivedAt = lastKnownDataReceivedAt
-        val committed = preferences.edit()
-            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
-            .remove(KEY_LAST_DATA_RECEIVED_AT)
-            .commit()
+    override fun completeHealthSetupAuthorization(
+        requestedAt: InstantValue,
+        receiptBaselineAt: InstantValue?,
+        statusObservedAt: InstantValue,
+        completesInitialSetup: Boolean,
+    ): Boolean {
+        val previousRequestedAt = healthAccessRequestedAt
+        val previousReceiptBaselineAt = healthReceiptBaselineAt
+        val previousReceivedAt = lastKnownDataReceivedAt
+        val previousStatusObservedAt = lastKnownStatusObservedAt
+        val previousReconnectRequired = healthReconnectRequired
+        val previousSetupStep = initialSetupStep
+        if (completesInitialSetup && previousSetupStep != InitialSetupStep.HealthConnect) {
+            return false
+        }
+        val committed = preferences.edit().apply {
+            writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
+            writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, receiptBaselineAt)
+            remove(KEY_LAST_DATA_RECEIVED_AT)
+            writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
+            remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            if (completesInitialSetup) {
+                writeInitialSetupStep(InitialSetupStep.FriendlyNames)
+            }
+        }.commit()
         if (!committed) {
-            restoreAuthorizationSnapshot(requestedAt, receivedAt)
+            restoreAuthorizationSnapshot(
+                previousRequestedAt,
+                previousReceiptBaselineAt,
+                previousReceivedAt,
+                previousStatusObservedAt,
+                previousReconnectRequired,
+                setupStep = previousSetupStep,
+            )
         }
         return committed
     }
 
     @SuppressLint("ApplySharedPref")
-    override fun beginSignOut(): Boolean {
+    override fun requireHealthReconnect(): Boolean {
         val requestedAt = healthAccessRequestedAt
+        val receiptBaselineAt = healthReceiptBaselineAt
         val receivedAt = lastKnownDataReceivedAt
-        val wasSignOutPending = signOutPending
-        val addressBookSnapshot = readAddressBookSnapshot()
-        // One durable boundary records the request and revokes member-scoped restoration.
+        val statusObservedAt = lastKnownStatusObservedAt
+        val reconnectRequired = healthReconnectRequired
         val committed = preferences.edit()
-            .putBoolean(KEY_SIGN_OUT_PENDING, true)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
-            .removeAddressBookMetadata()
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, true)
             .commit()
         if (!committed) {
             restoreAuthorizationSnapshot(
                 requestedAt,
+                receiptBaselineAt,
                 receivedAt,
+                statusObservedAt,
+                reconnectRequired,
+            )
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun revokeHealthSetupAuthorization(): Boolean {
+        val requestedAt = healthAccessRequestedAt
+        val receiptBaselineAt = healthReceiptBaselineAt
+        val receivedAt = lastKnownDataReceivedAt
+        val statusObservedAt = lastKnownStatusObservedAt
+        val reconnectRequired = healthReconnectRequired
+        val committed = preferences.edit()
+            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
+            .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .commit()
+        if (!committed) {
+            restoreAuthorizationSnapshot(
+                requestedAt,
+                receiptBaselineAt,
+                receivedAt,
+                statusObservedAt,
+                reconnectRequired,
+            )
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun beginSignOut(
+        expectedMemberKey: String?,
+        privySignOutMemberKey: String?,
+        preserveMemberState: Boolean,
+    ): Boolean {
+        if (memberKey != expectedMemberKey) return false
+        val requestedAt = healthAccessRequestedAt
+        val receiptBaselineAt = healthReceiptBaselineAt
+        val receivedAt = lastKnownDataReceivedAt
+        val statusObservedAt = lastKnownStatusObservedAt
+        val reconnectRequired = healthReconnectRequired
+        val wasSignOutPending = signOutPending
+        val previousPrivySignOutMemberKey = pendingPrivySignOutMemberKey
+        val setupStep = initialSetupStep
+        val addressBookSnapshot = readAddressBookSnapshot()
+        // One durable boundary records the request and revokes member-scoped restoration.
+        val editor = preferences.edit()
+            .putBoolean(KEY_SIGN_OUT_PENDING, true)
+            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
+            .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+        if (privySignOutMemberKey == null) {
+            editor.remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
+        } else {
+            editor.putString(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY, privySignOutMemberKey)
+        }
+        if (!preserveMemberState) {
+            editor
+                .remove(KEY_INITIAL_SETUP_STEP)
+                .removeAddressBookMetadata()
+        }
+        val committed = editor.commit()
+        if (!committed) {
+            restoreAuthorizationSnapshot(
+                requestedAt,
+                receiptBaselineAt,
+                receivedAt,
+                statusObservedAt,
+                reconnectRequired,
                 wasSignOutPending,
+                previousPrivySignOutMemberKey,
+                setupStep,
                 addressBookSnapshot,
             )
         }
@@ -165,18 +324,37 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
-    override fun completeSignOut(): Boolean {
+    override fun completeSignOut(expectedMemberKey: String?): Boolean {
+        if (memberKey != expectedMemberKey) return false
+        val privySignOutMemberKey = pendingPrivySignOutMemberKey
         val committed = preferences.edit()
             .remove(KEY_MEMBER_KEY)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .remove(KEY_INITIAL_SETUP_STEP)
             .remove(KEY_SIGN_OUT_PENDING)
+            .remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
             .removeAddressBookMetadata()
             .commit()
         if (!committed) {
             // SharedPreferences updates memory before reporting a disk failure.
-            // Reassert the fail-closed tombstone for the next startup attempt.
-            preferences.edit().putBoolean(KEY_SIGN_OUT_PENDING, true).commit()
+            // Reassert the expected owner and fail-closed tombstone for retry.
+            preferences.edit().apply {
+                if (expectedMemberKey == null) {
+                    remove(KEY_MEMBER_KEY)
+                } else {
+                    putString(KEY_MEMBER_KEY, expectedMemberKey)
+                }
+                putBoolean(KEY_SIGN_OUT_PENDING, true)
+                if (privySignOutMemberKey == null) {
+                    remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
+                } else {
+                    putString(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY, privySignOutMemberKey)
+                }
+            }.commit()
         }
         return committed
     }
@@ -185,7 +363,11 @@ class SharedPreferencesLocalState internal constructor(
         preferences.edit()
             .remove(KEY_MEMBER_KEY)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .remove(KEY_INITIAL_SETUP_STEP)
             .removeAddressBookMetadata()
             .apply()
     }
@@ -202,18 +384,35 @@ class SharedPreferencesLocalState internal constructor(
     @SuppressLint("ApplySharedPref")
     private fun restoreAuthorizationSnapshot(
         requestedAt: InstantValue?,
+        receiptBaselineAt: InstantValue?,
         receivedAt: InstantValue?,
+        statusObservedAt: InstantValue?,
+        reconnectRequired: Boolean,
         pendingSignOut: Boolean? = null,
+        pendingPrivySignOutMemberKey: String? = null,
+        setupStep: InitialSetupStep? = initialSetupStep,
         addressBookSnapshot: AddressBookSnapshot? = null,
     ) {
         preferences.edit().apply {
             writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
+            writeInstant(KEY_HEALTH_RECEIPT_BASELINE_AT, receiptBaselineAt)
             writeInstant(KEY_LAST_DATA_RECEIVED_AT, receivedAt)
+            writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
+            putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, reconnectRequired)
+            writeInitialSetupStep(setupStep)
             if (pendingSignOut != null) {
                 if (pendingSignOut) {
                     putBoolean(KEY_SIGN_OUT_PENDING, true)
                 } else {
                     remove(KEY_SIGN_OUT_PENDING)
+                }
+                if (pendingPrivySignOutMemberKey == null) {
+                    remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
+                } else {
+                    putString(
+                        KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY,
+                        pendingPrivySignOutMemberKey,
+                    )
                 }
             }
             addressBookSnapshot?.let { writeAddressBookSnapshot(it) }
@@ -225,9 +424,13 @@ class SharedPreferencesLocalState internal constructor(
         change: SharedPreferences.Editor.() -> Unit,
     ): Boolean {
         val snapshot = readAddressBookSnapshot()
+        val setupStep = initialSetupStep
         val committed = preferences.edit().apply(change).commit()
         if (!committed) {
-            preferences.edit().apply { writeAddressBookSnapshot(snapshot) }.commit()
+            preferences.edit().apply {
+                writeAddressBookSnapshot(snapshot)
+                writeInitialSetupStep(setupStep)
+            }.commit()
         }
         return committed
     }
@@ -286,12 +489,23 @@ class SharedPreferencesLocalState internal constructor(
         if (value == null) remove(key) else putLong(key, value.epochMilliseconds)
     }
 
+    private fun SharedPreferences.Editor.writeInitialSetupStep(value: InitialSetupStep?) {
+        if (value == null) remove(KEY_INITIAL_SETUP_STEP)
+        else putString(KEY_INITIAL_SETUP_STEP, value.wireValue)
+    }
+
     private companion object {
         const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_MEMBER_KEY = "member_key"
+        const val KEY_INITIAL_SETUP_STEP = "initial_setup_step"
         const val KEY_HEALTH_ACCESS_REQUESTED_AT = "health_access_requested_at"
+        const val KEY_HEALTH_RECEIPT_BASELINE_AT = "health_receipt_baseline_at"
         const val KEY_LAST_DATA_RECEIVED_AT = "last_data_received_at"
+        const val KEY_LAST_STATUS_OBSERVED_AT = "last_status_observed_at"
+        const val KEY_HEALTH_RECONNECT_REQUIRED = "health_reconnect_required"
         const val KEY_SIGN_OUT_PENDING = "sign_out_pending"
+        const val KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY =
+            "pending_privy_sign_out_member_key"
         const val KEY_ADDRESS_BOOK_REVISION = "address_book_revision"
         const val KEY_ADDRESS_BOOK_REPLACEMENT_BASE_REVISION =
             "address_book_replacement_base_revision"

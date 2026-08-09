@@ -40,8 +40,9 @@ data class SignInTokenRequest(
     val platform: CompanionPlatform = CompanionPlatform.Android,
     val appInstallationId: String,
     val appVersion: String,
-    val connectionIntent: ConnectionIntent,
+    val connectionIntent: ConnectionIntent?,
     val sdkVersions: Map<String, String>,
+    val timeZone: String,
 )
 
 data class SignInTokenResponse(
@@ -49,8 +50,106 @@ data class SignInTokenResponse(
     val environment: String,
 )
 
+enum class InitialOnboardingStatus(val wireValue: String) {
+    Pending("pending"),
+    Completed("completed"),
+}
+
+data class InitialOnboardingPreferences(
+    val persona: String?,
+    val tone: String?,
+    val voice: String?,
+)
+
+data class InitialOnboardingPersona(
+    val id: String,
+    val label: String,
+    val description: String,
+    val supportDescription: String,
+    val defaultTone: String,
+    val defaultVoiceId: String,
+    val recommendedVoiceIds: List<String>,
+)
+
+data class InitialOnboardingVoice(
+    val id: String,
+    val label: String,
+    val description: String,
+    val previewUrl: String,
+)
+
+data class InitialOnboardingTone(
+    val id: String,
+    val label: String,
+    val sample: String,
+)
+
+data class InitialOnboardingCatalog(
+    val personas: List<InitialOnboardingPersona>,
+    val voices: List<InitialOnboardingVoice>,
+    val tones: List<InitialOnboardingTone>,
+)
+
+enum class InitialOnboardingContactAvatarKind(val wireValue: String) {
+    Headshot("headshot"),
+    Logo("logo"),
+    Blank("blank"),
+}
+
+data class InitialOnboardingContactAvatar(
+    val id: String,
+    val kind: InitialOnboardingContactAvatarKind,
+    val label: String,
+    val imageUrl: String?,
+)
+
+data class InitialOnboardingContactCard(
+    val avatars: List<InitialOnboardingContactAvatar>,
+    val defaultAvatarId: String,
+)
+
+enum class InitialOnboardingContactKind(val wireValue: String) {
+    Text("text"),
+    Telegram("telegram"),
+    Email("email"),
+}
+
+data class InitialOnboardingContactAction(
+    val href: String,
+    val kind: InitialOnboardingContactKind,
+    val label: String,
+)
+
+data class InitialOnboarding(
+    val status: InitialOnboardingStatus,
+    val completedNow: Boolean?,
+    val preferences: InitialOnboardingPreferences,
+    val catalog: InitialOnboardingCatalog?,
+    val contactCard: InitialOnboardingContactCard?,
+    val contactAction: InitialOnboardingContactAction?,
+)
+
+enum class InitialOnboardingCompletionAction(val wireValue: String) {
+    Save("save"),
+    Skip("skip"),
+}
+
+data class InitialOnboardingCompletionRequest(
+    val action: InitialOnboardingCompletionAction,
+    val preferences: InitialOnboardingPreferences?,
+)
+
+data class InitialOnboardingContactCardRequest(
+    val avatarId: String,
+)
+
+data class InitialOnboardingContactCardHandoff(
+    val url: String,
+)
+
 data class CompanionSyncStatus(
     val lastDataReceivedAt: Instant?,
+    val observedAt: Instant,
     val resources: Map<String, ResourceStatus>,
 ) {
     data class ResourceStatus(val lastReceivedAt: Instant?)
@@ -67,6 +166,7 @@ data class LaunchConsentDocument(
 data class LaunchConsentScopeStatus(
     val scope: LaunchConsentScope,
     val granted: Boolean,
+    val documents: List<LaunchConsentDocument>,
     val missingDocuments: List<LaunchConsentDocument>,
 )
 
@@ -165,6 +265,18 @@ sealed interface AddressBookSharingState {
     ) : AddressBookSharingState
 }
 
+enum class InitialSetupStep(val wireValue: String) {
+    HealthConnect("health_connect"),
+    FriendlyNames("friendly_names"),
+    Complete("complete"),
+    ;
+
+    companion object {
+        fun fromWireValue(value: String?): InitialSetupStep? =
+            values().firstOrNull { it.wireValue == value }
+    }
+}
+
 enum class HealthConnectAvailability {
     Available,
     InstallOrUpdateRequired,
@@ -185,25 +297,22 @@ sealed interface HealthSyncState {
         fun derive(
             requestedAt: Instant?,
             status: CompanionSyncStatus?,
-            now: Instant,
             delayedAfter: Duration = Duration.ofHours(36),
             attentionAfter: Duration = Duration.ofHours(72),
         ): HealthSyncState {
             if (requestedAt == null) return NotConnected
-            // A receipt from an older setup is not evidence for this connection.
-            // Equality qualifies; Murph deliberately applies no clock-skew allowance.
-            val receivedAt = status?.lastDataReceivedAt?.takeUnless {
-                it.isBefore(requestedAt)
-            }
+            val observedAt = status?.observedAt ?: requestedAt
+            val receivedAt = status?.lastDataReceivedAt
             if (receivedAt == null) {
-                val setupAge = Duration.between(requestedAt, now).coerceAtLeast(Duration.ZERO)
+                val setupAge =
+                    Duration.between(requestedAt, observedAt).coerceAtLeast(Duration.ZERO)
                 return if (setupAge >= attentionAfter) {
                     NeedsAttention(lastDataReceivedAt = null)
                 } else {
                     AwaitingFirstData
                 }
             }
-            val age = Duration.between(receivedAt, now).coerceAtLeast(Duration.ZERO)
+            val age = Duration.between(receivedAt, observedAt).coerceAtLeast(Duration.ZERO)
             return when {
                 age >= attentionAfter -> NeedsAttention(receivedAt)
                 age >= delayedAfter -> Delayed(receivedAt)
@@ -216,7 +325,15 @@ sealed interface HealthSyncState {
 sealed class CompanionApiException(message: String) : Exception(message) {
     data object Network : CompanionApiException("Network request failed")
     data object Unauthorized : CompanionApiException("Authentication required")
+    class LocalAuthUnavailable(
+        val observedState: AuthSessionState,
+    ) : CompanionApiException("Local authentication is temporarily unavailable")
+    data object AccessRequired : CompanionApiException("Active Murph access required")
+    data object MemberSuspended : CompanionApiException("Murph account suspended")
+    data object AdmissionRetryable : CompanionApiException("Murph account setup temporarily unavailable")
+    data object AdmissionSupportRequired : CompanionApiException("Murph account setup needs support")
     data object NoAccount : CompanionApiException("No Murph account")
+    data object AccountConflict : CompanionApiException("Murph account conflict")
     data object ConsentRequired : CompanionApiException("Murph consent required")
     data object StaleConsentDocuments : CompanionApiException("Consent documents changed")
     data object ReconnectRequired : CompanionApiException("Health connection must be reconnected")

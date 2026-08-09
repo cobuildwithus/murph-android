@@ -3,7 +3,10 @@ package ai.withmurph.companion.app
 import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.core.InitialOnboarding
 import ai.withmurph.companion.core.LaunchConsentStatus
+import java.time.Instant
 
 sealed interface AppPhase {
     data object Launching : AppPhase
@@ -13,13 +16,29 @@ sealed interface AppPhase {
         val message: String,
         val canRetry: Boolean = true,
         val canSignOut: Boolean = false,
+        val signOutLabel: String = "Sign out and start fresh",
+        val supplementalActions: FailureSupplementalActions = if (canSignOut) {
+            FailureSupplementalActions.AccountAndLegal
+        } else {
+            FailureSupplementalActions.None
+        },
     ) : AppPhase
+}
+
+enum class FailureSupplementalActions {
+    None,
+    Support,
+    AccountAndLegal,
 }
 
 data class AppUiState(
     val phase: AppPhase = AppPhase.Launching,
+    val initialSetupStep: InitialSetupStep = InitialSetupStep.HealthConnect,
     val healthAvailability: HealthConnectAvailability = HealthConnectAvailability.TemporarilyUnavailable,
     val healthSync: HealthSyncState = HealthSyncState.NotConnected,
+    val healthStatusObservedAt: Instant? = null,
+    val healthStatusIsStale: Boolean = false,
+    val healthReconnectRequired: Boolean = false,
     val isConnectingHealth: Boolean = false,
     val isSyncingHealth: Boolean = false,
     val healthMessage: String? = null,
@@ -33,8 +52,37 @@ data class AppUiState(
     val contactsPermissionDenied: Boolean = false,
     val addressBookMessage: String? = null,
     val launchConsentRecovery: LaunchConsentRecoveryUiState? = null,
+    val initialOnboarding: InitialOnboarding? = null,
+    val initialOnboardingStage: InitialOnboardingStage? = null,
+    val initialOnboardingDraft: InitialOnboardingDraft? = null,
+    val isInitialOnboardingSaving: Boolean = false,
+    val initialOnboardingCompletedNow: Boolean = false,
+    val initialOnboardingMessage: String? = null,
+    val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
     val pendingHealthPermissionRequestId: Int? = null,
+    val pendingHealthHistoryPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
+)
+
+data class PendingInitialOnboardingContactCardHandoff(
+    val id: Int,
+)
+
+enum class InitialOnboardingStage {
+    Contact,
+    MainPersona,
+    SupportingPersona,
+    Voice,
+    Tone,
+    Welcome,
+}
+
+data class InitialOnboardingDraft(
+    val avatarId: String?,
+    val mainPersonaId: String,
+    val supportingPersonaId: String?,
+    val voiceId: String,
+    val toneId: String,
 )
 
 enum class LaunchConsentRecoveryPhase {
@@ -43,7 +91,6 @@ enum class LaunchConsentRecoveryPhase {
     LoadFailed,
     Required,
     Saving,
-    Finishing,
 }
 
 data class LaunchConsentRecoveryUiState(
@@ -51,8 +98,6 @@ data class LaunchConsentRecoveryUiState(
     val status: LaunchConsentStatus? = null,
     val message: String? = null,
     val showSheet: Boolean = true,
-    val canDismiss: Boolean = phase == LaunchConsentRecoveryPhase.Required ||
-        phase == LaunchConsentRecoveryPhase.LoadFailed,
     val canAccept: Boolean = phase == LaunchConsentRecoveryPhase.Required &&
         status?.missingLaunchScopes?.isNotEmpty() == true,
 )

@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "policySnapshotDate": "2026-08-05",
+  "application": {
+    "applicationId": "ai.withmurph.app",
+    "namespace": "ai.withmurph.companion",
+    "minSdk": 28,
+    "targetSdk": 36,
+    "versionCode": 1,
+    "versionName": "0.1.0"
+  },
+  "appManifestRequestedPermissions": [
+    {
+      "name": "android.permission.ACCESS_NETWORK_STATE",
+      "declarationCategory": "network state only; no user-data type"
+    },
+    {
+      "name": "android.permission.INTERNET",
+      "declarationCategory": "transport for declared off-device data paths"
+    },
+    {
+      "name": "android.permission.READ_CONTACTS",
+      "declarationCategory": "Contacts"
+    },
+    {
+      "name": "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_EXERCISE",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_HEALTH_DATA_HISTORY",
+      "declarationCategory": "Health Connect access scope; no additional data type"
+    },
+    {
+      "name": "android.permission.health.READ_SLEEP",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_STEPS",
+      "declarationCategory": "Fitness info"
+    }
+  ],
+  "appManifestRemovedPermissions": [
+    "android.permission.RECEIVE_BOOT_COMPLETED"
+  ],
+  "mergedManifestPermissions": [
+    "ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.INTERNET",
+    "android.permission.READ_CONTACTS",
+    "android.permission.USE_BIOMETRIC",
+    "android.permission.USE_FINGERPRINT",
+    "android.permission.WAKE_LOCK",
+    "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+    "android.permission.health.READ_EXERCISE",
+    "android.permission.health.READ_HEALTH_DATA_HISTORY",
+    "android.permission.health.READ_SLEEP",
+    "android.permission.health.READ_STEPS"
+  ],
+  "healthConnect": {
+    "resourceOwner": "app/src/main/java/ai/withmurph/companion/health/JunctionHealthSyncService.kt",
+    "resourceSetSymbol": "readResources",
+    "readResources": [
+      "ActiveEnergyBurned",
+      "Sleep",
+      "Steps",
+      "Workout"
+    ],
+    "readResourceCount": 4,
+    "readDataPermissionCount": 4,
+    "backfillDays": 30,
+    "historyPermissionRequested": true,
+    "syncOnAppStart": false,
+    "backgroundPermissionRequested": false
+  },
+  "legalLinks": {
+    "Privacy": "https://www.withmurph.ai/legal/privacy",
+    "Terms": "https://www.withmurph.ai/legal/terms",
+    "HealthNotice": "https://www.withmurph.ai/consumer-health-data-privacy-policy",
+    "AiSafety": "https://www.withmurph.ai/legal/health-ai-safety-disclosure",
+    "AccountDeletion": "https://www.withmurph.ai/settings/data-privacy",
+    "Support": "mailto:support@withmurph.ai"
+  },
+  "requiredOperatorAssertions": [
+    "organizationDeveloperAccountVerified",
+    "storeListingReviewed",
+    "storeVisualAssetsUploaded",
+    "canonicalAccountAdmissionVerified",
+    "productionPrivyPackageRegistrationVerified",
+    "productionBackendVerified",
+    "realHealthProviderExportVerified",
+    "accountOnboardingAndConsentDataSafetyReviewed",
+    "systemTimeZoneTaxonomyDecided",
+    "dataSafetySdkPracticesConfirmed",
+    "dataSafetyFormSubmitted",
+    "healthAppsDeclarationSubmitted",
+    "contactsPolicyUseApproved",
+    "privacyAndDeletionUrlsVerified",
+    "accountDeletionFlowVerified",
+    "playAppSigningAndUploadKeyVerified",
+    "reviewerAccessVerified",
+    "physicalDeviceMatrixPassed",
+    "contentAndAudienceDeclarationsCompleted"
+  ]
+}

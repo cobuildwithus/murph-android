@@ -1,0 +1,218 @@
+package ai.withmurph.companion.ui
+
+import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.app.FailureSupplementalActions
+import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.ui.home.homeShowsHealthStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class MurphAppShellStateTest {
+    @Test
+    fun signedInFailureKeepsSupportAccountAndLegalActionsReachable() {
+        val invoked = mutableListOf<String>()
+        val actions = failureExternalActions(
+            failure = AppPhase.Failed(message = "Account unavailable", canSignOut = true),
+            onOpenSupport = { invoked += "support" },
+            onDeleteAccount = { invoked += "delete" },
+            onOpenPrivacy = { invoked += "privacy" },
+            onOpenTerms = { invoked += "terms" },
+        )
+
+        assertEquals(
+            listOf("Contact support", "Delete account", "Privacy Policy", "Terms"),
+            actions.map { it.label },
+        )
+        actions.forEach { it.onClick() }
+        assertEquals(listOf("support", "delete", "privacy", "terms"), invoked)
+    }
+
+    @Test
+    fun signedOutFailureDoesNotOfferAccountSpecificActions() {
+        val actions = failureExternalActions(
+            failure = AppPhase.Failed(message = "Configuration unavailable"),
+            onOpenSupport = {},
+            onDeleteAccount = {},
+            onOpenPrivacy = {},
+            onOpenTerms = {},
+        )
+
+        assertTrue(actions.isEmpty())
+    }
+
+    @Test
+    fun rejectedAdmissionOffersSupportWithoutAccountManagement() {
+        val invoked = mutableListOf<String>()
+        val actions = failureExternalActions(
+            failure = AppPhase.Failed(
+                message = "Access unavailable",
+                canRetry = false,
+                canSignOut = true,
+                supplementalActions = FailureSupplementalActions.Support,
+            ),
+            onOpenSupport = { invoked += "support" },
+            onDeleteAccount = { invoked += "delete" },
+            onOpenPrivacy = { invoked += "privacy" },
+            onOpenTerms = { invoked += "terms" },
+        )
+
+        assertEquals(listOf("Contact support"), actions.map { it.label })
+        actions.single().onClick()
+        assertEquals(listOf("support"), invoked)
+    }
+
+    @Test
+    fun reconnectReplacesHomeWhileKeepingTheSignedInTabBar() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.Complete,
+            healthReconnectRequired = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertTrue(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun reconnectDoesNotReplaceSettings() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Settings,
+            initialSetupStep = InitialSetupStep.Complete,
+            healthReconnectRequired = true,
+        )
+
+        assertEquals(AppTab.Settings, shell.activeTab)
+        assertFalse(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun friendlyNamesReconnectKeepsHomeNavigationAndReconnectGuidance() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertTrue(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+    }
+
+    @Test
+    fun friendlyNamesReconnectKeepsSettingsAvailable() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Settings,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = true,
+        )
+
+        assertEquals(AppTab.Settings, shell.activeTab)
+        assertFalse(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+    }
+
+    @Test
+    fun everySetupStepKeepsSettingsReachable() {
+        InitialSetupStep.entries.forEach { step ->
+            val shell = readyAppShellState(
+                selectedTab = AppTab.Settings,
+                initialSetupStep = step,
+                healthReconnectRequired = false,
+            )
+
+            assertEquals(step.name, AppTab.Settings, shell.activeTab)
+            assertFalse(step.name, shell.showsReconnect)
+            assertFalse(step.name, shell.showsFriendlyNamesSetup)
+            assertTrue(step.name, shell.showsTabBar)
+        }
+    }
+
+    @Test
+    fun friendlyNamesUsesAnOptionalBannerOverHealthStatusOnHome() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertFalse(shell.showsReconnect)
+        assertTrue(shell.showsFriendlyNamesSetup)
+    }
+
+    @Test
+    fun initialOnboardingKeepsSettingsReachableWithoutShowingItsBanner() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Settings,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+            hasInitialOnboarding = true,
+        )
+
+        assertEquals(AppTab.Settings, shell.activeTab)
+        assertFalse(shell.showsInitialOnboarding)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun initialOnboardingHidesTheTabBarWhileItOwnsHome() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+            hasInitialOnboarding = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertTrue(shell.showsInitialOnboarding)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertFalse(shell.showsTabBar)
+    }
+
+    @Test
+    fun retainedOnboardingConsentRecoveryRestoresTheAuthenticatedShell() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+            hasInitialOnboarding = true,
+            hasLaunchConsentRecovery = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertFalse(shell.showsInitialOnboarding)
+        assertFalse(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun retainedOnboardingReconnectRestoresTheAuthenticatedShell() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = true,
+            hasInitialOnboarding = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertFalse(shell.showsInitialOnboarding)
+        assertTrue(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun onlyHealthSetupReplacesHomeStatus() {
+        assertFalse(homeShowsHealthStatus(InitialSetupStep.HealthConnect))
+        assertTrue(homeShowsHealthStatus(InitialSetupStep.FriendlyNames))
+        assertTrue(homeShowsHealthStatus(InitialSetupStep.Complete))
+    }
+}
