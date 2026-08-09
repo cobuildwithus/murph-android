@@ -37,6 +37,18 @@ if ! grep -Fq 'package="ai.withmurph.app.synthetic"' "$synthetic_manifest" ||
     exit 1
 fi
 
+expected_health_read_permissions='android.permission.health.READ_ACTIVE_CALORIES_BURNED
+android.permission.health.READ_BODY_FAT
+android.permission.health.READ_EXERCISE
+android.permission.health.READ_HEART_RATE_VARIABILITY
+android.permission.health.READ_HEIGHT
+android.permission.health.READ_OXYGEN_SATURATION
+android.permission.health.READ_RESPIRATORY_RATE
+android.permission.health.READ_SLEEP
+android.permission.health.READ_STEPS
+android.permission.health.READ_VO2_MAX
+android.permission.health.READ_WEIGHT'
+
 for merged_manifest in \
     app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml \
     app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml
@@ -45,8 +57,18 @@ do
         echo "Merged manifest missing: $merged_manifest" >&2
         exit 1
     fi
-    if grep -Eq 'SCHEDULE_EXACT_ALARM|READ_HEALTH_DATA_IN_BACKGROUND|RECEIVE_BOOT_COMPLETED|SyncBroadcastReceiver|SyncOnExactAlarmService' "$merged_manifest"; then
-        echo "Merged manifest contains forbidden background health entry points: $merged_manifest" >&2
+    if grep -Eq 'SCHEDULE_EXACT_ALARM|READ_HEALTH_DATA_IN_BACKGROUND|READ_HEALTH_DATA_HISTORY|RECEIVE_BOOT_COMPLETED|SyncBroadcastReceiver|SyncOnExactAlarmService' "$merged_manifest"; then
+        echo "Merged manifest contains forbidden background or extended-history health entry points: $merged_manifest" >&2
+        exit 1
+    fi
+    if ! grep -Fq 'android.permission.health.READ_STEPS' "$merged_manifest" ||
+        ! grep -Fq 'android.permission.health.READ_ACTIVE_CALORIES_BURNED' "$merged_manifest"; then
+        echo "Merged manifest dropped a shipped activity permission: $merged_manifest" >&2
+        exit 1
+    fi
+    actual_health_read_permissions=$(grep -o 'android.permission.health.READ_[A-Z0-9_]*' "$merged_manifest" | sort -u)
+    if [ "$actual_health_read_permissions" != "$expected_health_read_permissions" ]; then
+        echo "Merged manifest Health Connect read permissions differ from the reviewed 11-name allowlist: $merged_manifest" >&2
         exit 1
     fi
 done

@@ -73,7 +73,6 @@ class AppSession(
     private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
     private var nextHealthPermissionRequestId = 1
-    private var nextHealthHistoryPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
     private var nextInitialOnboardingContactCardHandoffId = 1
     private var pendingInitialOnboardingContactCardHandoff:
@@ -546,21 +545,6 @@ class AppSession(
                 _state.compareAndSet(
                     current,
                     current.copy(pendingHealthPermissionRequestId = null),
-                )
-            ) {
-                return true
-            }
-        }
-    }
-
-    fun consumeHealthHistoryPermissionLaunchRequest(requestId: Int): Boolean {
-        while (true) {
-            val current = _state.value
-            if (current.pendingHealthHistoryPermissionRequestId != requestId) return false
-            if (
-                _state.compareAndSet(
-                    current,
-                    current.copy(pendingHealthHistoryPermissionRequestId = null),
                 )
             ) {
                 return true
@@ -1621,7 +1605,16 @@ class AppSession(
         return prepared
     }
 
-    suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean {
+    suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean =
+        completeHealthPermissionFlow(
+            permissionRequestCompleted = permissionRequestCompleted,
+            acceptedConsentOwner = null,
+        )
+
+    private suspend fun completeHealthPermissionFlow(
+        permissionRequestCompleted: Boolean,
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): Boolean {
         _state.update { it.copy(pendingHealthPermissionRequestId = null) }
         var authStateToReconcile: AuthSessionState? = null
         var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
@@ -1635,7 +1628,6 @@ class AppSession(
                 _state.update { it.copy(isConnectingHealth = false) }
                 return false
             }
-            if (pending.awaitingHistoryPermission) return@withLock false
             val epoch = pending.epoch
             try {
                 if (!permissionRequestCompleted) {
@@ -1720,15 +1712,51 @@ class AppSession(
                     authStateToReconcile = authState
                     return@withLock abortPendingHealthConnection(epoch)
                 }
-                pendingHealthConnection = refreshedPending.copy(awaitingHistoryPermission = true)
+                val requestedAt = InstantValue(refreshedPending.requestedAt.toEpochMilli())
+                val completesInitialSetup =
+                    _state.value.initialSetupStep == InitialSetupStep.HealthConnect &&
+                        localState.initialSetupStep == InitialSetupStep.HealthConnect
+                val committed = localState.completeHealthSetupAuthorization(
+                    requestedAt = requestedAt,
+                    receiptBaselineAt = refreshedPending.receiptBaselineAt?.let {
+                        InstantValue(it.toEpochMilli())
+                    },
+                    statusObservedAt = requestedAt,
+                    completesInitialSetup = completesInitialSetup,
+                )
+                if (!committed) {
+                    pendingHealthConnection = null
+                    val rollbackSucceeded = rollbackIncompleteHealthSetup(epoch)
+                    _state.update { current ->
+                        current.copy(
+                            isConnectingHealth = false,
+                            healthMessage = if (rollbackSucceeded) {
+                                "Murph couldn't save Health Connect setup. Try again."
+                            } else {
+                                "Murph couldn't safely reset health sync. Keep the app open and sign out."
+                            },
+                        )
+                    }
+                    return@withLock false
+                }
+                if (completesInitialSetup) {
+                    projectInitialSetupStep(
+                        expected = InitialSetupStep.HealthConnect,
+                        next = InitialSetupStep.FriendlyNames,
+                    )
+                }
+                pendingHealthConnection = null
                 _state.update { current ->
                     current.copy(
-                        isConnectingHealth = true,
+                        isConnectingHealth = false,
+                        healthSync = HealthSyncState.AwaitingFirstData,
+                        healthStatusObservedAt = refreshedPending.requestedAt,
+                        healthStatusIsStale = false,
+                        healthReconnectRequired = false,
                         grantedResourceCount = health.grantedResourceCount(),
                         healthMessage = null,
                     )
                 }
-                requestHealthHistoryPermissionLaunch()
                 true
             } catch (error: CancellationException) {
                 pendingHealthConnection = null
@@ -1783,69 +1811,9 @@ class AppSession(
             )
         }
         authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
-        return completed
-    }
-
-    suspend fun completeHealthHistoryPermissionFlow(): Boolean {
-        val completed = healthMutex.withLock {
-            val pending = pendingHealthConnection
-            if (
-                pending == null ||
-                !pending.awaitingHistoryPermission ||
-                !ownsPendingHealthConnection(pending.memberKey)
-            ) {
-                return@withLock false
-            }
-            val requestedAt = InstantValue(pending.requestedAt.toEpochMilli())
-            val completesInitialSetup =
-                _state.value.initialSetupStep == InitialSetupStep.HealthConnect &&
-                    localState.initialSetupStep == InitialSetupStep.HealthConnect
-            val committed = localState.completeHealthSetupAuthorization(
-                requestedAt = requestedAt,
-                receiptBaselineAt = pending.receiptBaselineAt?.let {
-                    InstantValue(it.toEpochMilli())
-                },
-                statusObservedAt = requestedAt,
-                completesInitialSetup = completesInitialSetup,
-            )
-            if (!committed) {
-                pendingHealthConnection = null
-                val rollbackSucceeded = rollbackIncompleteHealthSetup(pending.epoch)
-                _state.update { current ->
-                    current.copy(
-                        isConnectingHealth = false,
-                        pendingHealthHistoryPermissionRequestId = null,
-                        healthMessage = if (rollbackSucceeded) {
-                            "Murph couldn't save Health Connect setup. Try again."
-                        } else {
-                            "Murph couldn't safely reset health sync. Keep the app open and sign out."
-                        },
-                    )
-                }
-                return@withLock false
-            }
-            if (completesInitialSetup) {
-                projectInitialSetupStep(
-                    expected = InitialSetupStep.HealthConnect,
-                    next = InitialSetupStep.FriendlyNames,
-                )
-            }
-            pendingHealthConnection = null
-            _state.update { current ->
-                current.copy(
-                    isConnectingHealth = false,
-                    pendingHealthHistoryPermissionRequestId = null,
-                    healthSync = HealthSyncState.AwaitingFirstData,
-                    healthStatusObservedAt = pending.requestedAt,
-                    healthStatusIsStale = false,
-                    healthReconnectRequired = false,
-                    grantedResourceCount = health.grantedResourceCount(),
-                    healthMessage = null,
-                )
-            }
-            true
+        if (completed && !needsForegroundRefresh) {
+            syncNow(foregroundClaim = null, acceptedConsentOwner = acceptedConsentOwner)
         }
-        if (completed && !needsForegroundRefresh) syncNow()
         return completed
     }
 
@@ -1853,10 +1821,7 @@ class AppSession(
         val pending = pendingHealthConnection
         if (pending == null) {
             _state.update {
-                it.copy(
-                    pendingHealthPermissionRequestId = null,
-                    pendingHealthHistoryPermissionRequestId = null,
-                )
+                it.copy(pendingHealthPermissionRequestId = null)
             }
             return
         }
@@ -1866,7 +1831,6 @@ class AppSession(
             it.copy(
                 isConnectingHealth = false,
                 pendingHealthPermissionRequestId = null,
-                pendingHealthHistoryPermissionRequestId = null,
             )
         }
     }
@@ -4779,8 +4743,9 @@ class AppSession(
                 resumeAutomaticAddressBookDeletion(followUp.mutation)
             is LaunchConsentFollowUp.CompleteHealthPermission ->
                 resumeHealthPermissionAfterConsent(
-                    followUp.requestedAt,
-                    followUp.receiptBaselineAt,
+                    acceptedConsentOwner = pending,
+                    requestedAt = followUp.requestedAt,
+                    receiptBaselineAt = followUp.receiptBaselineAt,
                 )
             is LaunchConsentFollowUp.AddressBookReplacement -> {
                 if (
@@ -4949,6 +4914,7 @@ class AppSession(
             (!healthWasRequested() || health.isSignedIn())
 
     private suspend fun resumeHealthPermissionAfterConsent(
+        acceptedConsentOwner: PendingLaunchConsentRecovery,
         requestedAt: Instant,
         receiptBaselineAt: Instant?,
     ) {
@@ -5006,7 +4972,10 @@ class AppSession(
             true
         }
         if (permissionStillGranted) {
-            completeHealthPermissionFlow(permissionRequestCompleted = true)
+            completeHealthPermissionFlow(
+                permissionRequestCompleted = true,
+                acceptedConsentOwner = acceptedConsentOwner,
+            )
         }
     }
 
@@ -5014,13 +4983,6 @@ class AppSession(
         val requestId = nextHealthPermissionRequestId++
         _state.update { current ->
             current.copy(pendingHealthPermissionRequestId = requestId)
-        }
-    }
-
-    private fun requestHealthHistoryPermissionLaunch() {
-        val requestId = nextHealthHistoryPermissionRequestId++
-        _state.update { current ->
-            current.copy(pendingHealthHistoryPermissionRequestId = requestId)
         }
     }
 
@@ -5771,7 +5733,6 @@ class AppSession(
                     it.launchConsentRecovery
                 },
                 pendingHealthPermissionRequestId = null,
-                pendingHealthHistoryPermissionRequestId = null,
                 pendingAddressBookPermissionRequestId = null,
             )
         }
@@ -5833,7 +5794,6 @@ class AppSession(
         val memberKey: String,
         val requestedAt: Instant,
         val receiptBaselineAt: Instant?,
-        val awaitingHistoryPermission: Boolean = false,
     )
 
     private data class PendingAddressBookPermissionFlow(

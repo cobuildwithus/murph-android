@@ -168,7 +168,7 @@ class ScreenshotFixtureTest {
         assertEquals(HealthSyncState.NotConnected, state.healthSync)
         assertNull(state.healthStatusObservedAt)
         assertEquals(0, state.grantedResourceCount)
-        assertEquals(4, state.totalResourceCount)
+        assertEquals(11, state.totalResourceCount)
         assertEquals(
             "Health Connect needs to reconnect before syncing can resume.",
             state.healthMessage,

@@ -60,7 +60,6 @@ data class AppUiState(
     val initialOnboardingMessage: String? = null,
     val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
     val pendingHealthPermissionRequestId: Int? = null,
-    val pendingHealthHistoryPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
 )
 

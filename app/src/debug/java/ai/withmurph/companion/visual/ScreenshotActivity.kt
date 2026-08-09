@@ -284,8 +284,8 @@ internal enum class ScreenshotScenario {
         healthAvailability = HealthConnectAvailability.Available,
         healthSync = sync,
         healthStatusObservedAt = observedAt,
-        grantedResourceCount = if (sync == HealthSyncState.NotConnected) 0 else 4,
-        totalResourceCount = 4,
+        grantedResourceCount = if (sync == HealthSyncState.NotConnected) 0 else 11,
+        totalResourceCount = 11,
         backendEnvironment = "screenshot",
     )
 
