@@ -25,7 +25,7 @@ if [ ! -f "$synthetic_manifest" ]; then
     echo "Synthetic merged manifest missing: $synthetic_manifest" >&2
     exit 1
 fi
-if grep -Eq 'MurphApplication|MainActivity|Initializer|<(uses-permission|permission|provider|service|receiver|activity-alias)([[:space:]>]|$)' "$synthetic_manifest"; then
+if grep -Eq 'MurphApplication|MainActivity|Initializer|<(uses-permission|permission|queries|provider|service|receiver|activity-alias)([[:space:]>]|$)' "$synthetic_manifest"; then
     echo "Synthetic UI fixture can initialize live app or data boundaries: $synthetic_manifest" >&2
     exit 1
 fi
