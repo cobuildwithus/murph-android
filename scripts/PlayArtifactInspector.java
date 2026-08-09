@@ -149,7 +149,19 @@ public final class PlayArtifactInspector {
             topLevelName.endsWith(".RSA") ||
             topLevelName.endsWith(".DSA") ||
             topLevelName.endsWith(".EC") ||
-            topLevelName.startsWith("SIG-");
+            isCustomSignatureControlFile(topLevelName);
+    }
+
+    private static boolean isCustomSignatureControlFile(String topLevelName) {
+        if (!topLevelName.startsWith("SIG-") || topLevelName.length() == 4) {
+            return false;
+        }
+        int extensionSeparator = topLevelName.lastIndexOf('.');
+        if (extensionSeparator < 0) {
+            return true;
+        }
+        String extension = topLevelName.substring(extensionSeparator + 1);
+        return extension.matches("[A-Z0-9]{1,3}");
     }
 
     private static String manifestContract(InputStream input) throws Exception {

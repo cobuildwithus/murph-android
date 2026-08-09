@@ -41,7 +41,9 @@ const manifestFacts = {
     versionCode: 7,
     versionName: "1.2.3",
   },
-  mergedManifestPermissions: ["android.permission.INTERNET"],
+  mergedManifestPermissionAttributes: [
+    { "android:name": "android.permission.INTERNET" },
+  ],
   releaseManifest: {
     applicationClass: "ai.withmurph.companion.MurphApplication",
     applicationSecurityAttributes: {
@@ -51,6 +53,7 @@ const manifestFacts = {
       "android:directBootAware": null,
       "android:fullBackupContent": "false",
       "android:networkSecurityConfig": null,
+      "android:taskAffinity": null,
       "android:testOnly": null,
       "android:usesCleartextTraffic": null,
     },
@@ -82,6 +85,7 @@ const manifestFacts = {
         },
       },
     ],
+    directBootAwareComponents: [],
     requiredIntentFilters: [
       {
         componentType: "activities",
@@ -184,13 +188,31 @@ test("artifact manifest must match the local release boundary", () => {
     );
   }
 
+  for (const changed of [
+    releaseManifest({ permissionAttributes: ' android:maxSdkVersion="32"' }),
+    releaseManifest({
+      permissionAttributes: ' android:usesPermissionFlags="neverForLocation"',
+    }),
+    releaseManifest({ applicationAttributes: ' android:taskAffinity="example.task"' }),
+    releaseManifest({ applicationAttributes: ' android:testOnly="true"' }),
+    releaseManifest({ permissionProtectionLevel: "normal" }),
+    releaseManifest({
+      launcherAttributes: ' android:exported="true" android:directBootAware="true"',
+    }),
+  ]) {
+    assert.throws(
+      () => validateArtifactManifest(changed, changed, manifestFacts),
+      /signed AAB manifest/,
+    );
+  }
+
   assert.throws(
     () => validateArtifactManifest(
       releaseManifest({ permissionAttributes: ' android:maxSdkVersion="32"' }),
       clean,
       manifestFacts,
     ),
-    /manifest contract drifted/,
+    /permission attributes drifted/,
   );
   assert.throws(
     () => validateArtifactManifest(
@@ -391,6 +413,39 @@ test(
         "-C",
         contents,
         "META-INF/services/example.Service",
+      ]);
+      assert.throws(
+        () => verifyAndroidBundleSigners(artifact, approvedFingerprint),
+        /completely signed/,
+      );
+      sign(approvedKeystore, "approved");
+      assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
+
+      fs.writeFileSync(
+        path.join(contents, "META-INF", "SIG-CUSTOM.A1"),
+        "custom signature control\n",
+      );
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--update",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        "META-INF/SIG-CUSTOM.A1",
+      ]);
+      assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
+
+      fs.writeFileSync(
+        path.join(contents, "META-INF", "SIG-PROVENANCE.BADX"),
+        "ordinary unsigned content\n",
+      );
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--update",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        "META-INF/SIG-PROVENANCE.BADX",
       ]);
       assert.throws(
         () => verifyAndroidBundleSigners(artifact, approvedFingerprint),

@@ -46,20 +46,46 @@
   "appManifestRemovedPermissions": [
     "android.permission.RECEIVE_BOOT_COMPLETED"
   ],
-  "mergedManifestPermissions": [
-    "ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-    "android.permission.ACCESS_NETWORK_STATE",
-    "android.permission.FOREGROUND_SERVICE",
-    "android.permission.INTERNET",
-    "android.permission.READ_CONTACTS",
-    "android.permission.USE_BIOMETRIC",
-    "android.permission.USE_FINGERPRINT",
-    "android.permission.WAKE_LOCK",
-    "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
-    "android.permission.health.READ_EXERCISE",
-    "android.permission.health.READ_HEALTH_DATA_HISTORY",
-    "android.permission.health.READ_SLEEP",
-    "android.permission.health.READ_STEPS"
+  "mergedManifestPermissionAttributes": [
+    {
+      "android:name": "ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+    },
+    {
+      "android:name": "android.permission.ACCESS_NETWORK_STATE"
+    },
+    {
+      "android:name": "android.permission.FOREGROUND_SERVICE"
+    },
+    {
+      "android:name": "android.permission.INTERNET"
+    },
+    {
+      "android:name": "android.permission.READ_CONTACTS"
+    },
+    {
+      "android:name": "android.permission.USE_BIOMETRIC"
+    },
+    {
+      "android:name": "android.permission.USE_FINGERPRINT"
+    },
+    {
+      "android:name": "android.permission.WAKE_LOCK"
+    },
+    {
+      "android:name": "android.permission.health.READ_ACTIVE_CALORIES_BURNED"
+    },
+    {
+      "android:name": "android.permission.health.READ_EXERCISE"
+    },
+    {
+      "android:name": "android.permission.health.READ_HEALTH_DATA_HISTORY"
+    },
+    {
+      "android:name": "android.permission.health.READ_SLEEP"
+    },
+    {
+      "android:name": "android.permission.health.READ_STEPS"
+    }
   ],
   "releaseManifest": {
     "applicationClass": "ai.withmurph.companion.MurphApplication",
@@ -70,6 +96,7 @@
       "android:directBootAware": null,
       "android:fullBackupContent": "false",
       "android:networkSecurityConfig": null,
+      "android:taskAffinity": null,
       "android:testOnly": null,
       "android:usesCleartextTraffic": null
     },
@@ -108,6 +135,73 @@
           "android:permission": "android.permission.START_VIEW_PERMISSION_USAGE",
           "android:targetActivity": "ai.withmurph.companion.MainActivity"
         }
+      }
+    ],
+    "directBootAwareComponents": [
+      {
+        "componentType": "services",
+        "component": "androidx.room.MultiInstanceInvalidationService",
+        "value": "true"
+      },
+      {
+        "componentType": "services",
+        "component": "androidx.work.impl.background.systemalarm.SystemAlarmService",
+        "value": "false"
+      },
+      {
+        "componentType": "services",
+        "component": "androidx.work.impl.background.systemjob.SystemJobService",
+        "value": "false"
+      },
+      {
+        "componentType": "services",
+        "component": "androidx.work.impl.foreground.SystemForegroundService",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.profileinstaller.ProfileInstallReceiver",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.background.systemalarm.RescheduleReceiver",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.diagnostics.DiagnosticsReceiver",
+        "value": "false"
+      },
+      {
+        "componentType": "receivers",
+        "component": "androidx.work.impl.utils.ForceStopRunnable$BroadcastReceiver",
+        "value": "false"
       }
     ],
     "requiredIntentFilters": [

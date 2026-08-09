@@ -392,8 +392,15 @@ function validateReleaseManifestContract(contract, facts, label) {
   }
   assertStringSet(
     contract.permissions.map((permission) => permission["android:name"]),
-    facts.mergedManifestPermissions,
+    facts.mergedManifestPermissionAttributes.map(
+      (permission) => permission["android:name"],
+    ),
     `${label} permissions`,
+  );
+  assertEqual(
+    JSON.stringify(contract.permissions),
+    JSON.stringify(facts.mergedManifestPermissionAttributes),
+    `${label} permission attributes`,
   );
 
   const componentNames = [
@@ -435,6 +442,26 @@ function validateReleaseManifestContract(contract, facts, label) {
       `${label} ${expectedComponent.component}`,
     );
   }
+  const directBootAwareComponents = [
+    "activities",
+    "activityAliases",
+    "services",
+    "receivers",
+    "providers",
+  ].flatMap((componentType) => contract[componentType]
+    .filter((component) =>
+      Object.hasOwn(component.securityAttributes, "android:directBootAware")
+    )
+    .map((component) => ({
+      componentType,
+      component: component.name,
+      value: component.securityAttributes["android:directBootAware"],
+    })));
+  assertEqual(
+    JSON.stringify(directBootAwareComponents),
+    JSON.stringify(facts.releaseManifest.directBootAwareComponents),
+    `${label} direct-boot component contract`,
+  );
   for (const requiredFilter of facts.releaseManifest.requiredIntentFilters) {
     const components = contract[requiredFilter.componentType];
     const component = components.find((candidate) => candidate.name === requiredFilter.component);
@@ -630,7 +657,9 @@ export function validateReleasePacket(options = {}) {
   ].map((relativePath) => readText(rootDir, relativePath)).join("\n");
   const declaredPermissionNames = [
     ...facts.appManifestRequestedPermissions.map((permission) => permission.name),
-    ...facts.mergedManifestPermissions,
+    ...facts.mergedManifestPermissionAttributes.map(
+      (permission) => permission["android:name"],
+    ),
   ];
   for (const permission of new Set(declaredPermissionNames)) {
     if (!declarations.includes(permission)) {
