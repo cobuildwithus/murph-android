@@ -7,9 +7,11 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
+import android.telephony.PhoneNumberUtils
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 class AndroidAddressBookContacts(
     context: Context,
@@ -37,6 +39,7 @@ class AndroidAddressBookContacts(
             ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME,
             ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME,
             ContactsContract.CommonDataKinds.Phone.NUMBER,
+            ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER,
         )
         val selection = "${ContactsContract.Data.MIMETYPE} IN (?, ?)"
         val selectionArgs = arrayOf(
@@ -64,10 +67,15 @@ class AndroidAddressBookContacts(
             val phoneColumn = result.getColumnIndexOrThrow(
                 ContactsContract.CommonDataKinds.Phone.NUMBER,
             )
+            val normalizedPhoneColumn = result.getColumnIndexOrThrow(
+                ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER,
+            )
+            val defaultRegionCode = Locale.getDefault().country
 
             var currentContactId: Long? = null
             var contactsSeen = 0
             var phoneValuesSeen = 0
+            var currentContactPhoneValuesSeen = 0
             var givenName: String? = null
             var familyName: String? = null
             val phoneNumbers = ArrayList<String>(AddressBookProjector.MAX_PHONES_PER_CONTACT)
@@ -84,6 +92,7 @@ class AndroidAddressBookContacts(
                 givenName = null
                 familyName = null
                 phoneNumbers.clear()
+                currentContactPhoneValuesSeen = 0
             }
 
             while (result.moveToNext()) {
@@ -108,8 +117,18 @@ class AndroidAddressBookContacts(
                     ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE -> {
                         if (phoneValuesSeen >= AddressBookProjector.MAX_PHONE_VALUES) break
                         phoneValuesSeen += 1
-                        if (phoneNumbers.size < AddressBookProjector.MAX_PHONES_PER_CONTACT) {
-                            result.getString(phoneColumn)?.let(phoneNumbers::add)
+                        if (
+                            currentContactPhoneValuesSeen <
+                            AddressBookProjector.MAX_PHONES_PER_CONTACT
+                        ) {
+                            currentContactPhoneValuesSeen += 1
+                            val rawPhone = result.getString(phoneColumn) ?: continue
+                            AddressBookProjector.canonicalPhoneNumber(
+                                rawValue = rawPhone,
+                                providerNormalizedValue = result.getString(normalizedPhoneColumn),
+                                defaultRegionCode = defaultRegionCode,
+                                formatToE164 = PhoneNumberUtils::formatNumberToE164,
+                            )?.let(phoneNumbers::add)
                         }
                     }
                 }

@@ -8,7 +8,7 @@ import org.junit.Test
 
 class AddressBookProjectorTest {
     @Test
-    fun normalizesOnlyExplicitAsciiInternationalNumbers() {
+    fun normalizesStructurallyValidInternationalNumbers() {
         assertEquals(
             "+12125550123",
             AddressBookProjector.normalizePhoneNumber(" +1 (212) 555-0123 "),
@@ -17,11 +17,20 @@ class AddressBookProjectorTest {
             "+442079460018",
             AddressBookProjector.normalizePhoneNumber("0044 20 7946 0018"),
         )
+        assertEquals(
+            "+12125550123",
+            AddressBookProjector.normalizePhoneNumber("\u200E+1\u00A0(212) 555-0123\u200F"),
+        )
+        assertEquals(
+            "+12125550123",
+            AddressBookProjector.normalizePhoneNumber("+1\u2011212\u2011555\u20110123"),
+        )
 
         listOf(
             "2125550123",
             "+1234567",
             "+1234567890123456",
+            "+0123456789",
             "+1-800-FLOWERS",
             "+١٢٣٤٥٦٧٨",
             "\t+12125550123",
@@ -31,6 +40,99 @@ class AddressBookProjectorTest {
         ).forEach { value ->
             assertNull(value, AddressBookProjector.normalizePhoneNumber(value))
         }
+    }
+
+    @Test
+    fun canonicalizesProviderNormalizedAndNationalNumbersWithDeviceRegion() {
+        var formatterCalls = 0
+        assertEquals(
+            "+442079460018",
+            AddressBookProjector.canonicalPhoneNumber(
+                rawValue = "\u202A020\u00A07946 0018\u202C",
+                providerNormalizedValue = "+44 20 7946 0018",
+                defaultRegionCode = "US",
+            ) { _, _ ->
+                formatterCalls += 1
+                null
+            },
+        )
+        assertEquals(0, formatterCalls)
+        assertEquals(
+            "+12125550123",
+            AddressBookProjector.canonicalPhoneNumber(
+                rawValue = "212\u2011555\u20110123",
+                providerNormalizedValue = "+12125550123",
+                defaultRegionCode = "",
+            ) { _, _ ->
+                formatterCalls += 1
+                null
+            },
+        )
+        assertEquals(0, formatterCalls)
+
+        val formatterInputs = mutableListOf<Pair<String, String>>()
+        assertEquals(
+            "+12125550123",
+            AddressBookProjector.canonicalPhoneNumber(
+                rawValue = "(212) 555-0123",
+                providerNormalizedValue = null,
+                defaultRegionCode = "us",
+            ) { value, regionCode ->
+                formatterInputs += value to regionCode
+                "+12125550123"
+            },
+        )
+        assertEquals(listOf("2125550123" to "US"), formatterInputs)
+
+        listOf("", "419", "001").forEach { unusableRegion ->
+            assertEquals(
+                "+12125550123",
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = "+1 (212) 555-0123",
+                    providerNormalizedValue = null,
+                    defaultRegionCode = unusableRegion,
+                ) { _, _ -> error("International values must not use the regional formatter") },
+            )
+            assertEquals(
+                "+442079460018",
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = "00 44 20 7946 0018",
+                    providerNormalizedValue = null,
+                    defaultRegionCode = unusableRegion,
+                ) { _, _ -> error("International values must not use the regional formatter") },
+            )
+            assertNull(
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = "(212) 555-0123",
+                    providerNormalizedValue = null,
+                    defaultRegionCode = unusableRegion,
+                ) { _, _ -> error("Unusable regions must not reach the platform formatter") },
+            )
+        }
+        listOf(
+            "+",
+            "+1 (212) 555-0123 ext 2",
+            "+1 (212) 555-0123 x2",
+            "+1 (212) 555-0123 #2",
+            "+1 (212) 555-0123,2",
+            "+1 (212) 555-0123;2",
+        ).forEach { rawValue ->
+            assertNull(
+                rawValue,
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = rawValue,
+                    providerNormalizedValue = "+12125550123",
+                    defaultRegionCode = "US",
+                ) { _, _ -> error("Unsafe raw values must not reach the platform formatter") },
+            )
+        }
+        assertNull(
+            AddressBookProjector.canonicalPhoneNumber(
+                rawValue = "(212) 555-0123",
+                providerNormalizedValue = null,
+                defaultRegionCode = "US",
+            ) { _, _ -> "+0123456789" },
+        )
     }
 
     @Test
@@ -46,6 +148,7 @@ class AddressBookProjectorTest {
             "My Mom",
             "Anna Work",
             "friend",
+            "lawyer",
             "john@example.com",
             "https://example.com",
             "A🙂",
@@ -62,7 +165,7 @@ class AddressBookProjectorTest {
     }
 
     @Test
-    fun dropsConflictingPhoneNamesAndDeduplicatesMatchingRows() {
+    fun preservesSafeConflictingAliasesAndDeduplicatesMatchingRows() {
         val projections = AddressBookProjector.project(
             listOf(
                 person("Anna", "Smith", "+12125550101", "+12125550102"),
@@ -73,9 +176,67 @@ class AddressBookProjectorTest {
         )
 
         assertEquals(
-            setOf("+12125550101" to "Anna S.", "+12125550103" to "Cara D."),
+            setOf(
+                "+12125550101" to "Anna S.",
+                "+12125550102" to "Anna S. / Ben J.",
+                "+12125550103" to "Cara D.",
+            ),
             projections.map { it.phoneNumber to it.advisoryName }.toSet(),
         )
+    }
+
+    @Test
+    fun keepsAtMostFourCaseInsensitiveAliasesInDeterministicOrder() {
+        assertEquals(
+            "Billy B. / Bob B.",
+            AddressBookProjector.coalescedAdvisoryName(
+                listOf("Bob B.", "Billy B.", "Bob B."),
+            ),
+        )
+        assertEquals(
+            "Alex R.",
+            AddressBookProjector.coalescedAdvisoryName(listOf("alex R.", "Alex R.")),
+        )
+        assertEquals(
+            "alpha / Bob / Cam / Dee",
+            AddressBookProjector.coalescedAdvisoryName(
+                listOf("Echo", "Dee", "Cam", "Bob", "alpha"),
+            ),
+        )
+        assertEquals(
+            "A".repeat(23),
+            AddressBookProjector.coalescedAdvisoryName(
+                listOf("A".repeat(23), "B".repeat(23)),
+            ),
+        )
+        assertEquals(
+            "界".repeat(15) + " / " + "語".repeat(16),
+            AddressBookProjector.coalescedAdvisoryName(
+                listOf("語".repeat(16), "界".repeat(15)),
+            ),
+        )
+        assertEquals(
+            "界".repeat(16),
+            AddressBookProjector.coalescedAdvisoryName(
+                listOf("語".repeat(16), "界".repeat(16)),
+            ),
+        )
+
+        val contacts = listOf("Echo", "Dee", "Cam", "Bob", "alpha").map {
+            person(it, null, "+12125550123")
+        }
+        val forward = AddressBookProjector.project(contacts)
+        val reversed = AddressBookProjector.project(contacts.reversed())
+        assertEquals(forward, reversed)
+        assertEquals("alpha / Bob / Cam / Dee", forward.single().advisoryName)
+
+        val overflow = AddressBookProjector.project(
+            listOf(
+                person("A".repeat(23), null, "+12125550124"),
+                person("B".repeat(23), null, "+12125550124"),
+            ),
+        )
+        assertEquals("A".repeat(23), overflow.single().advisoryName)
     }
 
     @Test

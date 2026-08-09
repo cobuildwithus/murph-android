@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Murph</string>
+    <string name="address_book_phone_disclosure">Android asks for Contacts access only after you continue. Murph reads given and family names and checks phone values for this update only — never in the background. Ordinary local numbers are converted using the contact or device country when valid.</string>
 </resources>

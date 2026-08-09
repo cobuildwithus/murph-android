@@ -1,5 +1,6 @@
 package ai.withmurph.companion.ui
 
+import ai.withmurph.companion.R
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.AppUiState
 import ai.withmurph.companion.app.FailureSupplementalActions
@@ -75,6 +76,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -1184,6 +1186,10 @@ private fun AddressBookConsentContent(onContinue: () -> Unit) {
         MurphCard {
             ConsentRow(
                 icon = MurphIconKind.Checklist,
+                text = stringResource(R.string.address_book_phone_disclosure),
+            )
+            ConsentRow(
+                icon = MurphIconKind.Sparkles,
                 text = "Murph can use first names and last initials in group replies that others can see.",
             )
             ConsentRow(
