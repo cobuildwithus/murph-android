@@ -1,6 +1,7 @@
 package ai.withmurph.companion.ui
 
 import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.ui.home.homeShowsHealthStatus
 import org.junit.Assert.assertEquals
@@ -42,6 +43,27 @@ class MurphAppShellStateTest {
     }
 
     @Test
+    fun rejectedAdmissionOffersSupportWithoutAccountManagement() {
+        val invoked = mutableListOf<String>()
+        val actions = failureExternalActions(
+            failure = AppPhase.Failed(
+                message = "Access unavailable",
+                canRetry = false,
+                canSignOut = true,
+                supplementalActions = FailureSupplementalActions.Support,
+            ),
+            onOpenSupport = { invoked += "support" },
+            onDeleteAccount = { invoked += "delete" },
+            onOpenPrivacy = { invoked += "privacy" },
+            onOpenTerms = { invoked += "terms" },
+        )
+
+        assertEquals(listOf("Contact support"), actions.map { it.label })
+        actions.single().onClick()
+        assertEquals(listOf("support"), invoked)
+    }
+
+    @Test
     fun reconnectReplacesHomeWhileKeepingTheSignedInTabBar() {
         val shell = readyAppShellState(
             selectedTab = AppTab.Home,
@@ -52,6 +74,7 @@ class MurphAppShellStateTest {
         assertEquals(AppTab.Home, shell.activeTab)
         assertTrue(shell.showsReconnect)
         assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
     }
 
     @Test
@@ -65,6 +88,7 @@ class MurphAppShellStateTest {
         assertEquals(AppTab.Settings, shell.activeTab)
         assertFalse(shell.showsReconnect)
         assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
     }
 
     @Test
@@ -105,6 +129,7 @@ class MurphAppShellStateTest {
             assertEquals(step.name, AppTab.Settings, shell.activeTab)
             assertFalse(step.name, shell.showsReconnect)
             assertFalse(step.name, shell.showsFriendlyNamesSetup)
+            assertTrue(step.name, shell.showsTabBar)
         }
     }
 
@@ -124,13 +149,15 @@ class MurphAppShellStateTest {
     @Test
     fun friendlyNamesBannerWaitsUntilInitialOnboardingFinishes() {
         val shell = readyAppShellState(
-            selectedTab = AppTab.Home,
+            selectedTab = AppTab.Settings,
             initialSetupStep = InitialSetupStep.FriendlyNames,
             healthReconnectRequired = false,
             hasInitialOnboarding = true,
         )
 
+        assertEquals(AppTab.Home, shell.activeTab)
         assertFalse(shell.showsFriendlyNamesSetup)
+        assertFalse(shell.showsTabBar)
     }
 
     @Test

@@ -1,6 +1,7 @@
 package ai.withmurph.companion.visual
 
 import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.core.AddressBookSharingState
@@ -117,6 +118,19 @@ class ScreenshotFixtureTest {
             "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
             permissionFailure.healthMessage,
         )
+    }
+
+    @Test
+    fun rejectedAdmissionFixtureUsesSupportOnlyRecovery() {
+        val phase = ScreenshotScenario.Failure
+            .appState(Instant.parse("2026-08-06T12:00:00Z"))
+            .phase as AppPhase.Failed
+
+        assertEquals("This sign-in doesn't have access to the Murph companion app.", phase.message)
+        assertFalse(phase.canRetry)
+        assertTrue(phase.canSignOut)
+        assertEquals("Try a different sign-in", phase.signOutLabel)
+        assertEquals(FailureSupplementalActions.Support, phase.supplementalActions)
     }
 
     @Test

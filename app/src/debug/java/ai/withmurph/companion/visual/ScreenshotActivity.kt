@@ -3,6 +3,7 @@ package ai.withmurph.companion.visual
 import ai.withmurph.companion.R
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
 import ai.withmurph.companion.app.InitialOnboardingDraft
@@ -191,11 +192,11 @@ internal enum class ScreenshotScenario {
         )
         Failure -> AppUiState(
             phase = AppPhase.Failed(
-                message =
-                    "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support.",
+                message = "This sign-in doesn't have access to the Murph companion app.",
                 canRetry = false,
                 canSignOut = true,
                 signOutLabel = "Try a different sign-in",
+                supplementalActions = FailureSupplementalActions.Support,
             ),
         )
     }

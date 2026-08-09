@@ -2,6 +2,7 @@ package ai.withmurph.companion.ui
 
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
 import ai.withmurph.companion.app.InitialOnboardingStage
@@ -96,6 +97,7 @@ internal data class ReadyAppShellState(
     val activeTab: AppTab,
     val showsReconnect: Boolean,
     val showsFriendlyNamesSetup: Boolean,
+    val showsTabBar: Boolean,
 )
 
 internal data class FailureExternalAction(
@@ -109,15 +111,20 @@ internal fun failureExternalActions(
     onDeleteAccount: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
-): List<FailureExternalAction> = if (failure.canSignOut) {
-    listOf(
-        FailureExternalAction("Contact support", onOpenSupport),
-        FailureExternalAction("Delete account", onDeleteAccount),
-        FailureExternalAction("Privacy Policy", onOpenPrivacy),
-        FailureExternalAction("Terms", onOpenTerms),
-    )
-} else {
-    emptyList()
+): List<FailureExternalAction> {
+    if (!failure.canSignOut) return emptyList()
+    return when (failure.supplementalActions) {
+        FailureSupplementalActions.None -> emptyList()
+        FailureSupplementalActions.Support -> listOf(
+            FailureExternalAction("Contact support", onOpenSupport),
+        )
+        FailureSupplementalActions.AccountAndLegal -> listOf(
+            FailureExternalAction("Contact support", onOpenSupport),
+            FailureExternalAction("Delete account", onDeleteAccount),
+            FailureExternalAction("Privacy Policy", onOpenPrivacy),
+            FailureExternalAction("Terms", onOpenTerms),
+        )
+    }
 }
 
 internal fun readyAppShellState(
@@ -126,14 +133,16 @@ internal fun readyAppShellState(
     healthReconnectRequired: Boolean,
     hasInitialOnboarding: Boolean = false,
 ): ReadyAppShellState {
+    val activeTab = if (hasInitialOnboarding) AppTab.Home else selectedTab
     return ReadyAppShellState(
-        activeTab = selectedTab,
-        showsReconnect = healthReconnectRequired && selectedTab == AppTab.Home,
+        activeTab = activeTab,
+        showsReconnect = healthReconnectRequired && activeTab == AppTab.Home,
         showsFriendlyNamesSetup =
             initialSetupStep == InitialSetupStep.FriendlyNames &&
                 !healthReconnectRequired &&
                 !hasInitialOnboarding &&
-                selectedTab == AppTab.Home,
+                activeTab == AppTab.Home,
+        showsTabBar = !hasInitialOnboarding,
     )
 }
 
@@ -235,10 +244,12 @@ private fun ReadyApp(
         containerColor = MurphColors.Cream,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            MurphTabBar(
-                selectedTab = selectedTab,
-                onSelect = { selectedTab = it },
-            )
+            if (shellState.showsTabBar) {
+                MurphTabBar(
+                    selectedTab = selectedTab,
+                    onSelect = { selectedTab = it },
+                )
+            }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -1257,24 +1268,40 @@ private fun FailureScreen(
                 MurphPrimaryButton("Try again", actions.onRetry)
             }
             if (failure.canSignOut) {
-                Spacer(Modifier.height(4.dp))
-                MurphLinkButton(failure.signOutLabel, actions.onSignOut)
+                Spacer(Modifier.height(if (failure.canRetry) 4.dp else 20.dp))
+                if (
+                    !failure.canRetry &&
+                    failure.supplementalActions == FailureSupplementalActions.Support
+                ) {
+                    MurphPrimaryButton(failure.signOutLabel, actions.onSignOut)
+                } else {
+                    MurphLinkButton(failure.signOutLabel, actions.onSignOut)
+                }
             }
             if (externalActions.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                MurphCard(modifier = Modifier.widthIn(max = 420.dp)) {
-                    Text(
-                        text = "Account and legal",
-                        modifier = Modifier.fillMaxWidth(),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MurphColors.Slate,
-                        textAlign = TextAlign.Center,
-                    )
+                Spacer(Modifier.height(12.dp))
+                if (failure.supplementalActions == FailureSupplementalActions.AccountAndLegal) {
+                    MurphCard(modifier = Modifier.widthIn(max = 420.dp)) {
+                        Text(
+                            text = "Account and legal",
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MurphColors.Slate,
+                            textAlign = TextAlign.Center,
+                        )
+                        externalActions.forEach { action ->
+                            MurphLinkButton(
+                                text = action.label,
+                                onClick = action.onClick,
+                                modifier = Modifier.align(Alignment.CenterHorizontally),
+                            )
+                        }
+                    }
+                } else {
                     externalActions.forEach { action ->
                         MurphLinkButton(
                             text = action.label,
                             onClick = action.onClick,
-                            modifier = Modifier.align(Alignment.CenterHorizontally),
                         )
                     }
                 }

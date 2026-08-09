@@ -182,8 +182,8 @@ fun InitialOnboardingScreen(
     val stageScrollState = key(stage) { rememberScrollState() }
     val stageHeadingFocus = remember(stage) { FocusRequester() }
     LaunchedEffect(stage) {
-        stageScrollState.scrollTo(0)
         stageHeadingFocus.requestFocus()
+        stageScrollState.scrollTo(0)
     }
 
     Column(
@@ -703,7 +703,7 @@ private fun VoiceSection(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(28.dp)
                                 .clip(CircleShape)
                                 .background(MurphColors.Sage.copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center,
@@ -721,7 +721,7 @@ private fun VoiceSection(
                                     } else {
                                         MurphIconKind.Play
                                     },
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(12.dp),
                                 )
                             }
                         }

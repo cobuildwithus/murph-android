@@ -1750,6 +1750,7 @@ class AppSession(
                         message = terminalMemberBoundaryMessage(error),
                         canRetry = false,
                         signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                        supplementalActions = FailureSupplementalActions.Support,
                         revokeAuthorization = true,
                     )
                 } else {
@@ -3167,6 +3168,7 @@ class AppSession(
                     message = terminalMemberBoundaryMessage(error),
                     canRetry = false,
                     signOutLabel = terminalMemberBoundarySignOutLabel(error),
+                    supplementalActions = FailureSupplementalActions.Support,
                     revokeAuthorization = true,
                 )
             } else {
@@ -3341,6 +3343,8 @@ class AppSession(
         message: String,
         canRetry: Boolean,
         signOutLabel: String = "Sign out and start fresh",
+        supplementalActions: FailureSupplementalActions =
+            FailureSupplementalActions.AccountAndLegal,
         retainedConsentOwner: PendingLaunchConsentRecovery? = null,
         revokeAuthorization: Boolean = false,
     ): Boolean {
@@ -3375,6 +3379,11 @@ class AppSession(
                     canRetry = if (resetSucceeded) canRetry else true,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
+                    supplementalActions = if (resetSucceeded) {
+                        supplementalActions
+                    } else {
+                        FailureSupplementalActions.AccountAndLegal
+                    },
                 ),
             )
         }
@@ -3733,8 +3742,7 @@ class AppSession(
         } catch (_: CompanionApiException.AccessRequired) {
             if (epoch != sessionEpoch) return false
             publishTerminalAdmissionFailure(
-                message =
-                    "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support.",
+                message = terminalMemberBoundaryMessage(CompanionApiException.AccessRequired),
                 signOutLabel = "Try a different sign-in",
             )
             false
@@ -3751,6 +3759,7 @@ class AppSession(
             publishBackendBootstrapFailure(
                 message = "Murph account setup is temporarily unavailable. Try again.",
                 canRetry = true,
+                supplementalActions = FailureSupplementalActions.Support,
             )
             false
         } catch (_: CompanionApiException.AdmissionSupportRequired) {
@@ -3768,6 +3777,7 @@ class AppSession(
             publishBackendBootstrapFailure(
                 message = "Murph couldn't finish account setup. Check your connection and try again.",
                 canRetry = true,
+                supplementalActions = FailureSupplementalActions.Support,
             )
             false
         }
@@ -3800,6 +3810,7 @@ class AppSession(
                     canRetry = false,
                     canSignOut = true,
                     signOutLabel = "Try a different sign-in",
+                    supplementalActions = FailureSupplementalActions.Support,
                 ),
             )
         }
@@ -3809,6 +3820,8 @@ class AppSession(
         message: String,
         canRetry: Boolean,
         signOutLabel: String = "Sign out and start fresh",
+        supplementalActions: FailureSupplementalActions =
+            FailureSupplementalActions.AccountAndLegal,
     ) {
         _state.update { current ->
             current.copy(
@@ -3817,6 +3830,7 @@ class AppSession(
                     canRetry = canRetry,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
+                    supplementalActions = supplementalActions,
                 ),
             )
         }
@@ -3832,6 +3846,7 @@ class AppSession(
             message = message,
             canRetry = false,
             signOutLabel = signOutLabel,
+            supplementalActions = FailureSupplementalActions.Support,
         )
     }
 
@@ -3849,6 +3864,7 @@ class AppSession(
                     canRetry = canRetry,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
+                    supplementalActions = FailureSupplementalActions.Support,
                 ),
             )
         }
@@ -4595,6 +4611,7 @@ class AppSession(
                     canRetry = canRetry,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
+                    supplementalActions = FailureSupplementalActions.Support,
                 ),
             )
         }
@@ -5782,7 +5799,7 @@ class AppSession(
         CompanionApiException.Unauthorized -> "Your session needs a refresh. Sign in again."
         CompanionApiException.NoAccount -> "This sign-in isn't linked to an active Murph account."
         CompanionApiException.AccessRequired ->
-            "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support."
+            "This sign-in doesn't have access to the Murph companion app."
         CompanionApiException.MemberSuspended ->
             "This Murph account is paused. Try a different sign-in or contact Murph support."
         CompanionApiException.AdmissionSupportRequired ->

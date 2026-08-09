@@ -17,7 +17,18 @@ sealed interface AppPhase {
         val canRetry: Boolean = true,
         val canSignOut: Boolean = false,
         val signOutLabel: String = "Sign out and start fresh",
+        val supplementalActions: FailureSupplementalActions = if (canSignOut) {
+            FailureSupplementalActions.AccountAndLegal
+        } else {
+            FailureSupplementalActions.None
+        },
     ) : AppPhase
+}
+
+enum class FailureSupplementalActions {
+    None,
+    Support,
+    AccountAndLegal,
 }
 
 data class AppUiState(

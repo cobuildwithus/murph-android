@@ -668,6 +668,7 @@ class AppSessionTest {
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
         assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertEquals(FailureSupplementalActions.Support, failure.supplementalActions)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
@@ -685,6 +686,7 @@ class AppSessionTest {
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
         assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertEquals(FailureSupplementalActions.Support, failure.supplementalActions)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
@@ -824,7 +826,7 @@ class AppSessionTest {
             Triple(
                 CompanionApiException.AccessRequired,
                 false,
-                "This Murph account doesn't currently have companion access. Try a different sign-in or contact Murph support.",
+                "This sign-in doesn't have access to the Murph companion app.",
             ),
             Triple(
                 CompanionApiException.MemberSuspended,
@@ -853,6 +855,7 @@ class AppSessionTest {
             assertEquals(message, failure.message)
             assertEquals(canRetry, failure.canRetry)
             assertTrue(failure.canSignOut)
+            assertEquals(FailureSupplementalActions.Support, failure.supplementalActions)
             assertEquals(
                 if (error == CompanionApiException.AdmissionRetryable) {
                     "Sign out and start fresh"
