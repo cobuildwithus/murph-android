@@ -4,6 +4,7 @@ import ai.withmurph.companion.core.AddressBookDeletionRequest
 import ai.withmurph.companion.core.AddressBookReplacementRequest
 import ai.withmurph.companion.core.AddressBookServerStatus
 import ai.withmurph.companion.core.AddressBookWriteCapability
+import ai.withmurph.companion.core.AuthDiagnosticEvent
 import ai.withmurph.companion.core.AuthSessionState
 import ai.withmurph.companion.core.CompanionApi
 import ai.withmurph.companion.core.CompanionApiException
@@ -221,33 +222,56 @@ class HttpCompanionApi(
         return AddressBookApiContract.validateDeletionResponse(request, status)
     }
 
+    suspend fun recordAuthDiagnostic(event: AuthDiagnosticEvent) {
+        try {
+            requestJson(
+                method = "POST",
+                path = AUTH_DIAGNOSTICS_PATH,
+                body = JSONObject(AuthDiagnosticsApiContract.body(event)),
+                authenticate = null,
+                connectTimeoutMillis = 5_000,
+                readTimeoutMillis = 5_000,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Diagnostics are intentionally best effort and never affect login.
+        }
+    }
+
     private suspend fun requestJson(
         method: String,
         path: String,
         body: JSONObject? = null,
-        authenticate: suspend () -> String,
+        authenticate: (suspend () -> String)?,
         revisionConflict: Boolean = false,
+        connectTimeoutMillis: Int = 15_000,
+        readTimeoutMillis: Int = 30_000,
     ): JSONObject = withContext(Dispatchers.IO) {
-        val token = try {
-            authenticate()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: CompanionApiException.LocalAuthUnavailable) {
-            throw error
-        } catch (_: Exception) {
-            throw CompanionApiException.LocalAuthUnavailable(
-                observedState = AuthSessionState.TemporarilyUnavailable,
-            )
+        val token = authenticate?.let { tokenProvider ->
+            try {
+                tokenProvider()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                throw error
+            } catch (_: Exception) {
+                throw CompanionApiException.LocalAuthUnavailable(
+                    observedState = AuthSessionState.TemporarilyUnavailable,
+                )
+            }
         }
 
         val connection = (baseUri.resolve(path).toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 30_000
+            connectTimeout = connectTimeoutMillis
+            readTimeout = readTimeoutMillis
             instanceFollowRedirects = false
             useCaches = false
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("Authorization", "Bearer $token")
+            if (token != null) {
+                setRequestProperty("Authorization", "Bearer $token")
+            }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
@@ -291,6 +315,7 @@ class HttpCompanionApi(
     private companion object {
         const val COMPANION_ADMISSION_PATH = "/api/device-sync/companion/admission"
         const val ADDRESS_BOOK_PATH = "/api/device-sync/companion/address-book"
+        const val AUTH_DIAGNOSTICS_PATH = "/api/device-sync/companion/auth-diagnostics"
         const val INITIAL_ONBOARDING_PATH = "/api/device-sync/companion/initial-onboarding"
         const val INITIAL_ONBOARDING_CONTACT_CARD_PATH =
             "/api/device-sync/companion/initial-onboarding/contact-card"
@@ -326,6 +351,20 @@ internal object CompanionAdmissionApiContract {
         if (keys != setOf("ok") || ok != true) {
             throw CompanionApiException.InvalidResponse
         }
+    }
+}
+
+internal object AuthDiagnosticsApiContract {
+    fun body(event: AuthDiagnosticEvent): Map<String, Any> = buildMap {
+        put("stage", event.stage.wireValue)
+        put("method", event.method.wireValue)
+        put("errorKind", event.errorKind.wireValue)
+        event.httpStatus?.let { put("httpStatus", it) }
+        put("diagnosticCode", event.diagnosticCode.wireValue)
+        event.providerErrorCode?.let { put("providerErrorCode", it.wireValue) }
+        put("retryable", event.retryable)
+        event.appVersion?.let { put("appVersion", it) }
+        put("platform", "android")
     }
 }
 

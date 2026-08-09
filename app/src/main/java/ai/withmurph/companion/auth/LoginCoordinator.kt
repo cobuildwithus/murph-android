@@ -1,6 +1,10 @@
 package ai.withmurph.companion.auth
 
 import ai.withmurph.companion.core.AuthProvider
+import ai.withmurph.companion.core.AuthDiagnosticEvent
+import ai.withmurph.companion.core.AuthDiagnosticFailure
+import ai.withmurph.companion.core.AuthDiagnosticStage
+import ai.withmurph.companion.core.AuthProviderException
 import ai.withmurph.companion.core.LoginMethod
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +44,8 @@ data class LoginUiState(
 
 class LoginCoordinator(
     private val auth: AuthProvider,
+    private val appVersion: String = "",
+    private val recordDiagnostic: (AuthDiagnosticEvent) -> Unit = {},
     private val localeRegion: String? = Locale.getDefault().country,
 ) {
     private val _state = MutableStateFlow(LoginUiState())
@@ -143,12 +149,18 @@ class LoginCoordinator(
             }
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            val failure = error.authDiagnosticFailure()
             _state.update { current ->
                 current.copy(
                     errorMessage = sendCodeError(snapshot.method),
                 )
             }
+            recordDiagnosticSafely(
+                stage = AuthDiagnosticStage.SendCode,
+                method = snapshot.method,
+                failure = failure,
+            )
         } finally {
             _state.update { it.copy(isInFlight = false) }
         }
@@ -163,10 +175,15 @@ class LoginCoordinator(
             _state.update { current -> current.copy(code = "") }
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             _state.update { current ->
                 current.copy(errorMessage = sendCodeError(snapshot.method))
             }
+            recordDiagnosticSafely(
+                stage = AuthDiagnosticStage.SendCode,
+                method = snapshot.method,
+                failure = error.authDiagnosticFailure(),
+            )
         } finally {
             _state.update { it.copy(isInFlight = false) }
         }
@@ -189,12 +206,18 @@ class LoginCoordinator(
             true
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            val failure = error.authDiagnosticFailure()
             _state.update { current ->
                 current.copy(
                     errorMessage = "That code didn't work. Try again or send a new one.",
                 )
             }
+            recordDiagnosticSafely(
+                stage = AuthDiagnosticStage.ConfirmCode,
+                method = snapshot.method,
+                failure = failure,
+            )
             false
         } finally {
             _state.update { it.copy(isInFlight = false) }
@@ -245,4 +268,24 @@ class LoginCoordinator(
         LoginMethod.Phone -> "We couldn't send a code to that number. Check it and try again."
         LoginMethod.Email -> "We couldn't send a code to that email. Check it and try again."
     }
+
+    private fun recordDiagnosticSafely(
+        stage: AuthDiagnosticStage,
+        method: LoginMethod,
+        failure: AuthDiagnosticFailure,
+    ) {
+        runCatching {
+            recordDiagnostic(
+                AuthDiagnosticEvent.from(
+                    stage = stage,
+                    method = method,
+                    failure = failure,
+                    appVersion = appVersion,
+                ),
+            )
+        }
+    }
+
+    private fun Exception.authDiagnosticFailure(): AuthDiagnosticFailure =
+        (this as? AuthProviderException)?.failure ?: AuthDiagnosticFailure.Unknown
 }
