@@ -482,12 +482,38 @@ test(
         /completely signed/,
       );
 
+      sign(approvedKeystore, "approved");
+      assert.doesNotThrow(() => verifyAndroidBundleSigners(artifact, approvedFingerprint));
+
+      fs.writeFileSync(path.join(contents, "second-signer-only.bin"), "second signer\n");
+      run(process.env.MURPH_JAR_EXECUTABLE, [
+        "--update",
+        "--file",
+        artifact,
+        "-C",
+        contents,
+        "second-signer-only.bin",
+      ]);
+
       createKey(secondKeystore, "second");
       sign(secondKeystore, "second");
+      let inspectorError = "";
       assert.throws(
-        () => verifyAndroidBundleSigners(artifact, approvedFingerprint),
+        () => verifyAndroidBundleSigners(
+          artifact,
+          approvedFingerprint,
+          (executable, arguments_, options) => {
+            try {
+              return run(executable, arguments_, options);
+            } catch (error) {
+              inspectorError = error.stderr?.toString() ?? "";
+              throw error;
+            }
+          },
+        ),
         /completely signed/,
       );
+      assert.match(inspectorError, /all content entries must share one signer set/);
     } finally {
       fs.rmSync(temporaryDirectory, { force: true, recursive: true });
     }
