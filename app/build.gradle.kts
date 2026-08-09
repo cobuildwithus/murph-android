@@ -110,6 +110,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "PRIVY_APP_ID", privyAppId.get().asBuildConfigString())
         buildConfigField("String", "PRIVY_APP_CLIENT_ID", privyAppClientId.get().asBuildConfigString())
@@ -129,6 +130,12 @@ android {
             )
             buildConfigField("String", "MURPH_ENVIRONMENT", "\"sandbox\"")
         }
+        create("synthetic") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".synthetic"
+            versionNameSuffix = "-synthetic"
+            matchingFallbacks += listOf("debug")
+        }
         release {
             isMinifyEnabled = false
             resValue("string", "app_name", "Murph")
@@ -142,6 +149,14 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+    }
+    testBuildType = "synthetic"
+
+    sourceSets {
+        getByName("synthetic") {
+            java.srcDir("src/debug/java")
+            res.srcDir("src/debug/res")
         }
     }
 
@@ -170,7 +185,17 @@ android {
     }
 
     testOptions {
+        animationsDisabled = true
         unitTests.isIncludeAndroidResources = false
+        managedDevices {
+            localDevices {
+                create("pixel2Api30") {
+                    device = "Pixel 2"
+                    apiLevel = 30
+                    systemImageSource = "aosp-atd"
+                }
+            }
+        }
     }
 }
 
@@ -230,4 +255,10 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.compose.ui.test.junit4)
 }

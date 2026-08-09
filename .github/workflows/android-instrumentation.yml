@@ -1,0 +1,42 @@
+name: Android Instrumentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-instrumentation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-ui-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_ID: ci-public-placeholder
+      ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_CLIENT_ID: ci-public-placeholder
+      ORG_GRADLE_PROJECT_MURPH_BACKEND_BASE_URL_PROD: https://example.invalid
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Enable emulator acceleration
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 0666 /dev/kvm
+          fi
+      - name: Install compile SDK
+        run: sdkmanager "platforms;android-36"
+      - name: Run managed-device UI smoke suite
+        run: >-
+          ./gradlew --no-daemon pixel2Api30SyntheticAndroidTest
+          -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect

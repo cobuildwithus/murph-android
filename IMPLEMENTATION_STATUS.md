@@ -39,6 +39,11 @@
 - Application-lifetime session and permission-launch ownership across Activity recreation, login task-snapshot protection, safe external-action fallbacks, foreground/retry/acceptance consent-member revalidation with retryable temporary Privy unavailability, and scrollable trust-failure recovery.
 - Successful OTP cleanup so a later automatic logout cannot replay the consumed code or redisplay the prior destination.
 - Unit tests for sync-state derivation, external-ID stability, transactional connect/resume behavior, strict native launch-consent parsing, canonical stale reload, bounded progress, partial-success retention, exact blocked-action recovery, pre-sync trust checks, cancellation recovery, OTP cleanup, provider availability, backend receipt truth, member-switch teardown, address-book projection/API strictness, durable mutation replay, CAS behavior, permission-loss cleanup, operation coalescing, ownership fencing, and rendered Settings state.
+- Native instrumentation smoke coverage for login, onboarding, backend-confirmed
+  sync, and launch-consent recovery using the production Compose surfaces and
+  debug-only synthetic state. The suite uses a Gradle-managed Pixel 2 / API 30
+  automated-test device in GitHub Actions. Its isolated build variant removes
+  live application startup, network access, and health/contact permissions.
 
 ## Executable verification
 
@@ -91,7 +96,8 @@ address-book change.
 - Samsung Health.
 - Push notifications beyond Junction's required foreground-service notification.
 - Analytics and crash reporting.
-- Instrumentation screenshot regression tests.
+- Pixel-baseline screenshot regression tests; native instrumentation covers
+  semantic smoke behavior instead.
 - Any local health-value cache or database.
 - Continuous/background contact sync, contact backup, invites, messaging,
   signup prefill, identity proof, or contact-based routing authority.

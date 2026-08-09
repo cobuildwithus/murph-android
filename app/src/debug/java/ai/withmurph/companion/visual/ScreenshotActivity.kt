@@ -46,7 +46,7 @@ import java.time.Instant
 class ScreenshotActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val scenario = ScreenshotScenario.from(intent.getStringExtra(ScenarioExtra))
+        val scenario = ScreenshotScenario.from(intent.getStringExtra(SCENARIO_EXTRA))
         val now = Instant.now()
 
         setContent {
@@ -62,8 +62,8 @@ class ScreenshotActivity : ComponentActivity() {
         }
     }
 
-    private companion object {
-        const val ScenarioExtra = "scenario"
+    companion object {
+        const val SCENARIO_EXTRA = "scenario"
     }
 }
 
