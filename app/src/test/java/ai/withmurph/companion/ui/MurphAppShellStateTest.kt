@@ -147,9 +147,23 @@ class MurphAppShellStateTest {
     }
 
     @Test
-    fun friendlyNamesBannerWaitsUntilInitialOnboardingFinishes() {
+    fun initialOnboardingKeepsSettingsReachableWithoutShowingItsBanner() {
         val shell = readyAppShellState(
             selectedTab = AppTab.Settings,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+            hasInitialOnboarding = true,
+        )
+
+        assertEquals(AppTab.Settings, shell.activeTab)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun initialOnboardingHidesTheTabBarWhileItOwnsHome() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
             initialSetupStep = InitialSetupStep.FriendlyNames,
             healthReconnectRequired = false,
             hasInitialOnboarding = true,

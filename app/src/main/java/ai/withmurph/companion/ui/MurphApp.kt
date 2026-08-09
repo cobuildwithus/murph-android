@@ -133,7 +133,7 @@ internal fun readyAppShellState(
     healthReconnectRequired: Boolean,
     hasInitialOnboarding: Boolean = false,
 ): ReadyAppShellState {
-    val activeTab = if (hasInitialOnboarding) AppTab.Home else selectedTab
+    val activeTab = selectedTab
     return ReadyAppShellState(
         activeTab = activeTab,
         showsReconnect = healthReconnectRequired && activeTab == AppTab.Home,
@@ -142,7 +142,7 @@ internal fun readyAppShellState(
                 !healthReconnectRequired &&
                 !hasInitialOnboarding &&
                 activeTab == AppTab.Home,
-        showsTabBar = !hasInitialOnboarding,
+        showsTabBar = !hasInitialOnboarding || activeTab == AppTab.Settings,
     )
 }
 
@@ -310,6 +310,7 @@ private fun ReadyApp(
                             InitialOnboardingScreen(
                                 state = state,
                                 actions = actions,
+                                onOpenSettings = { selectedTab = AppTab.Settings },
                                 contactAvatarPainters = initialOnboardingContactAvatarPainters,
                             )
                         } else {
