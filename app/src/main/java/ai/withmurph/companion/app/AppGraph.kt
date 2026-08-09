@@ -12,6 +12,7 @@ import ai.withmurph.companion.storage.SharedPreferencesLocalState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class AppGraph private constructor(
     val session: AppSession,
@@ -27,6 +28,9 @@ class AppGraph private constructor(
                 "AppGraph and Privy must be initialized on the main thread"
             }
             val config = AppConfig.current.also(AppConfig::requireConfigured)
+            val applicationScope = CoroutineScope(
+                SupervisorJob() + Dispatchers.Main.immediate,
+            )
             val auth = PrivyAuthService.create(
                 context = context,
                 appId = config.privyAppId,
@@ -53,13 +57,17 @@ class AppGraph private constructor(
             )
             return AppGraph(
                 session = session,
-                login = LoginCoordinator(auth),
+                login = LoginCoordinator(
+                    auth = auth,
+                    appVersion = config.appVersion,
+                    recordDiagnostic = { event ->
+                        applicationScope.launch { api.recordAuthDiagnostic(event) }
+                    },
+                ),
                 health = health,
                 contacts = contacts,
                 config = config,
-                applicationScope = CoroutineScope(
-                    SupervisorJob() + Dispatchers.Main.immediate,
-                ),
+                applicationScope = applicationScope,
             )
         }
     }

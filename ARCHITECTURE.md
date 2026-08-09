@@ -9,7 +9,7 @@ A native Android companion that creates or restores a Murph member, renders serv
 ```text
 app/       one composition root and the app/session state owner
 auth/      Privy adapter and OTP flow state
-api/       tiny authenticated HTTP boundary
+api/       tiny authenticated HTTP boundary plus one strict pre-login diagnostic
 contacts/  the only Android Contacts edge plus a pure bounded projector
 core/      app-owned contracts and pure models
 health/    the only Junction/Health Connect adapter
@@ -34,7 +34,8 @@ ui/        Compose surfaces and Murph theme
 13. **Foreground-only release.** History is requested during connection. Background Health Connect permission, the Junction boot receiver, and its exact-alarm service are removed because Vital 5.0.2 has no pre-worker hook for Murph's durable sign-out authorization.
 14. **Explicit one-shot contact projection.** Contacts are read only after Share, Update, or Retry and only after a server-status preflight plus the Android permission flow and a fresh live-member check. Consent-gated preflight, replacement, Stop, and permission-loss cleanup each retain their exact continuation; a durable UUIDv4 mutation is replayed only for its saved revision, while an explicit Stop may refetch and delete the latest server revision. The Contacts edge canonicalizes provider-normalized or device-region national phone values to E.164 while rejecting extensions and post-dial values. The pure projector emits bounded first-name labels, preserves the longest deterministic safe prefix of up to four aliases for one number, and sends a full-list compare-and-swap replacement. Foreground reconciliation never requests permission or reads contacts; when access is lost it may delete only an exact revision this installation still owns. Initial setup presents Friendly Names as a compact optional banner over the existing health status and opens the full disclosure only when the member chooses setup or retry. After Share or **Not now**, Settings remains the discoverable opt-in owner without repeating the setup prompt on Home. This is not identity proof, routing authority, signup prefill, invitation delivery, messaging, background sync, or contact backup.
 15. **Process-owned transitions.** `AppGraph` owns the application-lifetime coroutine scope used for session, login, onboarding, permission-launch requests, sync, contact reconciliation, consent recovery, and sign-out work. Activity recreation can replace the renderer without cancelling or consuming an authorized system permission launch. Foreground return, retry, and acceptance recheck the Privy member/account boundary before any continuation. Local token-capture uncertainty remains a typed retryable or read-only state; only an actual backend `401` is authoritative rejection. Temporary unverified state never discards the recovery owner.
-16. **Default to deletion.** Add a dependency or abstraction only after the current boundaries cannot express a real requirement.
+16. **Content-free auth diagnostics.** Failed OTP sends, resends, and confirmations may emit one best-effort pre-login diagnostic through the application scope. The Privy edge converts SDK failures into closed app-owned categories; only an allowlisted provider machine code and bounded HTTP status may survive. Destinations, OTPs, tokens, identifiers, raw provider prose, causes, persistence, retries, and login-flow blocking are forbidden.
+17. **Default to deletion.** Add a dependency or abstraction only after the current boundaries cannot express a real requirement.
 
 ## Data flow
 
