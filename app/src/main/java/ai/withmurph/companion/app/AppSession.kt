@@ -3026,7 +3026,7 @@ class AppSession(
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         try {
-            healthMutex.withLock { health.signOutSdk() }
+            signOutHealthSdkAfterFencingNewWork()
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -3988,7 +3988,7 @@ class AppSession(
         }
         invalidateSessionEpoch(acceptedConsentOwner)
         return try {
-            healthMutex.withLock { health.signOutSdk() }
+            signOutHealthSdkAfterFencingNewWork()
             true
         } catch (error: CancellationException) {
             throw error
@@ -4022,7 +4022,7 @@ class AppSession(
                 if (healthMutexHeld) {
                     health.signOutSdk()
                 } else {
-                    healthMutex.withLock { health.signOutSdk() }
+                    signOutHealthSdkAfterFencingNewWork()
                 }
                 true
             } catch (error: CancellationException) {
@@ -4040,6 +4040,21 @@ class AppSession(
         }
         currentMemberKey = null
         return true
+    }
+
+    /**
+     * Called only after epoch and phase state have fenced new health work.
+     * Vital sign-out cancels its unique WorkManager sync chain, so an active
+     * sync must receive that cancellation before this mutex becomes a drain
+     * barrier. Other SDK operations retain the ordinary serialized teardown.
+     */
+    private suspend fun signOutHealthSdkAfterFencingNewWork() {
+        if (_state.value.isSyncingHealth) {
+            health.signOutSdk()
+            healthMutex.withLock { }
+        } else {
+            healthMutex.withLock { health.signOutSdk() }
+        }
     }
 
     private fun publishHealthResetFailure() {
@@ -4256,7 +4271,7 @@ class AppSession(
             )
         }
         val teardownSucceeded = try {
-            healthMutex.withLock { health.signOutSdk() }
+            signOutHealthSdkAfterFencingNewWork()
             true
         } catch (error: CancellationException) {
             throw error
