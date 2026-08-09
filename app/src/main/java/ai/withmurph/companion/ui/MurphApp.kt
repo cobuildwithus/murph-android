@@ -141,7 +141,7 @@ internal fun readyAppShellState(
     hasInitialOnboarding: Boolean = false,
     hasLaunchConsentRecovery: Boolean = false,
 ): ReadyAppShellState {
-    val activeTab = selectedTab
+    val activeTab = if (hasInitialOnboarding) AppTab.Home else selectedTab
     val showsInitialOnboarding =
         activeTab == AppTab.Home &&
             hasInitialOnboarding &&
@@ -156,7 +156,7 @@ internal fun readyAppShellState(
                 !healthReconnectRequired &&
                 !hasInitialOnboarding &&
                 activeTab == AppTab.Home,
-        showsTabBar = !showsInitialOnboarding,
+        showsTabBar = !hasInitialOnboarding,
     )
 }
 

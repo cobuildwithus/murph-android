@@ -58,6 +58,20 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
+    fun onboardingConsentRecoveryDoesNotExposeSettings() =
+        withScenario("onboardingConsentBanner") {
+            onNodeWithText("Consent needed").assertIsDisplayed().assertHasClickAction()
+            onAllNodesWithText("Settings").assertCountEquals(0)
+        }
+
+    @Test
+    fun onboardingReconnectDoesNotExposeSettings() =
+        withScenario("onboardingReconnectRequired") {
+            onNodeWithText("Reconnect Health Connect").assertIsDisplayed().assertHasClickAction()
+            onAllNodesWithText("Settings").assertCountEquals(0)
+        }
+
+    @Test
     fun syncedFixtureRendersBackendConfirmedStatusSurface() = withScenario("synced") {
         onNodeWithText("Synced").assertIsDisplayed()
         onNodeWithText("Check for new data").assertIsDisplayed()
