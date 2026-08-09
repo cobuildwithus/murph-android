@@ -10,9 +10,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
-- Eleven reviewed Junction client resources spanning sleep, workouts, daily
-  activity, steps, active energy, HRV, respiratory rate, blood oxygen, body
-  measurements, height, and VO2 max.
+- The complete pinned Vital 5.0.2 Health Connect read surface: 21 centralized resources backed by 29 data-type read permissions.
 - Thirty-day foreground backfill within ordinary Health Connect read access.
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
@@ -27,7 +25,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Automatic meal-photo capture and a Meals tab.
 - Chat, vault browsing, challenges, or a general Murph client.
 - Direct wearable-provider OAuth.
-- Samsung Health support before the Health Connect path is proven.
+- A direct Samsung Health SDK integration; supported Samsung Health records may relay through Health Connect.
 - Contact backup, continuous/background contact sync, invitations, messaging,
   identity proof, signup prefill, or contact-derived routing authority.
 - App-owned Hilt, Room, Retrofit, analytics, and crash-reporting SDKs. Junction
@@ -137,10 +135,7 @@ The repository includes the same pinned, managed-browser ReviewGPT workflow as
 ```bash
 pnpm install --frozen-lockfile
 pnpm review:verify
-pnpm review:gpt android-review --wait \
-  --response-marker ANDROID_REVIEW_COMPLETE \
-  --response-file output-packages/android-review-response.md \
-  --prompt "Review exact committed head: $(git rev-parse HEAD)"
+pnpm review:gpt android-review --wait   --response-marker ANDROID_REVIEW_COMPLETE   --response-file output-packages/android-review-response.md   --prompt "Review exact committed head: $(git rev-parse HEAD)"
 ```
 
 Review the exact committed head with a clean worktree. Resolve accepted
@@ -149,40 +144,52 @@ the response reports `REVIEW_OUTCOME: PASS`.
 
 ## Data requested
 
-`JunctionHealthSyncService` uses:
+`JunctionHealthSyncService` explicitly enumerates every `VitalResource` exposed
+by the pinned Vital 5.0.2 Health Connect SDK:
 
 ```kotlin
 setOf(
-    VitalResource.Sleep,
+    VitalResource.Profile,
+    VitalResource.Body,
     VitalResource.Workout,
     VitalResource.Activity,
+    VitalResource.Sleep,
+    VitalResource.Glucose,
+    VitalResource.BloodPressure,
+    VitalResource.BloodOxygen,
+    VitalResource.HeartRate,
+    VitalResource.Water,
+    VitalResource.HeartRateVariability,
+    VitalResource.MenstrualCycle,
     VitalResource.Steps,
     VitalResource.ActiveEnergyBurned,
-    VitalResource.HeartRateVariability,
-    VitalResource.RespiratoryRate,
-    VitalResource.BloodOxygen,
-    VitalResource.Body,
-    VitalResource.Profile,
+    VitalResource.BasalEnergyBurned,
+    VitalResource.FloorsClimbed,
+    VitalResource.DistanceWalkingRunning,
     VitalResource.Vo2Max,
+    VitalResource.RespiratoryRate,
+    VitalResource.Temperature,
+    VitalResource.Meal,
 )
 ```
+
+The set is intentionally explicit even though the SDK exposes `values()`: a
+unit test compares the two, so a dependency upgrade cannot silently broaden
+permissions or Play declarations. The Android manifest declares the 29
+record-type read permissions required by this pinned set. Users still choose
+each category in the Health Connect system UI; denied categories remain
+unavailable and do not block categories the user approved. No write permission
+is requested.
 
 Vital 5.0.2 scans all resources during permission reconciliation and its
 `remapped()` operation is an identity operation in this version. Murph pauses
 SDK synchronization before permission and through `connect()`, then unpauses
 only around an explicit foreground call with the configured-and-granted
-intersection. The shipped `READ_STEPS` and `READ_ACTIVE_CALORIES_BURNED` grants
-can activate the separate `Steps` and `ActiveEnergyBurned` paths while shared
-grants may also activate `Activity`, so all three remain explicit. Murph
-currently ingests daily steps and active calories through the `activity`
-summary; its default intake normalizes the standalone `steps` and
-`calories_active` uploads away. Those two client paths remain configured to
-preserve shipped behavior, not to claim standalone end-to-end
-ingestion. See `ARCHITECTURE.md` for provider-specific limitations.
-
-The manifest declares only the corresponding Health Connect read permissions.
-Users still choose each category in the Health Connect system UI. Denied
-categories remain unavailable and do not block categories the user approved.
+intersection. An empty intersection is a no-op. Shared permissions can activate
+multiple SDK resources, so the app declares the relevant aggregate owners
+explicitly. Actual source availability and backend receipt remain physical-device
+release gates; this permission surface does not claim that every source exports
+or Murph ingests every requested category.
 
 Junction/Vital Android 5.0.2 hard-clamps backfill to the ordinary 30-day Health
 Connect read window, so the app does not request broader history access with no
@@ -312,8 +319,7 @@ Pixel/Samsung acceptance evidence. See
 
 Before a Play release:
 
-1. Apply for Google Play Health Connect access for all eleven declared read
-   permissions across the eleven configured resources.
+1. Apply for Google Play Health Connect access for every one of the 29 declared data-type read permissions.
 2. Complete Play Data Safety disclosures, the Health Apps declaration, and the
    Contacts permission disclosure for optional familiar-name projection.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.

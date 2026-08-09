@@ -6,7 +6,7 @@ The checked-in packet does **not** mean the app is ready to publish. `play/opera
 
 The Android source contains canonical account admission, but source presence is not runtime proof. Submission remains blocked until a Murph backend compatible with lifecycle-neutral admission is deployed and the exact signed candidate proves new-account admission end to end.
 
-The current source-derived health scope is eleven centralized `VitalResource` values covering eleven Health Connect data-type read permissions: sleep, exercise, steps, active calories, HRV, respiratory rate, oxygen saturation, body fat, weight, height, and VO2 max. Junction remains configured for the ordinary 30-day foreground window; the app requests neither extended-history nor background access. Availability still depends on the member's device, membership, and Health Connect sources, and the packet does not claim that every source exports or Murph independently ingests every requested type.
+The current source-derived health scope explicitly lists all 21 `VitalResource` values exposed by the pinned Vital 5.0.2 Health Connect SDK. Those resources require 29 Health Connect data-type read permissions spanning activity, exercise, sleep, body measurements, vitals, nutrition, hydration, and menstrual/reproductive records. Junction remains configured for the ordinary 30-day foreground window; the app requests neither extended-history nor background access. Availability still depends on the member's device, grants, membership, and source apps, and the packet does not claim that every source exports or Murph independently ingests every requested type.
 
 ## What is here
 
@@ -55,4 +55,4 @@ The strict task is the only repository-approved authorization boundary before a 
 
 ## Refresh rule
 
-Refresh this packet whenever the merged manifest, SDK graph, requested `VitalResource` set, data paths, legal URLs, account-creation behavior, target SDK, version, listing behavior, or Google Play policy changes. Review the current official policies before every submission; the links in these documents were checked on 2026-08-05 and are not a substitute for the live Play Console requirements.
+Refresh this packet whenever the merged manifest, SDK graph, requested `VitalResource` set, data paths, legal URLs, account-creation behavior, target SDK, version, listing behavior, or Google Play policy changes. Review the current official policies before every submission; the links in these documents were checked on 2026-08-09 and are not a substitute for the live Play Console requirements.

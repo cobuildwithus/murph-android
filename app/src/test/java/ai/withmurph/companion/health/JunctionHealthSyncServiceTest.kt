@@ -8,43 +8,26 @@ import org.junit.Test
 
 class JunctionHealthSyncServiceTest {
     @Test
-    fun requestedResourcesMatchTheReviewedShippedClientScope() {
-        assertEquals(
-            setOf(
-                "sleep",
-                "workout",
-                "activity",
-                "steps",
-                "activeEnergyBurned",
-                "heartRateVariability",
-                "respiratoryRate",
-                "bloodOxygen",
-                "body",
-                "profile",
-                "vo2Max",
-            ),
-            JunctionHealthSyncService.requestedReadResources.mapTo(mutableSetOf()) { it.name },
-        )
+    fun readResourcesCoverTheCompletePinnedVitalHealthConnectSurface() {
+        val expected = VitalResource.values().map { it.name }.toSet()
+        val actual = healthConnectReadResources.map { it.name }.toSet()
+
+        assertEquals(expected, actual)
+        assertEquals(21, actual.size)
     }
 
     @Test
-    fun configuredGrantsKeepShippedActivityOwnersAndExcludeUnconfiguredResources() {
+    fun configuredResourcesPreserveOnlyTheGrantedReviewedSubset() {
+        val granted = setOf(
+            VitalResource.Sleep,
+            VitalResource.BloodPressure,
+            VitalResource.Meal,
+        )
+
+        assertEquals(granted, configuredHealthConnectReadResources(granted))
         assertEquals(
-            setOf(
-                VitalResource.Sleep,
-                VitalResource.Vo2Max,
-                VitalResource.Steps,
-                VitalResource.ActiveEnergyBurned,
-            ),
-            JunctionHealthSyncService.configuredGrantedResources(
-                setOf(
-                    VitalResource.Sleep,
-                    VitalResource.Vo2Max,
-                    VitalResource.HeartRate,
-                    VitalResource.Steps,
-                    VitalResource.ActiveEnergyBurned,
-                ),
-            ),
+            emptySet<VitalResource>(),
+            configuredHealthConnectReadResources(emptySet()),
         )
     }
 

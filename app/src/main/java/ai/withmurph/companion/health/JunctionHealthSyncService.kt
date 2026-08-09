@@ -18,6 +18,40 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
+// Explicitly enumerate the complete Vital 5.0.2 Health Connect surface.
+// The parity test fails when a future SDK release adds a resource so dependency
+// upgrades cannot silently broaden member permissions or Play declarations.
+internal val healthConnectReadResources: Set<VitalResource> = setOf(
+    VitalResource.Profile,
+    VitalResource.Body,
+    VitalResource.Workout,
+    VitalResource.Activity,
+    VitalResource.Sleep,
+    VitalResource.Glucose,
+    VitalResource.BloodPressure,
+    VitalResource.BloodOxygen,
+    VitalResource.HeartRate,
+    VitalResource.Water,
+    VitalResource.HeartRateVariability,
+    VitalResource.MenstrualCycle,
+    VitalResource.Steps,
+    VitalResource.ActiveEnergyBurned,
+    VitalResource.BasalEnergyBurned,
+    VitalResource.FloorsClimbed,
+    VitalResource.DistanceWalkingRunning,
+    VitalResource.Vo2Max,
+    VitalResource.RespiratoryRate,
+    VitalResource.Temperature,
+    VitalResource.Meal,
+)
+
+// Keep app-owned counts and manual syncs bound to the reviewed scope. Vital
+// discovers grants across every SDK resource, so this intersection prevents a
+// stale or newly added SDK grant from silently becoming Murph-owned behavior.
+internal fun configuredHealthConnectReadResources(
+    grantedResources: Set<VitalResource>,
+): Set<VitalResource> = healthConnectReadResources.intersect(grantedResources)
+
 class JunctionHealthSyncService(
     context: Context,
     private val environment: AppEnvironment,
@@ -26,16 +60,18 @@ class JunctionHealthSyncService(
     private val appContext = context.applicationContext
     private val manager = VitalHealthConnectManager.getOrCreate(appContext)
 
-    override val totalResourceCount: Int = requestedReadResources.size
+    override val totalResourceCount: Int = healthConnectReadResources.size
 
     fun healthPermissionContract() = manager.createPermissionRequestContract(
-        readResources = requestedReadResources,
+        readResources = healthConnectReadResources,
         writeResources = emptySet(),
     )
 
     suspend fun permissionRequestCompleted(outcome: Deferred<PermissionOutcome>): Boolean {
         if (outcome.await() !is PermissionOutcome.Success) return false
-        return configuredGrantedResources(manager.resourcesWithReadPermission()).isNotEmpty()
+        return configuredHealthConnectReadResources(
+            manager.resourcesWithReadPermission(),
+        ).isNotEmpty()
     }
 
     override fun availability(): HealthConnectAvailability =
@@ -90,7 +126,9 @@ class JunctionHealthSyncService(
         }
         try {
             manager.syncData(
-                resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
+                resources = configuredHealthConnectReadResources(
+                    manager.resourcesWithReadPermission(),
+                ),
             )
         } finally {
             withContext(NonCancellable + Dispatchers.Main.immediate) {
@@ -100,50 +138,12 @@ class JunctionHealthSyncService(
     }
 
     override fun grantedResourceCount(): Int =
-        configuredGrantedResources(manager.resourcesWithReadPermission()).size
+        configuredHealthConnectReadResources(
+            manager.resourcesWithReadPermission(),
+        ).size
 
     override suspend fun signOutSdk() {
         VitalClient.getOrCreate(appContext).signOut()
-    }
-
-    companion object {
-        /**
-         * The complete app-owned Junction scope. Keep this set aligned with the
-         * read-only Health Connect permissions in AndroidManifest.xml.
-         *
-         * Heart rate remains outside this set because Vital cannot request it
-         * only as sleep/workout enrichment, while Murph intentionally excludes
-         * the unbounded standalone stream from default ingestion.
-         *
-         * Vital 5.0.2 discovers granted resources by scanning every SDK
-         * resource. Murph keeps the SDK paused across permission and connect
-         * flows, then briefly unpauses only inside syncAllGrantedResources so
-         * this configured, post-commit call owns the resource chain. Vital's
-         * resource remapping is an identity operation in this version, so
-         * Activity, Steps, and ActiveEnergyBurned remain separate sync owners.
-         * Keep all three explicit here so manual sync and resource counts match
-         * the already-shipped manifest grants. Murph's current default intake
-         * admits the Activity summary but not the two standalone timeseries;
-         * preserving their client upload behavior avoids a silent mobile
-         * regression while that backend boundary remains explicit.
-         */
-        internal val requestedReadResources = setOf(
-            VitalResource.Sleep,
-            VitalResource.Workout,
-            VitalResource.Activity,
-            VitalResource.Steps,
-            VitalResource.ActiveEnergyBurned,
-            VitalResource.HeartRateVariability,
-            VitalResource.RespiratoryRate,
-            VitalResource.BloodOxygen,
-            VitalResource.Body,
-            VitalResource.Profile,
-            VitalResource.Vo2Max,
-        )
-
-        internal fun configuredGrantedResources(
-            grantedResources: Set<VitalResource>,
-        ): Set<VitalResource> = requestedReadResources.intersect(grantedResources)
     }
 }
 
