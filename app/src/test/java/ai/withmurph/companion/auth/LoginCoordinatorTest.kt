@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -179,6 +180,62 @@ class LoginCoordinatorTest {
     }
 
     @Test
+    fun failedResendRetainsTheOtpStageAndUsableCode() = runTest {
+        val auth = FakeAuth()
+        val coordinator = LoginCoordinator(auth)
+        coordinator.setDestination("2025550123")
+        coordinator.sendCode()
+        coordinator.setCode("123456")
+        auth.sendFailuresRemaining = 1
+
+        coordinator.resendCode()
+
+        assertEquals("2025550123", coordinator.state.value.destination)
+        assertEquals("123456", coordinator.state.value.code)
+        assertTrue(coordinator.state.value.codeSent)
+        assertTrue(coordinator.state.value.canConfirmCode)
+        assertEquals(
+            "We couldn't send a code to that number. Check it and try again.",
+            coordinator.state.value.errorMessage,
+        )
+
+        assertTrue(coordinator.confirmCode())
+        assertEquals(listOf("123456"), auth.confirmedCodes)
+    }
+
+    @Test
+    fun successfulResendClearsTheOldCodeOnlyAfterSuccessAndCannotDuplicate() = runTest {
+        val auth = FakeAuth()
+        val coordinator = LoginCoordinator(auth)
+        coordinator.setDestination("2025550123")
+        coordinator.sendCode()
+        coordinator.setCode("123456")
+        val resendGate = CompletableDeferred<Unit>()
+        auth.sendGate = resendGate
+
+        val resend = launch { coordinator.resendCode() }
+        runCurrent()
+
+        assertTrue(coordinator.state.value.codeSent)
+        assertEquals("123456", coordinator.state.value.code)
+        assertTrue(coordinator.state.value.isInFlight)
+        assertFalse(coordinator.state.value.canConfirmCode)
+        assertEquals(2, auth.sendCalls)
+
+        coordinator.resendCode()
+        assertEquals(2, auth.sendCalls)
+
+        resendGate.complete(Unit)
+        resend.join()
+
+        assertTrue(coordinator.state.value.codeSent)
+        assertEquals("", coordinator.state.value.code)
+        assertEquals("2025550123", coordinator.state.value.destination)
+        assertFalse(coordinator.state.value.isInFlight)
+        assertNull(coordinator.state.value.errorMessage)
+    }
+
+    @Test
     fun explicitRetryCannotDuplicateAConfirmationAlreadyInFlight() = runTest {
         val gate = CompletableDeferred<Unit>()
         val auth = FakeAuth(confirmGate = gate)
@@ -206,13 +263,16 @@ class LoginCoordinatorTest {
         var confirmCalls = 0
         var sendCalls = 0
         var sendFailuresRemaining = sendFailuresRemaining
+        var sendGate: CompletableDeferred<Unit>? = null
         val sentDestinations = mutableListOf<String>()
+        val confirmedCodes = mutableListOf<String>()
 
         override suspend fun currentState(): AuthSessionState = AuthSessionState.SignedOut
 
         override suspend fun sendCode(method: LoginMethod, destination: String) {
             sendCalls += 1
             sentDestinations += destination
+            sendGate?.await()
             if (sendFailuresRemaining > 0) {
                 sendFailuresRemaining -= 1
                 error("Send failed")
@@ -225,6 +285,7 @@ class LoginCoordinatorTest {
             code: String,
         ) {
             confirmCalls += 1
+            confirmedCodes += code
             confirmGate?.await()
             if (confirmFails) error("Rejected code")
         }

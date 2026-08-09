@@ -146,10 +146,7 @@ class LoginCoordinator(
         } catch (_: Exception) {
             _state.update { current ->
                 current.copy(
-                    errorMessage = when (snapshot.method) {
-                        LoginMethod.Phone -> "We couldn't send a code to that number. Check it and try again."
-                        LoginMethod.Email -> "We couldn't send a code to that email. Check it and try again."
-                    },
+                    errorMessage = sendCodeError(snapshot.method),
                 )
             }
         } finally {
@@ -160,8 +157,19 @@ class LoginCoordinator(
     suspend fun resendCode() {
         val snapshot = _state.value
         if (!snapshot.codeSent || snapshot.isInFlight) return
-        _state.update { it.copy(codeSent = false, code = "") }
-        sendCode()
+        _state.update { it.copy(isInFlight = true, errorMessage = null) }
+        try {
+            auth.sendCode(snapshot.method, snapshot.normalizedDestination)
+            _state.update { current -> current.copy(code = "") }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _state.update { current ->
+                current.copy(errorMessage = sendCodeError(snapshot.method))
+            }
+        } finally {
+            _state.update { it.copy(isInFlight = false) }
+        }
     }
 
     suspend fun confirmCode(): Boolean {
@@ -231,5 +239,10 @@ class LoginCoordinator(
     private fun advanceDestinationRevision() {
         destinationRevision += 1
         pendingAutomaticSendRevision = null
+    }
+
+    private fun sendCodeError(method: LoginMethod): String = when (method) {
+        LoginMethod.Phone -> "We couldn't send a code to that number. Check it and try again."
+        LoginMethod.Email -> "We couldn't send a code to that email. Check it and try again."
     }
 }

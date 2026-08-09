@@ -41,6 +41,17 @@ class ScreenshotFixtureTest {
     }
 
     @Test
+    fun otpResendingFixtureRetainsTheCodeStageWhileTheRequestIsInFlight() {
+        val state = ScreenshotScenario.OtpResending.loginState()
+
+        assertTrue(state.codeSent)
+        assertTrue(state.isInFlight)
+        assertEquals("123456", state.code)
+        assertEquals("+15555550100", state.normalizedDestination)
+        assertFalse(state.canConfirmCode)
+    }
+
+    @Test
     fun timestampBearingFixturesUseTheCaptureTimeAsTheirObservationBoundary() {
         val now = Instant.parse("2026-08-06T12:00:00Z")
         val timestampScenarios = listOf(

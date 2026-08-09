@@ -71,6 +71,7 @@ internal enum class ScreenshotScenario {
     Login,
     Email,
     Otp,
+    OtpResending,
     Setup,
     Disconnected,
     DisconnectedUnavailable,
@@ -100,7 +101,7 @@ internal enum class ScreenshotScenario {
     Failure;
 
     fun appState(now: Instant): AppUiState = when (this) {
-        Login, Email, Otp -> AppUiState(phase = AppPhase.NeedsLogin)
+        Login, Email, Otp, OtpResending -> AppUiState(phase = AppPhase.NeedsLogin)
         Setup -> ready(HealthSyncState.NotConnected).copy(
             initialSetupStep = InitialSetupStep.HealthConnect,
         )
@@ -220,6 +221,14 @@ internal enum class ScreenshotScenario {
             destination = "5555550100",
             phoneCountry = CountryDialCode("US", "+1"),
             codeSent = true,
+        )
+        OtpResending -> LoginUiState(
+            method = LoginMethod.Phone,
+            destination = "5555550100",
+            phoneCountry = CountryDialCode("US", "+1"),
+            code = "123456",
+            codeSent = true,
+            isInFlight = true,
         )
         Email -> LoginUiState(method = LoginMethod.Email)
         Login,
