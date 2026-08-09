@@ -1332,7 +1332,13 @@ class AppSession(
                 hasCompletedStartup = _state.value.phase != AppPhase.Launching
                 return@withLock
             }
-            val authState = auth.currentState()
+            val authState = try {
+                auth.currentState()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                AuthSessionState.TemporarilyUnavailable
+            }
             if (
                 acceptedConsentOwner != null &&
                 ownsAcceptedConsentContinuation(acceptedConsentOwner) &&
@@ -2794,6 +2800,7 @@ class AppSession(
                     phase = AppPhase.Failed(
                         message = "Murph couldn't check your saved sign-in. Check your connection and try again.",
                     ),
+                    authVerifiedOnline = false,
                 )
             }
             return

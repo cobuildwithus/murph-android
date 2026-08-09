@@ -70,6 +70,50 @@ import java.util.concurrent.TimeUnit
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppSessionTest {
     @Test
+    fun freshStartupContainsTransientAuthInspectionFailureAndRetries() = runTest {
+        val fixture = fixture()
+        fixture.auth.currentStateErrorOnce = IllegalStateException("provider unavailable")
+
+        fixture.session.start()
+
+        val failure = fixture.session.state.value.phase as AppPhase.Failed
+        assertTrue(failure.canRetry)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertNoHealthOrBackendProductWork(fixture)
+        val authCallsAfterFailure = fixture.auth.currentStateCalls
+
+        fixture.session.retry()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.auth.currentStateCalls > authCallsAfterFailure)
+    }
+
+    @Test
+    fun restoredStartupContainsTransientAuthInspectionFailureAsOfflineState() = runTest {
+        val fixture = fixture()
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.auth.currentStateErrorOnce = IllegalStateException("provider unavailable")
+
+        fixture.session.start()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertNoHealthOrBackendProductWork(fixture)
+        val authCallsAfterFailure = fixture.auth.currentStateCalls
+
+        fixture.session.retry()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.auth.currentStateCalls > authCallsAfterFailure)
+    }
+
+    @Test
     fun startupResolvesFreshLegacyAndInterruptedInitialSetup() = runTest {
         val fresh = fixture()
         fresh.session.start()
@@ -7585,6 +7629,7 @@ class AppSessionTest {
     ) : AuthProvider {
         var currentStateGate: CompletableDeferred<Unit>? = null
         var currentStateEntered = CompletableDeferred<Unit>()
+        var currentStateErrorOnce: Throwable? = null
         var signOutError: Throwable? = null
         var currentStateCalls = 0
         var identityTokenCalls = 0
@@ -7596,6 +7641,10 @@ class AppSessionTest {
             if (recordCurrentStateEvents) events += "auth-state"
             currentStateEntered.complete(Unit)
             currentStateGate?.await()
+            currentStateErrorOnce?.let { error ->
+                currentStateErrorOnce = null
+                throw error
+            }
             return state
         }
         override suspend fun sendCode(method: LoginMethod, destination: String) = Unit
