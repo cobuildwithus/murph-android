@@ -2079,6 +2079,78 @@ class AppSessionTest {
     }
 
     @Test
+    fun postPermissionConsentRecoveryAdvancesToSyncBeforeASecondChallenge() = runTest {
+        val initialObservation = Instant.parse("2026-07-25T18:00:00Z")
+        val initialReceipt = initialObservation.minusSeconds(300)
+        val preConsentObservation = initialObservation.plusSeconds(60)
+        val preConsentReceipt = initialReceipt.plusSeconds(30)
+        val setupObservation = initialObservation.plusSeconds(120)
+        val setupReceipt = preConsentReceipt.plusSeconds(30)
+        val qualifyingReceipt = setupObservation.plusSeconds(60)
+        val fixture = fixture(now = initialObservation)
+        fixture.session.start()
+        fixture.api.statusHandler = { call ->
+            when (call) {
+                2 -> CompanionSyncStatus(initialReceipt, initialObservation, emptyMap())
+                3 -> CompanionSyncStatus(
+                    preConsentReceipt,
+                    preConsentObservation,
+                    emptyMap(),
+                )
+                6 -> {
+                    fixture.api.launchConsentStatus = launchConsentStatus(granted = false)
+                    throw CompanionApiException.ConsentRequired
+                }
+                in 7..Int.MAX_VALUE -> CompanionSyncStatus(
+                    qualifyingReceipt,
+                    setupObservation.plusSeconds(120),
+                    emptyMap(),
+                )
+                else -> CompanionSyncStatus(setupReceipt, setupObservation, emptyMap())
+            }
+        }
+        assertTrue(fixture.session.prepareHealthConnection())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.api.signInError = CompanionApiException.ConsentRequired
+
+        assertFalse(fixture.session.completeHealthPermissionFlow(true))
+        fixture.api.signInError = null
+        fixture.session.acceptLaunchConsent()
+
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+        assertEquals(2, fixture.api.intents.count { it == ConnectionIntent.Connect })
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(
+            InstantValue(setupReceipt.toEpochMilli()),
+            fixture.localState.healthReceiptBaselineAt,
+        )
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
+
+        fixture.session.acceptLaunchConsent()
+
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+        assertEquals(2, fixture.api.intents.count { it == ConnectionIntent.Connect })
+        assertEquals(1, fixture.health.connectCalls)
+        assertEquals(2, fixture.health.syncCalls)
+        assertEquals(
+            InstantValue(setupReceipt.toEpochMilli()),
+            fixture.localState.healthReceiptBaselineAt,
+        )
+        assertEquals(
+            InstantValue(qualifyingReceipt.toEpochMilli()),
+            fixture.localState.lastKnownDataReceivedAt,
+        )
+        assertEquals(
+            HealthSyncState.Synced(qualifyingReceipt),
+            fixture.session.state.value.healthSync,
+        )
+    }
+
+    @Test
     fun consentSheetDismissalDuringAcceptanceKeepsRecoveryReachable() = runTest {
         val fixture = fixture()
         fixture.session.start()

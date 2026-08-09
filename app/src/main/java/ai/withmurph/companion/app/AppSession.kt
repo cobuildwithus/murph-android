@@ -1812,7 +1812,11 @@ class AppSession(
         }
         authStateToReconcile?.let { handleAuthoritativeLocalAuthObservation(it) }
         if (completed && !needsForegroundRefresh) {
-            syncNow(foregroundClaim = null, acceptedConsentOwner = acceptedConsentOwner)
+            if (acceptedConsentOwner == null) {
+                syncNow()
+            } else {
+                advanceCompletedHealthPermissionContinuationToSync(acceptedConsentOwner)
+            }
         }
         return completed
     }
@@ -4215,6 +4219,22 @@ class AppSession(
             }
         }
         return true
+    }
+
+    private fun advanceCompletedHealthPermissionContinuationToSync(
+        pending: PendingLaunchConsentRecovery,
+    ) {
+        synchronized(pending) {
+            if (
+                !ownsAcceptedConsentContinuation(pending) ||
+                !pending.continuationInProgress ||
+                pending.followUp !is LaunchConsentFollowUp.CompleteHealthPermission
+            ) {
+                return
+            }
+            pending.followUp = LaunchConsentFollowUp.SyncHealth
+            pending.followUpVersion += 1
+        }
     }
 
     private suspend fun loadLaunchConsentStatus(
