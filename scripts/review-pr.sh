@@ -114,7 +114,7 @@ node scripts/review-gpt-contract.mjs invocation \
   "$invocation_file"
 
 pnpm review:gpt android-pr-review \
-  --no-artifacts \
+  --no-zip \
   --connector github \
   --prompt-file "$invocation_file" \
   --wait \

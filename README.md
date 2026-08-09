@@ -138,7 +138,7 @@ The repository includes the same pinned, managed-browser ReviewGPT workflow as
 pnpm install --frozen-lockfile
 pnpm review:verify
 pnpm review:gpt android-review --wait \
-  --no-artifacts \
+  --no-zip \
   --connector github \
   --response-marker ANDROID_REVIEW_COMPLETE \
   --response-file output-packages/android-review-response.md \

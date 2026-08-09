@@ -56,7 +56,7 @@ grep -Fq 'browser_lanes=(eragon phlebas mountain)' scripts/review-gpt.config.sh
 [[ ! -e scripts/package-review-context.sh ]]
 [[ ! -e scripts/repo-tools.config.sh ]]
 
-grep -Fq -- '--no-artifacts' scripts/review-pr.sh
+grep -Fq -- '--no-zip' scripts/review-pr.sh
 grep -Fq -- '--connector github' scripts/review-pr.sh
 grep -Fq 'review-gpt-contract.mjs invocation' scripts/review-pr.sh
 grep -Fq 'review_gpt_register_dir_preset "android-review"' scripts/review-gpt.config.sh
