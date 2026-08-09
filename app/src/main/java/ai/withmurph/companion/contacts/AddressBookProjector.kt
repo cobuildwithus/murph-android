@@ -64,6 +64,7 @@ object AddressBookProjector {
         providerNormalizedValue
             ?.let(::normalizePhoneNumber)
             ?.let { return it }
+        normalizePhoneNumber(candidate)?.let { return it }
 
         val regionCode = defaultRegionCode.uppercase(Locale.US)
         if (!REGION_CODE.matches(regionCode)) return null
@@ -213,7 +214,8 @@ object AddressBookProjector {
             when {
                 character in '0'..'9' -> compact.append(character)
                 character == '+' && compact.isEmpty() -> compact.append(character)
-                character in ALLOWED_PHONE_SEPARATORS -> Unit
+                character in ALLOWED_PHONE_SEPARATORS ||
+                    Character.getType(character) == Character.DASH_PUNCTUATION.toInt() -> Unit
                 Character.isSpaceChar(character) -> Unit
                 character.code in ALLOWED_BIDI_FORMATTING -> Unit
                 else -> return null

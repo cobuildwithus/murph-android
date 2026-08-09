@@ -21,6 +21,10 @@ class AddressBookProjectorTest {
             "+12125550123",
             AddressBookProjector.normalizePhoneNumber("\u200E+1\u00A0(212) 555-0123\u200F"),
         )
+        assertEquals(
+            "+12125550123",
+            AddressBookProjector.normalizePhoneNumber("+1\u2011212\u2011555\u20110123"),
+        )
 
         listOf(
             "2125550123",
@@ -53,6 +57,18 @@ class AddressBookProjectorTest {
             },
         )
         assertEquals(0, formatterCalls)
+        assertEquals(
+            "+12125550123",
+            AddressBookProjector.canonicalPhoneNumber(
+                rawValue = "212\u2011555\u20110123",
+                providerNormalizedValue = "+12125550123",
+                defaultRegionCode = "",
+            ) { _, _ ->
+                formatterCalls += 1
+                null
+            },
+        )
+        assertEquals(0, formatterCalls)
 
         val formatterInputs = mutableListOf<Pair<String, String>>()
         assertEquals(
@@ -68,17 +84,31 @@ class AddressBookProjectorTest {
         )
         assertEquals(listOf("2125550123" to "US"), formatterInputs)
 
-        assertEquals(
-            "+442079460018",
-            AddressBookProjector.canonicalPhoneNumber(
-                rawValue = "00 44 20 7946 0018",
-                providerNormalizedValue = null,
-                defaultRegionCode = "US",
-            ) { value, _ ->
-                assertEquals("+442079460018", value)
-                "+442079460018"
-            },
-        )
+        listOf("", "419", "001").forEach { unusableRegion ->
+            assertEquals(
+                "+12125550123",
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = "+1 (212) 555-0123",
+                    providerNormalizedValue = null,
+                    defaultRegionCode = unusableRegion,
+                ) { _, _ -> error("International values must not use the regional formatter") },
+            )
+            assertEquals(
+                "+442079460018",
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = "00 44 20 7946 0018",
+                    providerNormalizedValue = null,
+                    defaultRegionCode = unusableRegion,
+                ) { _, _ -> error("International values must not use the regional formatter") },
+            )
+            assertNull(
+                AddressBookProjector.canonicalPhoneNumber(
+                    rawValue = "(212) 555-0123",
+                    providerNormalizedValue = null,
+                    defaultRegionCode = unusableRegion,
+                ) { _, _ -> error("Unusable regions must not reach the platform formatter") },
+            )
+        }
         listOf(
             "+",
             "+1 (212) 555-0123 ext 2",

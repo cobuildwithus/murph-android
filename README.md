@@ -146,11 +146,14 @@ permission prompt and reads contacts only after the member chooses **Share**,
 family name, and at most eight phone values per contact, bounded to 5,000
 contacts and 20,000 phone values.
 
-Only ASCII international numbers beginning with `+` or `00` and containing
-8–15 digits are eligible. The app emits at most 1,000 unique friendly labels,
-each containing one structurally safe first-name token and an optional last
-initial, bounded to 48 characters and 96 UTF-8 bytes. Conflicting names for the
-same normalized number are dropped. Selection is deterministic by SHA-256 rank.
+The Contacts edge accepts provider-normalized international values and converts
+ordinary national values with a usable two-letter device region. It rejects
+extensions, post-dial syntax, letters, and malformed international output. The
+app emits at most 1,000 unique friendly labels, each containing up to four
+deterministically sorted, case-insensitively deduplicated safe aliases. Each
+alias starts with one structurally safe first-name token and may include a last
+initial; the combined label remains bounded to 48 characters and 96 UTF-8
+bytes. Selection is deterministic by SHA-256 rank.
 
 Contact rows, projected values, and hashes exist only for that request. Murph
 does not persist or log them on Android. The server stores no phone numbers in
