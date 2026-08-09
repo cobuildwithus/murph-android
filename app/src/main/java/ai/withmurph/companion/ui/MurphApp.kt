@@ -95,6 +95,7 @@ private enum class AddressBookConsentAction {
 
 internal data class ReadyAppShellState(
     val activeTab: AppTab,
+    val showsInitialOnboarding: Boolean,
     val showsReconnect: Boolean,
     val showsFriendlyNamesSetup: Boolean,
     val showsTabBar: Boolean,
@@ -132,17 +133,24 @@ internal fun readyAppShellState(
     initialSetupStep: InitialSetupStep,
     healthReconnectRequired: Boolean,
     hasInitialOnboarding: Boolean = false,
+    hasLaunchConsentRecovery: Boolean = false,
 ): ReadyAppShellState {
     val activeTab = selectedTab
+    val showsInitialOnboarding =
+        activeTab == AppTab.Home &&
+            hasInitialOnboarding &&
+            !hasLaunchConsentRecovery &&
+            !healthReconnectRequired
     return ReadyAppShellState(
         activeTab = activeTab,
+        showsInitialOnboarding = showsInitialOnboarding,
         showsReconnect = healthReconnectRequired && activeTab == AppTab.Home,
         showsFriendlyNamesSetup =
             initialSetupStep == InitialSetupStep.FriendlyNames &&
                 !healthReconnectRequired &&
                 !hasInitialOnboarding &&
                 activeTab == AppTab.Home,
-        showsTabBar = !hasInitialOnboarding || activeTab == AppTab.Settings,
+        showsTabBar = !showsInitialOnboarding,
     )
 }
 
@@ -196,6 +204,7 @@ private fun ReadyApp(
         initialSetupStep = state.initialSetupStep,
         healthReconnectRequired = state.healthReconnectRequired,
         hasInitialOnboarding = state.initialOnboarding != null,
+        hasLaunchConsentRecovery = state.launchConsentRecovery != null,
     )
     val bannerRecovery = state.launchConsentRecovery?.takeIf { !it.showSheet }
 
@@ -303,10 +312,7 @@ private fun ReadyApp(
                     )
                 } else {
                     when (shellState.activeTab) {
-                        AppTab.Home -> if (
-                            state.initialOnboarding != null &&
-                            state.launchConsentRecovery == null
-                        ) {
+                        AppTab.Home -> if (shellState.showsInitialOnboarding) {
                             InitialOnboardingScreen(
                                 state = state,
                                 actions = actions,

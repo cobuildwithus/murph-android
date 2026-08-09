@@ -156,6 +156,7 @@ class MurphAppShellStateTest {
         )
 
         assertEquals(AppTab.Settings, shell.activeTab)
+        assertFalse(shell.showsInitialOnboarding)
         assertFalse(shell.showsFriendlyNamesSetup)
         assertTrue(shell.showsTabBar)
     }
@@ -170,8 +171,42 @@ class MurphAppShellStateTest {
         )
 
         assertEquals(AppTab.Home, shell.activeTab)
+        assertTrue(shell.showsInitialOnboarding)
         assertFalse(shell.showsFriendlyNamesSetup)
         assertFalse(shell.showsTabBar)
+    }
+
+    @Test
+    fun retainedOnboardingConsentRecoveryRestoresTheAuthenticatedShell() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = false,
+            hasInitialOnboarding = true,
+            hasLaunchConsentRecovery = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertFalse(shell.showsInitialOnboarding)
+        assertFalse(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
+    }
+
+    @Test
+    fun retainedOnboardingReconnectRestoresTheAuthenticatedShell() {
+        val shell = readyAppShellState(
+            selectedTab = AppTab.Home,
+            initialSetupStep = InitialSetupStep.FriendlyNames,
+            healthReconnectRequired = true,
+            hasInitialOnboarding = true,
+        )
+
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertFalse(shell.showsInitialOnboarding)
+        assertTrue(shell.showsReconnect)
+        assertFalse(shell.showsFriendlyNamesSetup)
+        assertTrue(shell.showsTabBar)
     }
 
     @Test

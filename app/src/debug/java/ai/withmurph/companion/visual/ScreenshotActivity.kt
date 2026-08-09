@@ -93,6 +93,8 @@ internal enum class ScreenshotScenario {
     OnboardingError,
     OnboardingSaving,
     OnboardingWelcome,
+    OnboardingConsentBanner,
+    OnboardingReconnectRequired,
     FriendlyNames,
     FriendlyNamesReconnectRequired,
     Failure;
@@ -170,6 +172,17 @@ internal enum class ScreenshotScenario {
         OnboardingWelcome -> onboardingState(InitialOnboardingStage.Welcome).copy(
             initialOnboardingCompletedNow = true,
         )
+        OnboardingConsentBanner -> onboardingState(InitialOnboardingStage.MainPersona).copy(
+            launchConsentRecovery = LaunchConsentRecoveryUiState(
+                phase = LaunchConsentRecoveryPhase.Required,
+                status = consentStatus(),
+                showSheet = false,
+            ),
+        )
+        OnboardingReconnectRequired -> onboardingState(InitialOnboardingStage.MainPersona).copy(
+            healthReconnectRequired = true,
+            healthMessage = "Health Connect needs to reconnect before syncing can resume.",
+        )
         FriendlyNames -> ready(HealthSyncState.Synced(now), observedAt = now).copy(
             initialSetupStep = InitialSetupStep.FriendlyNames,
             addressBookSharing = AddressBookSharingState.Server(
@@ -232,6 +245,8 @@ internal enum class ScreenshotScenario {
         OnboardingError,
         OnboardingSaving,
         OnboardingWelcome,
+        OnboardingConsentBanner,
+        OnboardingReconnectRequired,
         FriendlyNames,
         FriendlyNamesReconnectRequired,
         Failure -> LoginUiState()
@@ -245,7 +260,9 @@ internal enum class ScreenshotScenario {
         OnboardingTone,
         OnboardingError,
         OnboardingSaving,
-        OnboardingWelcome -> true
+        OnboardingWelcome,
+        OnboardingConsentBanner,
+        OnboardingReconnectRequired -> true
         else -> false
     }
 

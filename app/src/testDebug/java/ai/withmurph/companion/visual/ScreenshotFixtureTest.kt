@@ -118,6 +118,19 @@ class ScreenshotFixtureTest {
             "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
             permissionFailure.healthMessage,
         )
+
+        val onboardingBanner = ScreenshotScenario.OnboardingConsentBanner.appState(now)
+        assertNotNull(onboardingBanner.initialOnboarding)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            onboardingBanner.launchConsentRecovery?.phase,
+        )
+        assertFalse(requireNotNull(onboardingBanner.launchConsentRecovery).showSheet)
+
+        val onboardingReconnect = ScreenshotScenario.OnboardingReconnectRequired.appState(now)
+        assertNotNull(onboardingReconnect.initialOnboarding)
+        assertTrue(onboardingReconnect.healthReconnectRequired)
+        assertEquals(HealthSyncState.NotConnected, onboardingReconnect.healthSync)
     }
 
     @Test
