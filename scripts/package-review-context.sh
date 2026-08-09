@@ -162,8 +162,6 @@ node -e '
 ' "$pr_metadata" "$context_dir/pr-description.md"
 
 export COBUILD_AUDIT_CONTEXT_ALWAYS_PATHS="${COBUILD_AUDIT_CONTEXT_ALWAYS_PATHS}"$'\nreview-gpt-pr-context/changed-files.txt\nreview-gpt-pr-context/pr-description.md\nreview-gpt-pr-context/pr.diff\nreview-gpt-pr-context/review-context.json\nreview-gpt-pr-context/review-context.sha256'
-export COBUILD_AUDIT_CONTEXT_INCLUDE_CI_DEFAULT="1"
-export COBUILD_AUDIT_CONTEXT_CI_SCAN_SPECS=".github/workflows"
 
 "$review_packager" "$@"
 [[ "$(git rev-parse --verify HEAD)" == "$head_oid" ]] \

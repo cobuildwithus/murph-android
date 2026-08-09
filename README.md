@@ -231,9 +231,13 @@ An assembled Release APK or AAB is not authorization to publish. Before any
 Play upload, run `:app:checkPlaySubmissionReadiness` from a clean checkout at
 the exact source commit with the exact signed AAB and the ignored private
 operator assertions. The gate rejects synthetic Privy identifiers and
-non-production backend hosts, verifies the bundle signature, binds the source,
-artifact, merged manifest, and Play packet by digest, and requires the real
-vendor, provider-export, and Pixel/Samsung acceptance evidence. See
+non-production backend hosts, validates the bundle with the build's pinned
+bundletool, requires complete per-entry coverage by the approved upload signer,
+treats its base manifest as authoritative, requires its SDK, backup/network,
+permission, component, and intent-filter security contract to match the local
+Release boundary, binds the source, artifact manifest, artifact, and Play packet
+by digest, and requires the real vendor, provider-export, and
+Pixel/Samsung acceptance evidence. See
 `play/README.md` for the fail-closed procedure.
 
 Before a Play release:
@@ -242,7 +246,7 @@ Before a Play release:
 2. Complete Play Data Safety disclosures, the Health Apps declaration, and the
    Contacts permission disclosure for optional familiar-name projection.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
-4. Review the merged manifest and prove Junction's boot receiver and exact-alarm service remain removed.
+4. Inspect the exact signed AAB and prove Junction's boot receiver and exact-alarm service remain removed.
 5. Verify foreground sync and its notification behavior on Android 13–16.
 6. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
 7. Verify Contacts grant, denial, permanent denial, app-settings recovery,

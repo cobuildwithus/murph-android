@@ -18,7 +18,7 @@ if grep -Fq 'LaunchedEffect(value)' app/src/main/java/ai/withmurph/companion/ui/
     exit 1
 fi
 
-./gradlew --no-daemon test lintDebug lintRelease assembleDebug assembleRelease
+./gradlew --no-daemon test lintDebug lintRelease assembleDebug assembleRelease checkPlayReleaseTooling
 
 for merged_manifest in \
     app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml \

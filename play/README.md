@@ -16,7 +16,7 @@ The current source-derived health scope is four centralized `VitalResource` valu
 - `declarations/health-apps.md`: Health Apps and Health Connect declaration copy for every requested data type.
 - `declarations/contacts.md`: broad Contacts permission purpose, disclosure evidence, and the upcoming policy decision.
 - `release-checklist.md`: signing, testing, Play Console, reviewer-access, staged-rollout, and rollback steps.
-- `operator-assertions.example.json`: the private assertions bound to the exact release artifact, merged manifest, and Play Console packet.
+- `operator-assertions.example.json`: the private assertions bound to the exact release artifact, its bundletool-extracted manifest, and Play Console packet.
 
 ## Verification
 
@@ -40,20 +40,18 @@ Before creating a release build, an authorized operator must separately confirm 
 export MURPH_JUNCTION_ANDROID_COMMERCIAL_LICENSE_CONFIRMED=true
 ```
 
-Then create the ignored assertions file from the example. Set the artifact path to the exact signed AAB intended for upload, print its three safe evidence hashes, copy those hashes into the assertions file, and run the strict check:
+Then create the ignored assertions file from the example. Set the artifact path to the exact signed AAB intended for upload and provide the approved upload-certificate SHA-256 shown by Play Console. Print the three safe evidence hashes, copy those hashes into the assertions file, and run the strict check:
 
 ```sh
 cp play/operator-assertions.example.json play/operator-assertions.json
 export MURPH_PLAY_RELEASE_ARTIFACT=/secure/path/to/exact-release.aab
 export MURPH_PLAY_OPERATOR_ASSERTIONS_FILE=play/operator-assertions.json
-node scripts/check-play-release-packet.mjs \
-  --print-evidence-hashes \
-  --merged-manifest app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml \
-  --release-artifact "$MURPH_PLAY_RELEASE_ARTIFACT"
+export MURPH_PLAY_UPLOAD_CERT_SHA256=...
+./gradlew :app:printPlaySubmissionEvidence
 ./gradlew :app:checkPlaySubmissionReadiness
 ```
 
-The strict task is the only repository-approved authorization boundary before a Play upload. Every Release artifact embeds a generated source commit, clean/dirty marker, and digest of its public Privy/backend build configuration; the gate requires that signed metadata to match its current clean checkout and expected production configuration. It also requires private assertions for that source commit, AAB hash, merged manifest, listing, declarations, and checklist; rejects synthetic Privy identifiers and non-production backend hosts; and fails on stale permission/resource facts, missing operator confirmation, unrecognized dependency licenses, or Junction coverage that is not explicitly confirmed for Android. The operator assertions require successful production-package Privy registration, the intended production backend, real provider export, the Pixel/Samsung physical-device matrix, canonical admission, account/onboarding/launch-consent Data Safety review, an explicit system-timezone taxonomy decision, and verified in-app plus external account-deletion paths for the exact candidate.
+The strict task is the only repository-approved authorization boundary before a Play upload. Every Release artifact embeds a generated source commit, clean/dirty marker, and digest of its public Privy/backend build configuration. The gate snapshots the selected artifact, requires every content entry—including that provenance—to share the approved upload-certificate signer, and checks the signed metadata against its current clean checkout and expected production configuration. The pinned bundletool version used by the Android build validates the exact signed AAB and dumps its authoritative base manifest. A secure JDK XML parser derives that manifest's SDK, backup/network, permission, component-exposure, and intent-filter contract; it must match the local merged Release boundary and checked-in release facts. The gate also requires private assertions for that source commit, artifact-manifest hash, AAB hash, listing, declarations, and checklist; rejects synthetic Privy identifiers and non-production backend hosts; and fails on stale permission/resource facts, missing operator confirmation, unrecognized dependency licenses, or Junction coverage that is not explicitly confirmed for Android. The operator assertions require successful production-package Privy registration, the intended production backend, real provider export, the Pixel/Samsung physical-device matrix, canonical admission, account/onboarding/launch-consent Data Safety review, an explicit system-timezone taxonomy decision, and verified in-app plus external account-deletion paths for the exact candidate.
 
 ## Refresh rule
 

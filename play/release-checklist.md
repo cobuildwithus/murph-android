@@ -14,13 +14,14 @@ Every unchecked item is a release blocker. Keep private evidence in the approved
 - [ ] Enroll the app in Play App Signing and establish a separate upload key following [Android app-signing guidance](https://developer.android.com/studio/publish/app-signing).
 - [ ] Keep the keystore and passwords in the approved secret manager/CI boundary. Never commit, print, or pass secret values on a shared command line.
 - [ ] Verify the upload certificate fingerprint against Play Console using secret-safe tooling.
+- [ ] Set `MURPH_PLAY_UPLOAD_CERT_SHA256` to that exact public SHA-256 for both evidence generation and the final readiness check.
 - [ ] Increment `versionCode` monotonically and set the intended `versionName`; update `release-facts.json` and release notes in the same candidate.
 - [ ] Supply the public production Privy native-client values and the production HTTPS backend.
 - [ ] Deploy a Murph backend compatible with Android's lifecycle-neutral canonical admission request, then prove new-account admission end to end from the exact signed candidate. Do not submit listing copy that advertises account creation until `canonicalAccountAdmissionVerified` is true.
 - [ ] Obtain explicit confirmation that the private Junction commercial grant covers the exact Android 5.0.2 artifacts and Play distribution; record only `MURPH_JUNCTION_ANDROID_COMMERCIAL_LICENSE_CONFIRMED=true` for the build.
 - [ ] Run `./gradlew :app:testReleaseUnitTest :app:lintRelease :app:checkPlayReleaseMergedManifest :app:checkReleaseThirdPartyLicenses`.
 - [ ] Generate a **signed Android App Bundle** with the approved upload key in the signing owner (CI or Android Studio). The repository intentionally contains no signing material.
-- [ ] Verify the signed AAB's application ID, version, upload certificate, merged permissions, supported devices, and absence of debug-only components before upload.
+- [ ] Verify the signed AAB's application ID, version, upload certificate, bundle permissions, supported devices, and absence of debug-only components before upload.
 - [ ] Preserve the generated `app/build/reports/licenses/THIRD_PARTY_NOTICES.txt` with the release evidence and include any notice surface required by legal review.
 
 ## Store listing and policies
@@ -32,7 +33,7 @@ Every unchecked item is a release blocker. Keep private evidence in the approved
 - [ ] Complete the Health Apps declaration and every Health Connect data-type justification from `declarations/health-apps.md`; confirm the exact candidate still has four configured resources covering four data-type permissions plus the supported history-access request.
 - [ ] Resolve the broad Contacts policy decision in `declarations/contacts.md` against the live policy.
 - [ ] Because the candidate performs canonical account creation, verify the signed app's readily discoverable **Settings → Delete Account** path, the externally reachable deletion web resource, deletion of associated account data, and any clearly disclosed retention. Do not release if either request path is missing or nonfunctional.
-- [ ] Point `MURPH_PLAY_RELEASE_ARTIFACT` at the exact signed AAB intended for upload, record its generated artifact/manifest/Console-packet hashes in the ignored assertions file, and re-run `./gradlew :app:checkPlaySubmissionReadiness`.
+- [ ] Point `MURPH_PLAY_RELEASE_ARTIFACT` at the exact signed AAB intended for upload, run `./gradlew :app:printPlaySubmissionEvidence`, record its artifact-manifest/AAB/Console-packet hashes in the ignored assertions file, and re-run `./gradlew :app:checkPlaySubmissionReadiness`.
 
 ## Reviewer access and real-device proof
 

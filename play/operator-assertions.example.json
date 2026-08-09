@@ -1,10 +1,10 @@
 {
-  "schema": 2,
+  "schema": 3,
   "googlePlayPolicyReviewedAt": "",
   "releaseVersionCode": 0,
   "releaseVersionName": "",
   "sourceHead": "",
-  "mergedManifestSha256": "",
+  "artifactManifestSha256": "",
   "releaseArtifactSha256": "",
   "releasePacketSha256": "",
   "organizationDeveloperAccountVerified": false,
