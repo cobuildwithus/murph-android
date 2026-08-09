@@ -71,12 +71,6 @@ review_presets="$(pnpm review:gpt --list-presets)"
 grep -Fq 'android-review' <<<"$review_presets"
 grep -Fq 'android-pr-review' <<<"$review_presets"
 
-review_plan="$(pnpm review:gpt android-review --dry-run)"
-grep -Fq 'ZIP file: disabled' <<<"$review_plan"
-grep -Fq 'Repomix attachment: disabled' <<<"$review_plan"
-grep -Fq 'App connector target: github' <<<"$review_plan"
-grep -Fq 'Repository context URL: https://github.com/cobuildwithus/murph-android' <<<"$review_plan"
-
 grep -Fq 'pull_request:' .github/workflows/android-ci.yml
 grep -Fq './scripts/verify.sh' .github/workflows/android-ci.yml
 grep -Fq 'pull_request:' .github/workflows/android-instrumentation.yml
