@@ -322,7 +322,7 @@ message.
   clears local member/setup authority before opening the HTTPS deletion resource.
   If the web flow is abandoned, foreground return must pass fresh backend
   admission and setup before any health sync can resume.
-- “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
+- “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`, and an unresolved per-resource foreground failure cannot be hidden by another category's newer source-wide receipt.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online

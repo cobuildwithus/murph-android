@@ -16,6 +16,7 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncReminderLifecycle
 import ai.withmurph.companion.core.HealthSyncState
@@ -33,6 +34,7 @@ import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.NoopHealthSyncReminderLifecycle
+import ai.withmurph.companion.core.PendingHealthSyncFailure
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CancellationException
@@ -2673,6 +2675,8 @@ class AppSession(
                 healthMessage = when {
                     reconnectRequired -> HEALTH_RECONNECT_REQUIRED_MESSAGE
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
+                    localState.pendingHealthSyncFailure != null ->
+                        HEALTH_PARTIAL_SYNC_MESSAGE
                     !permissionStateVerified && authState.verifiedOnline ->
                         HEALTH_PERMISSION_VERIFICATION_MESSAGE
                     authState.verifiedOnline -> null
@@ -3007,6 +3011,8 @@ class AppSession(
                     localState.healthReconnectRequired ->
                         "$HEALTH_RECONNECT_REQUIRED_MESSAGE Connect when you're back online."
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
+                    localState.pendingHealthSyncFailure != null ->
+                        HEALTH_PARTIAL_SYNC_MESSAGE
                     else -> "You're offline. Saved sync status is shown until Murph reconnects."
                 },
                 healthSyncReminderEnabled =
@@ -3217,16 +3223,23 @@ class AppSession(
             lastCompletedValidatedHealthSyncSequence >
             foregroundClaim.healthSyncSequenceAtEntry
         ) return false
-        _state.update { it.copy(isSyncingHealth = true, healthMessage = null) }
+        _state.update {
+            it.copy(
+                isSyncingHealth = true,
+                healthMessage = if (localState.pendingHealthSyncFailure == null) {
+                    null
+                } else {
+                    HEALTH_PARTIAL_SYNC_MESSAGE
+                },
+            )
+        }
         try {
-            if (
-                fetchValidatedHealthStatus(
-                    epoch,
-                    LaunchConsentFollowUp.SyncHealth,
-                    onAuthoritativeLocalAuth,
-                    onConsentRequired,
-                ) == null
-            ) return false
+            val preSyncStatus = fetchValidatedHealthStatus(
+                epoch,
+                LaunchConsentFollowUp.SyncHealth,
+                onAuthoritativeLocalAuth,
+                onConsentRequired,
+            ) ?: return false
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
             if (health.grantedResourceCount() == 0) {
                 publishPermissionAwareHealthState(
@@ -3242,8 +3255,15 @@ class AppSession(
             val syncSequence = lastStartedHealthSyncSequence
             var syncSucceeded = false
             try {
-                health.syncAllGrantedResources(syncMemberKey)
-                syncSucceeded = true
+                when (val result = health.syncAllGrantedResources(syncMemberKey)) {
+                    HealthSyncAttemptResult.Complete -> syncSucceeded = true
+                    is HealthSyncAttemptResult.PartialFailure -> {
+                        recordPendingHealthSyncFailure(
+                            resourceKeys = result.resourceKeys,
+                            receiptFloorAt = preSyncStatus.observedAt,
+                        )
+                    }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: HealthSyncForegroundLaunchRejectedException) {
@@ -3255,6 +3275,10 @@ class AppSession(
             } catch (_: Exception) {
                 if (!ownsVerifiedHealthWork(epoch)) return false
                 if (!health.isSignedIn()) return true
+                recordPendingHealthSyncFailure(
+                    resourceKeys = setOf(UNKNOWN_FAILED_HEALTH_RESOURCE),
+                    receiptFloorAt = preSyncStatus.observedAt,
+                )
                 // Status refresh below still reports the last backend-confirmed receipt.
             }
             // A successfully promoted foreground transfer may finish after the
@@ -3263,17 +3287,22 @@ class AppSession(
             // launch generation that guarded entry into the worker chain.
             if (!ownsVerifiedHealthWork(epoch)) return false
             if (!health.isSignedIn()) return true
-            if (
-                fetchValidatedHealthStatus(
-                    epoch,
-                    LaunchConsentFollowUp.SyncHealth,
-                    onAuthoritativeLocalAuth,
-                    onConsentRequired,
-                ) == null
-            ) return false
+            val refreshedStatus = fetchValidatedHealthStatus(
+                epoch,
+                LaunchConsentFollowUp.SyncHealth,
+                onAuthoritativeLocalAuth,
+                onConsentRequired,
+            ) ?: return false
             if (!ownsVerifiedHealthWork(epoch)) return false
             if (!health.isSignedIn()) return true
             if (syncSucceeded) {
+                if (localState.clearPendingHealthSyncFailure()) {
+                    publishPermissionAwareHealthState(
+                        status = qualifyingHealthStatus(refreshedStatus),
+                        message = null,
+                        healthStatusIsStale = false,
+                    )
+                }
                 lastCompletedValidatedHealthSyncSequence = syncSequence
             }
             return false
@@ -3465,17 +3494,15 @@ class AppSession(
             return null
         }
         if (epoch != sessionEpoch) return null
-        val receiptFloorAt = healthReceiptFloorAt()
-        val qualifyingReceipt = status.lastDataReceivedAt?.takeIf { receivedAt ->
-            receiptFloorAt == null || receivedAt.isAfter(receiptFloorAt)
-        }
+        val projectedStatus = qualifyingHealthStatus(status)
         localState.lastKnownStatusObservedAt = InstantValue(status.observedAt.toEpochMilli())
-        localState.lastKnownDataReceivedAt = qualifyingReceipt?.let {
+        localState.lastKnownDataReceivedAt = projectedStatus.lastDataReceivedAt?.let {
             InstantValue(it.toEpochMilli())
         }
+        clearPendingHealthSyncFailureWhenReceiptsConfirm(status)
         healthSyncReminder.refreshSchedule(freshBackendStatus = true)
         publishPermissionAwareHealthState(
-            status = status.copy(lastDataReceivedAt = qualifyingReceipt),
+            status = projectedStatus,
             message = null,
             healthStatusIsStale = false,
         )
@@ -3590,12 +3617,15 @@ class AppSession(
         val requestedAt = healthRequestedAt()
         val grantedResourceCount = health.grantedResourceCount()
         val needsPermissionRecovery = requestedAt != null && grantedResourceCount == 0
+        val hasPendingSyncFailure = localState.pendingHealthSyncFailure != null
         _state.update { current ->
             current.copy(
                 authVerifiedOnline = authVerifiedOnline ?: current.authVerifiedOnline,
                 isSyncingHealth = if (clearSyncing) false else current.isSyncingHealth,
                 healthSync = if (needsPermissionRecovery) {
                     HealthSyncState.NotConnected
+                } else if (hasPendingSyncFailure) {
+                    HealthSyncState.NeedsAttention(status?.lastDataReceivedAt)
                 } else {
                     HealthSyncState.derive(
                         requestedAt = requestedAt,
@@ -3607,11 +3637,40 @@ class AppSession(
                 grantedResourceCount = grantedResourceCount,
                 healthMessage = if (needsPermissionRecovery) {
                     HEALTH_PERMISSION_RECOVERY_MESSAGE
+                } else if (hasPendingSyncFailure) {
+                    HEALTH_PARTIAL_SYNC_MESSAGE
                 } else {
                     message
                 },
             )
         }
+    }
+
+    private fun recordPendingHealthSyncFailure(
+        resourceKeys: Set<String>,
+        receiptFloorAt: Instant,
+    ) {
+        localState.recordPendingHealthSyncFailure(
+            PendingHealthSyncFailure(
+                resourceKeys = resourceKeys,
+                receiptFloorAt = InstantValue(receiptFloorAt.toEpochMilli()),
+            ),
+        )
+    }
+
+    private fun clearPendingHealthSyncFailureWhenReceiptsConfirm(
+        status: CompanionSyncStatus,
+    ) {
+        val pending = localState.pendingHealthSyncFailure ?: return
+        if (pending.isConfirmedBy(status)) localState.clearPendingHealthSyncFailure()
+    }
+
+    private fun qualifyingHealthStatus(status: CompanionSyncStatus): CompanionSyncStatus {
+        val receiptFloorAt = healthReceiptFloorAt()
+        val qualifyingReceipt = status.lastDataReceivedAt?.takeIf { receivedAt ->
+            receiptFloorAt == null || receivedAt.isAfter(receiptFloorAt)
+        }
+        return status.copy(lastDataReceivedAt = qualifyingReceipt)
     }
 
     /** Called only while [healthMutex] is held. */
@@ -5869,9 +5928,13 @@ class AppSession(
     }
 
     private fun deriveCachedHealthState(): HealthSyncState {
+        val status = cachedHealthStatus()
+        if (healthWasRequested() && localState.pendingHealthSyncFailure != null) {
+            return HealthSyncState.NeedsAttention(status?.lastDataReceivedAt)
+        }
         return HealthSyncState.derive(
             requestedAt = healthRequestedAt(),
-            status = cachedHealthStatus(),
+            status = status,
         )
     }
 
@@ -6319,6 +6382,9 @@ class AppSession(
             "Health Connect needs to reconnect before syncing can resume."
         const val HEALTH_FOREGROUND_SYNC_RETRY_MESSAGE =
             "Health sync didn't start before Murph left the foreground. Return to Murph and tap Sync now."
+        const val HEALTH_PARTIAL_SYNC_MESSAGE =
+            "Some Health Connect categories didn't finish syncing. Keep Murph open and tap Sync now to retry."
+        const val UNKNOWN_FAILED_HEALTH_RESOURCE = "unknown"
     }
 
     private fun signInTokenRequest(intent: ConnectionIntent?): SignInTokenRequest =

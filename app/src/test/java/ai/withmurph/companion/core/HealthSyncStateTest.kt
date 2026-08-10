@@ -3,9 +3,44 @@ package ai.withmurph.companion.core
 import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HealthSyncStateTest {
+    @Test
+    fun partialFailureRequiresANewerReceiptForEveryFailedResource() {
+        val floor = Instant.parse("2026-07-25T18:00:00Z")
+        val pending = PendingHealthSyncFailure(
+            resourceKeys = setOf("activity", "sleep"),
+            receiptFloorAt = InstantValue(floor.toEpochMilli()),
+        )
+
+        assertFalse(
+            pending.isConfirmedBy(
+                CompanionSyncStatus(
+                    lastDataReceivedAt = floor.plusSeconds(60),
+                    observedAt = floor.plusSeconds(120),
+                    resources = mapOf(
+                        "sleep" to CompanionSyncStatus.ResourceStatus(floor.plusSeconds(60)),
+                    ),
+                ),
+            ),
+        )
+        assertTrue(
+            pending.isConfirmedBy(
+                CompanionSyncStatus(
+                    lastDataReceivedAt = floor.plusSeconds(60),
+                    observedAt = floor.plusSeconds(120),
+                    resources = mapOf(
+                        "activity" to CompanionSyncStatus.ResourceStatus(floor.plusSeconds(1)),
+                        "sleep" to CompanionSyncStatus.ResourceStatus(floor.plusSeconds(60)),
+                    ),
+                ),
+            ),
+        )
+    }
+
     private val now = Instant.parse("2026-07-25T12:00:00Z")
 
     @Test

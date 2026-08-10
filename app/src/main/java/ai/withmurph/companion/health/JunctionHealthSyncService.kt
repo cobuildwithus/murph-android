@@ -7,6 +7,7 @@ import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.JunctionExternalUserId
@@ -82,6 +83,30 @@ internal val healthConnectReadResources: Set<VitalResource> = setOf(
 internal fun configuredHealthConnectReadResources(
     grantedResources: Set<VitalResource>,
 ): Set<VitalResource> = healthConnectReadResources.intersect(grantedResources)
+
+internal fun backendResourceKeysFor(resource: VitalResource): Set<String> = when (resource) {
+    VitalResource.Profile -> setOf("profile")
+    VitalResource.Body -> setOf("body")
+    VitalResource.Workout -> setOf("workouts")
+    VitalResource.Activity -> setOf("activity")
+    VitalResource.Sleep -> setOf("sleep")
+    VitalResource.Glucose -> setOf("glucose")
+    VitalResource.BloodPressure -> setOf("blood_pressure")
+    VitalResource.BloodOxygen -> setOf("blood_oxygen")
+    VitalResource.HeartRate -> setOf("heartrate")
+    VitalResource.Water -> setOf("water")
+    VitalResource.HeartRateVariability -> setOf("hrv")
+    VitalResource.MenstrualCycle -> setOf("menstrual_cycle")
+    VitalResource.Steps -> setOf("steps")
+    VitalResource.ActiveEnergyBurned -> setOf("calories_active")
+    VitalResource.BasalEnergyBurned -> setOf("calories_basal")
+    VitalResource.FloorsClimbed -> setOf("floors_climbed")
+    VitalResource.DistanceWalkingRunning -> setOf("distance")
+    VitalResource.Vo2Max -> setOf("vo2_max")
+    VitalResource.RespiratoryRate -> setOf("respiratory_rate")
+    VitalResource.Temperature -> setOf("body_temperature", "basal_body_temperature")
+    VitalResource.Meal -> setOf("meal")
+}
 
 internal fun healthPermissionRequestResult(
     activeResources: Set<VitalResource>,
@@ -193,7 +218,9 @@ class JunctionHealthSyncService(
         manager.reloadPermissions()
     }
 
-    override suspend fun syncAllGrantedResources(expectedMemberKey: String) {
+    override suspend fun syncAllGrantedResources(
+        expectedMemberKey: String,
+    ): HealthSyncAttemptResult {
         // An upgrade can inherit durable all-granted work enqueued by Vital's public
         // unpause setter. Retire every pinned chain before evaluating the exact set,
         // including when the new configured-and-granted intersection is empty.
@@ -201,19 +228,30 @@ class JunctionHealthSyncService(
         val resources = configuredHealthConnectReadResources(
             manager.resourcesWithReadPermission(),
         )
-        if (resources.isEmpty()) return
+        if (resources.isEmpty()) return HealthSyncAttemptResult.Complete
+        val workManager = WorkManager.getInstance(appContext)
+        val existingStarterIds = workManager
+            .getWorkInfosForUniqueWork(vitalResourceSyncStarter)
+            .await()
+            .mapTo(mutableSetOf()) { it.id }
         VitalHealthWorkerLease.openFor(expectedMemberKey)
         var launchRejected = false
         try {
             setManualSyncPaused(false)
-            manager.syncData(resources = resources)
-            launchRejected = VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            if (VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)) {
-                throw HealthSyncForegroundLaunchRejectedException()
+            try {
+                manager.syncData(resources = resources)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)) {
+                    throw HealthSyncForegroundLaunchRejectedException()
+                }
+                partialFailureResult(workManager, existingStarterIds)?.let { return it }
+                throw error
             }
+            launchRejected = VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+            partialFailureResult(workManager, existingStarterIds)?.let { return it }
+        } catch (error: CancellationException) {
             throw error
         } finally {
             withContext(NonCancellable) {
@@ -225,6 +263,7 @@ class JunctionHealthSyncService(
             }
         }
         if (launchRejected) throw HealthSyncForegroundLaunchRejectedException()
+        return HealthSyncAttemptResult.Complete
     }
 
     override fun grantedResourceCount(): Int =
@@ -283,6 +322,19 @@ class JunctionHealthSyncService(
             "Vital health workers were not terminal before identity teardown"
         }
         VitalHealthWorkerLease.awaitNoActiveExecutions()
+    }
+
+    private suspend fun partialFailureResult(
+        workManager: WorkManager,
+        existingStarterIds: Set<java.util.UUID>,
+    ): HealthSyncAttemptResult.PartialFailure? {
+        val failedResources = newVitalStarterFailedResources(
+            workInfos = workManager.getWorkInfosForUniqueWork(vitalResourceSyncStarter).await(),
+            existingIds = existingStarterIds,
+        ) ?: return null
+        return HealthSyncAttemptResult.PartialFailure(
+            failedResources.flatMapTo(linkedSetOf(), ::backendResourceKeysFor),
+        )
     }
 }
 

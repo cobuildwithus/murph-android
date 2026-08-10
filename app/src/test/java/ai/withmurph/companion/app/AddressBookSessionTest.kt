@@ -18,6 +18,7 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.HealthSyncing
+import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.InitialOnboarding
@@ -1851,10 +1852,13 @@ class AddressBookSessionTest {
             grantedCount = totalResourceCount
         }
         override suspend fun refreshPermissionState() = Unit
-        override suspend fun syncAllGrantedResources(expectedMemberKey: String) {
+        override suspend fun syncAllGrantedResources(
+            expectedMemberKey: String,
+        ): HealthSyncAttemptResult {
             syncCalls += 1
             syncEntered.complete(Unit)
             syncGate?.await()
+            return HealthSyncAttemptResult.Complete
         }
         override suspend fun revokeActiveSyncAuthorization() = Unit
         override suspend fun signOutSdk() {

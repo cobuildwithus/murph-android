@@ -155,6 +155,37 @@ data class CompanionSyncStatus(
     data class ResourceStatus(val lastReceivedAt: Instant?)
 }
 
+data class PendingHealthSyncFailure(
+    val resourceKeys: Set<String>,
+    val receiptFloorAt: InstantValue,
+) {
+    init {
+        require(resourceKeys.isNotEmpty())
+        require(resourceKeys.all { HEALTH_RESOURCE_KEY.matches(it) })
+    }
+
+    fun isConfirmedBy(status: CompanionSyncStatus): Boolean {
+        val floor = Instant.ofEpochMilli(receiptFloorAt.epochMilliseconds)
+        return resourceKeys.all { resourceKey ->
+            status.resources[resourceKey]?.lastReceivedAt?.isAfter(floor) == true
+        }
+    }
+
+    private companion object {
+        val HEALTH_RESOURCE_KEY = Regex("[a-z0-9_]{1,64}")
+    }
+}
+
+sealed interface HealthSyncAttemptResult {
+    data object Complete : HealthSyncAttemptResult
+
+    data class PartialFailure(val resourceKeys: Set<String>) : HealthSyncAttemptResult {
+        init {
+            require(resourceKeys.isNotEmpty())
+        }
+    }
+}
+
 data class LaunchConsentDocument(
     val id: String,
     val title: String,

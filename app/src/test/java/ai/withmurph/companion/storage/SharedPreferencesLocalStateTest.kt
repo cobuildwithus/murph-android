@@ -5,6 +5,7 @@ import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.core.PendingHealthSyncFailure
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -12,6 +13,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SharedPreferencesLocalStateTest {
+    @Test
+    fun partialHealthSyncFailureIsRestartStableAndClearedWithHealthAuthority() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "member-key"
+        state.healthAccessRequestedAt = InstantValue(100)
+        val failure = PendingHealthSyncFailure(
+            resourceKeys = setOf("activity", "sleep"),
+            receiptFloorAt = InstantValue(200),
+        )
+
+        assertTrue(state.recordPendingHealthSyncFailure(failure))
+        assertEquals(
+            failure,
+            SharedPreferencesLocalState(preferences.recreated()).pendingHealthSyncFailure,
+        )
+
+        assertTrue(state.revokeHealthSetupAuthorization())
+        assertNull(
+            SharedPreferencesLocalState(preferences.recreated()).pendingHealthSyncFailure,
+        )
+    }
+
     @Test
     fun initialSetupStepUsesStableValuesAndSurvivesReconstruction() {
         val preferences = FaultInjectedPreferences()

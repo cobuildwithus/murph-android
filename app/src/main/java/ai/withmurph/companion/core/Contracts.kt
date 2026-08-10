@@ -130,7 +130,7 @@ interface HealthSyncing {
 
     suspend fun connectAfterPermissionRequest()
     suspend fun refreshPermissionState()
-    suspend fun syncAllGrantedResources(expectedMemberKey: String)
+    suspend fun syncAllGrantedResources(expectedMemberKey: String): HealthSyncAttemptResult
     suspend fun revokeActiveSyncAuthorization()
     suspend fun signOutSdk()
 }
@@ -154,6 +154,8 @@ interface LocalState {
     var lastKnownDataReceivedAt: InstantValue?
     var lastKnownStatusObservedAt: InstantValue?
     var healthReconnectRequired: Boolean
+    val pendingHealthSyncFailure: PendingHealthSyncFailure?
+        get() = null
     val healthSyncReminderDeadline: HealthSyncReminderDeadline?
         get() = null
     val signOutPending: Boolean
@@ -180,6 +182,8 @@ interface LocalState {
         memberKey: String,
         deadline: HealthSyncReminderDeadline,
     ): Boolean = false
+    fun recordPendingHealthSyncFailure(failure: PendingHealthSyncFailure): Boolean = false
+    fun clearPendingHealthSyncFailure(): Boolean = pendingHealthSyncFailure == null
 
     fun recordAddressBookRevision(revision: Int): Boolean = false
     fun recordDisabledAddressBookRevision(revision: Int): Boolean = false

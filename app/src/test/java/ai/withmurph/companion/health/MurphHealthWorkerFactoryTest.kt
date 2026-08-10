@@ -163,6 +163,32 @@ class MurphHealthWorkerFactoryTest {
     }
 
     @Test
+    fun partialFailureOutputPreservesExactBackendResourceOwners() {
+        val failed = setOf(
+            VitalResource.Activity,
+            VitalResource.Sleep,
+            VitalResource.Temperature,
+        )
+
+        assertEquals(
+            failed,
+            vitalFailedResources(vitalFailedResourcesOutputData(failed)),
+        )
+        assertEquals(setOf("activity"), backendResourceKeysFor(VitalResource.Activity))
+        assertEquals(setOf("sleep"), backendResourceKeysFor(VitalResource.Sleep))
+        assertEquals(
+            setOf("body_temperature", "basal_body_temperature"),
+            backendResourceKeysFor(VitalResource.Temperature),
+        )
+        assertEquals(
+            healthConnectReadResources,
+            healthConnectReadResources.filterTo(linkedSetOf()) {
+                backendResourceKeysFor(it).isNotEmpty()
+            },
+        )
+    }
+
+    @Test
     fun dataSyncStarterPreservesThePinnedVitalInputContract() {
         val starterData = Data.Builder()
             .putStringArray(

@@ -27,6 +27,7 @@ private const val resourcesInputKey = "resources"
 private const val startForegroundInputKey = "startForeground"
 private const val resourceInputKey = "resource"
 private const val tagsInputKey = "tags"
+private const val failedResourcesOutputKey = "failedResources"
 
 internal fun vitalStarterResources(inputData: Data): Set<VitalResource>? =
     inputData.getStringArray(resourcesInputKey)
@@ -40,6 +41,31 @@ internal fun vitalResourceWorkerInputData(
     .putString(resourceInputKey, resource.toString())
     .putIntArray(tagsInputKey, tags)
     .build()
+
+internal fun vitalFailedResourcesOutputData(resources: Set<VitalResource>): Data =
+    Data.Builder()
+        .putStringArray(
+            failedResourcesOutputKey,
+            resources.map(VitalResource::toString).toTypedArray(),
+        )
+        .build()
+
+internal fun vitalFailedResources(outputData: Data): Set<VitalResource>? =
+    outputData.getStringArray(failedResourcesOutputKey)
+        ?.let { values ->
+            runCatching {
+                values.mapTo(linkedSetOf(), VitalResource::valueOf)
+            }.getOrNull()
+        }
+        ?.takeIf { it.isNotEmpty() }
+
+internal fun newVitalStarterFailedResources(
+    workInfos: List<WorkInfo>,
+    existingIds: Set<java.util.UUID>,
+): Set<VitalResource>? = workInfos
+    .filter { it.id !in existingIds && it.state == WorkInfo.State.FAILED }
+    .mapNotNull { vitalFailedResources(it.outputData) }
+    .singleOrNull()
 
 internal fun vitalDataSyncForegroundServiceType(): Int =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -123,7 +149,7 @@ internal class MurphVitalResourceSyncStarter(
         }.getOrElse { return Result.failure() }
         val workManager = WorkManager.getInstance(applicationContext)
 
-        var hadResourceFailure = false
+        val failedResources = linkedSetOf<VitalResource>()
         for (resource in resources.sortedBy(VitalResource::priority)) {
             if (!VitalHealthWorkerLease.isOpenFor(expectedMemberKey)) return Result.failure()
             val workName = vitalResourceSyncWorkerName(resource)
@@ -144,7 +170,7 @@ internal class MurphVitalResourceSyncStarter(
                 ) {
                     VitalResourceTerminalDecision.Continue -> Unit
                     VitalResourceTerminalDecision.ContinueAfterFailure -> {
-                        hadResourceFailure = true
+                        failedResources += resource
                     }
                     VitalResourceTerminalDecision.Stop -> return Result.failure()
                 }
@@ -155,7 +181,11 @@ internal class MurphVitalResourceSyncStarter(
                 throw error
             }
         }
-        return if (hadResourceFailure) Result.failure() else Result.success()
+        return if (failedResources.isEmpty()) {
+            Result.success()
+        } else {
+            Result.failure(vitalFailedResourcesOutputData(failedResources))
+        }
     }
 }
 
