@@ -2,9 +2,12 @@ package ai.withmurph.companion.health
 
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
+import io.tryvital.vitalhealthconnect.model.PermissionOutcome
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JunctionHealthSyncServiceTest {
@@ -131,6 +134,52 @@ class JunctionHealthSyncServiceTest {
                 grantedPermissions = emptySet(),
             ),
         )
+    }
+
+    @Test
+    fun notPromptedRetriesClassifyExistingGrantsWithoutBroadeningConsent() {
+        assertTrue(
+            permissionOutcomeAllowsCurrentGrantClassification(
+                PermissionOutcome.Success,
+            ),
+        )
+        assertTrue(
+            permissionOutcomeAllowsCurrentGrantClassification(
+                PermissionOutcome.NotPrompted,
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.Sleep),
+                grantedPermissions = setOf("android.permission.health.READ_SLEEP"),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingWorkoutBase,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf("android.permission.health.READ_POWER"),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.NoActiveResource,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun incompletePermissionOutcomesCannotAdvanceSetup() {
+        listOf(
+            PermissionOutcome.Cancelled,
+            PermissionOutcome.HealthConnectUnavailable,
+            PermissionOutcome.UnknownError(IllegalStateException("test failure")),
+        ).forEach { outcome ->
+            assertFalse(permissionOutcomeAllowsCurrentGrantClassification(outcome))
+        }
     }
 
     @Test

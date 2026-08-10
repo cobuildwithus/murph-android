@@ -105,6 +105,17 @@ internal fun healthPermissionRequestResult(
     }
 }
 
+/**
+ * Vital reports NotPrompted when a repeated request adds no new permission.
+ * That disposition does not erase grants from an earlier interaction, so both
+ * successful prompt dispositions must be followed by current-state discovery.
+ */
+internal fun permissionOutcomeAllowsCurrentGrantClassification(
+    outcome: PermissionOutcome,
+): Boolean =
+    outcome is PermissionOutcome.Success ||
+        outcome is PermissionOutcome.NotPrompted
+
 class JunctionHealthSyncService(
     context: Context,
     private val environment: AppEnvironment,
@@ -123,9 +134,10 @@ class JunctionHealthSyncService(
     suspend fun permissionRequestCompleted(
         outcome: Deferred<PermissionOutcome>,
     ): HealthPermissionRequestResult {
-        if (outcome.await() !is PermissionOutcome.Success) {
+        if (!permissionOutcomeAllowsCurrentGrantClassification(outcome.await())) {
             return HealthPermissionRequestResult.NoActiveResource
         }
+        manager.reloadPermissions()
         val grantedPermissions = HealthConnectClient.getOrCreate(appContext)
             .permissionController
             .getGrantedPermissions()

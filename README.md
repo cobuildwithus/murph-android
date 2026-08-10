@@ -179,7 +179,11 @@ permissions or Play declarations. The Android manifest declares the 29
 record-type read permissions required by this pinned set. Users still choose
 each category in the Health Connect system UI; denied categories remain
 unavailable and do not block categories the user approved. No write permission
-is requested.
+is requested. On a repeated permission request, Vital may report `NotPrompted`
+because the latest interaction added no category. Murph reloads and classifies
+the complete current grant set in that case, so an existing usable grant can
+resume setup without asking the member to broaden access. Cancellation,
+unavailability, and unknown permission failures still abort the attempt.
 
 Vital 5.0.2 scans all resources during permission reconciliation and its
 `remapped()` operation is an identity operation in this version. Murph pauses
