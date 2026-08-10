@@ -64,6 +64,9 @@
             <meta-data
                 android:name="androidx.work.WorkManagerInitializer"
                 tools:node="remove" />
+            <meta-data
+                android:name="io.tryvital.vitalhealthconnect.VitalHealthConnectInitializer"
+                tools:node="remove" />
         </provider>
 
         <receiver

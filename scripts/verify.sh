@@ -79,6 +79,10 @@ do
         echo "Merged manifest contains forbidden background or extended-history health entry points: $merged_manifest" >&2
         exit 1
     fi
+    if grep -Eq 'androidx\.work\.WorkManagerInitializer|io\.tryvital\.vitalhealthconnect\.VitalHealthConnectInitializer' "$merged_manifest"; then
+        echo "Merged manifest can bypass Murph's guarded WorkManager factory: $merged_manifest" >&2
+        exit 1
+    fi
     if ! grep -Fq 'android.permission.health.READ_STEPS' "$merged_manifest" ||
         ! grep -Fq 'android.permission.health.READ_ACTIVE_CALORIES_BURNED' "$merged_manifest"; then
         echo "Merged manifest dropped a shipped activity permission: $merged_manifest" >&2

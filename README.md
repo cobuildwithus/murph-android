@@ -188,12 +188,18 @@ explicit foreground sync, it retires any pinned durable starter/resource work,
 opens Vital's manual gate without invoking the SDK setter that schedules an
 all-granted worker, and sends only the configured-and-granted intersection.
 The process-local member lease starts closed, opens only after the existing
-current-member/backend preflight, and remains open until every exact worker is
-terminal; a headless restarted process therefore cannot infer permission to
-upload from durable preferences. WorkManager 2.11.2 substitutes a Murph-owned
-`dataSync` umbrella for Vital 5.0.2's three-minute `shortService` starter while
-retaining Vital's real per-resource readers, uploaders, input contract,
-notification, and unique work names.
+current-member/backend preflight, and starts as launch-only authority. Leaving
+the foreground before WorkManager promotion rejects that launch and shows a
+specific **Sync now** retry; once promotion succeeds, the visible transfer may
+finish after the Activity backgrounds. The lease remains open until every exact
+worker is terminal, so a headless restarted process cannot infer permission to
+upload from durable preferences. Both WorkManager's default Startup metadata and
+Vital's dependent initializer are removed; the Junction adapter initializes
+WorkManager through `MurphApplication`'s guarded configuration before creating
+the Vital manager. WorkManager 2.11.2 then substitutes a Murph-owned `dataSync`
+umbrella for Vital 5.0.2's three-minute `shortService` starter while retaining
+Vital's real per-resource readers, uploaders, input contract, notification, and
+unique work names.
 An empty intersection is a no-op. Shared permissions can activate multiple SDK
 resources, so the app declares the relevant aggregate owners explicitly. When
 no usable resource is active, a workout or reproductive detail without its
@@ -254,8 +260,10 @@ message.
   and the adapter opens its manual gate only for that explicit configured-resource
   call. An on-demand WorkManager factory rejects new or restarted Vital workers
   without a member, completed setup, clear sign-out state, and a process-local
-  lease for the exact backend-validated member. A failed
-  commit rolls back the live Junction identity. The SDK's reachable
+  lease for the exact backend-validated member. Vital's Startup initializer is
+  also removed because it depends on the default WorkManager initializer; the
+  adapter obtains the guarded on-demand WorkManager instance before creating the
+  Vital manager. A failed commit rolls back the live Junction identity. The SDK's reachable
   backfill is already limited to 30 days, so setup does not request an
   extended-history grant.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
@@ -274,6 +282,10 @@ message.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
 - Every app-triggered foreground sync revalidates the current Privy member and
   backend consent before Junction can read or upload health data.
+- The process lease authorizes foreground-service launch only while Murph remains
+  foreground. If the member leaves before promotion, no resource worker starts
+  and the app asks them to return and tap **Sync now**. After promotion succeeds,
+  the existing visible `dataSync` transfer may finish normally in the background.
 - When the backend returns structured launch consent required, Murph keeps the
   Privy member session, signs out only the local Junction SDK, strictly loads
   same-origin HTTPS legal and health-data documents in native UI, and posts at
@@ -347,8 +359,10 @@ Before a Play release:
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
 4. Inspect the exact signed AAB and prove Junction's boot receiver and exact-alarm service remain removed.
 5. Verify the `dataSync` foreground transfer and notification on Android 13–16, including a real run beyond three minutes without a `shortService` timeout or ANR.
-6. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
-7. Verify Contacts grant, denial, permanent denial, app-settings recovery,
+6. On API 31–36, block immediately before promotion and press Home: prove no resource read begins and return shows the **Sync now** retry. Repeat after promotion and prove the visible transfer completes.
+7. On API 28–30, reconstruct exact Vital work in a headless process after a committed teardown tombstone and prove Murph's rejecting factory—not Vital's original starter—runs.
+8. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
+9. Verify Contacts grant, denial, permanent denial, app-settings recovery,
    permission revocation cleanup, compare-and-swap conflict handling, and Stop
    deletion on at least one Pixel and one Samsung device.
 

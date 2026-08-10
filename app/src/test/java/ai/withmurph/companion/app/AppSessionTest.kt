@@ -15,6 +15,7 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
@@ -3057,7 +3058,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun backgroundWhilePostCommitSyncWaitsForHealthOwnerDefersItUntilForeground() = runTest {
+    fun backgroundCancelsQueuedPostCommitSyncUntilForeground() = runTest {
         val fixture = fixture()
         fixture.session.start()
         assertTrue(fixture.session.prepareHealthConnection())
@@ -3087,9 +3088,9 @@ class AppSessionTest {
         assertTrue(completion.await())
 
         assertTrue(fixture.localState.healthAccessRequestedAt != null)
-        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(0, fixture.health.syncCalls)
         fixture.session.didBecomeActive()
-        assertEquals(2, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.syncCalls)
     }
 
     @Test
@@ -4528,6 +4529,42 @@ class AppSessionTest {
         assertEquals(2, fixture.health.syncCalls)
         assertEquals(4, fixture.api.statusSources.size)
         assertFalse(fixture.session.state.value.healthStatusIsStale)
+    }
+
+    @Test
+    fun backgroundBeforeWorkerPromotionRequiresAnExplicitForegroundRetry() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.syncResourceCount = 2
+        fixture.health.syncResourceStarts = 0
+        fixture.health.syncGate = CompletableDeferred()
+        fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.rejectSyncLaunchOnBackground = true
+
+        val sync = async { fixture.session.syncNow() }
+        fixture.health.syncEntered.await()
+        fixture.session.didEnterBackground()
+        sync.await()
+
+        assertEquals(1, fixture.health.revokeUnpromotedSyncLaunchCalls)
+        assertEquals(1, fixture.health.syncResourceStarts)
+        assertEquals(
+            "Health sync didn't start before Murph left the foreground. " +
+                "Return to Murph and tap Sync now.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        val syncCallsAfterRejection = fixture.health.syncCalls
+        fixture.health.rejectSyncLaunchOnBackground = false
+        fixture.health.syncError = null
+        fixture.session.didBecomeActive()
+
+        assertEquals(syncCallsAfterRejection, fixture.health.syncCalls)
+        assertNotNull(fixture.session.state.value.healthMessage)
+
+        fixture.session.syncNow()
+
+        assertEquals(syncCallsAfterRejection + 1, fixture.health.syncCalls)
+        assertNull(fixture.session.state.value.healthMessage)
     }
 
     @Test
@@ -7038,7 +7075,7 @@ class AppSessionTest {
         assertEquals(1, fixture.api.intents.size)
         assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
         assertEquals(0, fixture.api.statusSources.size)
-        assertEquals(2, fixture.health.refreshCalls)
+        assertEquals(1, fixture.health.refreshCalls)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
         assertEquals(0, fixture.session.state.value.grantedResourceCount)
@@ -8134,6 +8171,8 @@ class AppSessionTest {
         val syncMemberKeys = mutableListOf<String>()
         var syncResourceCount = 1
         var syncResourceStarts = 0
+        var revokeUnpromotedSyncLaunchCalls = 0
+        var rejectSyncLaunchOnBackground = false
         var revokeActiveSyncCalls = 0
         var refreshCalls = 0
         var signOutCalls = 0
@@ -8189,6 +8228,15 @@ class AppSessionTest {
             configureError?.let { throw it }
         }
         override fun grantedResourceCount(): Int = grantedCount
+
+        override fun revokeUnpromotedSyncLaunch() {
+            revokeUnpromotedSyncLaunchCalls += 1
+            if (rejectSyncLaunchOnBackground && activeSyncAuthorized) {
+                activeSyncAuthorized = false
+                syncError = HealthSyncForegroundLaunchRejectedException()
+                syncGate?.complete(Unit)
+            }
+        }
 
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             assertTrue(memberKey.isNotBlank())
@@ -8258,8 +8306,8 @@ class AppSessionTest {
             events += "sync"
             activeSyncAuthorized = true
             try {
-                repeat(syncResourceCount) { resourceIndex ->
-                    if (!signedIn || !activeSyncAuthorized) return
+                for (resourceIndex in 0 until syncResourceCount) {
+                    if (!signedIn || !activeSyncAuthorized) break
                     syncResourceStarts += 1
                     if (resourceIndex == 0) {
                         syncEntered.complete(Unit)

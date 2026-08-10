@@ -14,7 +14,7 @@ class MurphHealthWorkerFactoryTest {
 
     @After
     fun closeTestLease() {
-        VitalHealthWorkerLease.closeFor(testMemberKey)
+        VitalHealthWorkerLease.close()
     }
 
     @Test
@@ -86,6 +86,26 @@ class MurphHealthWorkerFactoryTest {
         assertFalse(VitalHealthWorkerLease.isOpenFor("did:privy:another-member"))
         VitalHealthWorkerLease.closeFor(testMemberKey)
         assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
+    }
+
+    @Test
+    fun backgroundRevokesOnlyAnUnpromotedLaunch() {
+        VitalHealthWorkerLease.openFor(testMemberKey)
+        assertTrue(VitalHealthWorkerLease.isLaunchAuthorizedFor(testMemberKey))
+
+        VitalHealthWorkerLease.rejectUnpromoted()
+
+        assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
+        assertTrue(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
+
+        VitalHealthWorkerLease.closeFor(testMemberKey)
+        VitalHealthWorkerLease.openFor(testMemberKey)
+        assertTrue(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
+
+        VitalHealthWorkerLease.rejectUnpromoted()
+
+        assertTrue(VitalHealthWorkerLease.isOpenFor(testMemberKey))
+        assertFalse(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
     }
 
     @Test

@@ -73,21 +73,34 @@ internal class MurphVitalResourceSyncStarter(
                 )
                 .build(),
         )
-        if (
-            !ProcessLifecycleOwner.get().lifecycle.currentState
-                .isAtLeast(Lifecycle.State.CREATED)
-        ) return Result.failure()
-
         val notification = VitalHealthConnectManager
             .syncNotificationBuilder(applicationContext)
             .build(applicationContext, resources)
-        setForeground(
-            ForegroundInfo(
-                syncNotificationId,
-                notification,
-                vitalDataSyncForegroundServiceType(),
-            ),
-        )
+        if (
+            !ProcessLifecycleOwner.get().lifecycle.currentState
+                .isAtLeast(Lifecycle.State.STARTED) ||
+            !VitalHealthWorkerLease.isLaunchAuthorizedFor(expectedMemberKey)
+        ) {
+            VitalHealthWorkerLease.rejectUnpromotedFor(expectedMemberKey)
+            return Result.failure()
+        }
+        try {
+            setForeground(
+                ForegroundInfo(
+                    syncNotificationId,
+                    notification,
+                    vitalDataSyncForegroundServiceType(),
+                ),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            VitalHealthWorkerLease.rejectUnpromotedFor(expectedMemberKey)
+            return Result.failure()
+        }
+        if (!VitalHealthWorkerLease.markPromotedFor(expectedMemberKey)) {
+            return Result.failure()
+        }
 
         val tags = inputData.getIntArray(tagsInputKey) ?: intArrayOf()
         val workerClass = runCatching {

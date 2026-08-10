@@ -16,6 +16,7 @@ import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
@@ -66,6 +67,7 @@ class AppSession(
     private var foregroundGeneration = 0
     private var lastStartedHealthSyncSequence = 0L
     private var lastCompletedValidatedHealthSyncSequence = 0L
+    private var healthSyncLaunchRejected = false
     private var sessionEpoch = 0
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
@@ -1872,7 +1874,13 @@ class AppSession(
         }
     }
 
-    suspend fun syncNow() = syncNow(foregroundClaim = null, acceptedConsentOwner = null)
+    suspend fun syncNow() {
+        healthSyncLaunchRejected = false
+        syncNow(
+            foregroundClaim = currentForegroundHealthClaim(),
+            acceptedConsentOwner = null,
+        )
+    }
 
     private suspend fun syncNow(
         foregroundClaim: ForegroundRefreshClaim?,
@@ -1885,11 +1893,15 @@ class AppSession(
             _state.value.phase != AppPhase.Ready ||
             !healthWasRequested()
         ) return
-        if (!_state.value.authVerifiedOnline) {
-            reconcile(force = true, foregroundClaim, acceptedConsentOwner)
+        if (health.grantedResourceCount() == 0) {
+            publishPermissionAwareHealthState(
+                status = cachedHealthStatus(),
+                message = _state.value.healthMessage,
+                healthStatusIsStale = false,
+            )
             return
         }
-        if (!health.isSignedIn()) {
+        if (!_state.value.authVerifiedOnline) {
             reconcile(force = true, foregroundClaim, acceptedConsentOwner)
             return
         }
@@ -1907,6 +1919,10 @@ class AppSession(
                 message = _state.value.healthMessage,
                 healthStatusIsStale = false,
             )
+            return
+        }
+        if (!health.isSignedIn()) {
+            reconcile(force = true, foregroundClaim, acceptedConsentOwner)
             return
         }
         var authoritativeLocalAuth: AuthSessionState? = null
@@ -2050,6 +2066,7 @@ class AppSession(
             if (
                 ownsForegroundRefresh(foregroundClaim) &&
                 authAllowsSync &&
+                !healthSyncLaunchRejected &&
                 healthWasRequestedAtClaim &&
                 _state.value.phase == AppPhase.Ready &&
                 healthWasRequested() &&
@@ -2226,6 +2243,7 @@ class AppSession(
     }
 
     fun didEnterBackground() {
+        health.revokeUnpromotedSyncLaunch()
         foregroundGeneration += 1
         needsForegroundRefresh = true
     }
@@ -3094,12 +3112,22 @@ class AppSession(
                 syncSucceeded = true
             } catch (error: CancellationException) {
                 throw error
+            } catch (_: HealthSyncForegroundLaunchRejectedException) {
+                healthSyncLaunchRejected = true
+                _state.update { current ->
+                    current.copy(healthMessage = HEALTH_FOREGROUND_SYNC_RETRY_MESSAGE)
+                }
+                return false
             } catch (_: Exception) {
-                if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
+                if (!ownsVerifiedHealthWork(epoch)) return false
                 if (!health.isSignedIn()) return true
                 // Status refresh below still reports the last backend-confirmed receipt.
             }
-            if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
+            // A successfully promoted foreground transfer may finish after the
+            // Activity backgrounds. From this point forward, retain only member,
+            // session, phase, and authentication ownership; do not require the
+            // launch generation that guarded entry into the worker chain.
+            if (!ownsVerifiedHealthWork(epoch)) return false
             if (!health.isSignedIn()) return true
             if (
                 fetchValidatedHealthStatus(
@@ -3109,7 +3137,7 @@ class AppSession(
                     onConsentRequired,
                 ) == null
             ) return false
-            if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
+            if (!ownsVerifiedHealthWork(epoch)) return false
             if (!health.isSignedIn()) return true
             if (syncSucceeded) {
                 lastCompletedValidatedHealthSyncSequence = syncSequence
@@ -4892,7 +4920,10 @@ class AppSession(
             LaunchConsentFollowUp.Reconcile ->
                 reconcile(force = true, acceptedConsentOwner = pending)
             LaunchConsentFollowUp.SyncHealth ->
-                syncNow(foregroundClaim = null, acceptedConsentOwner = pending)
+                syncNow(
+                    foregroundClaim = currentForegroundHealthClaim(),
+                    acceptedConsentOwner = pending,
+                )
             LaunchConsentFollowUp.PrepareHealthPermission ->
                 prepareHealthConnection(pending)
             is LaunchConsentFollowUp.PrepareAddressBookPermission ->
@@ -5877,6 +5908,7 @@ class AppSession(
             ownsAcceptedConsentContinuation(it)
         }
         sessionEpoch += 1
+        healthSyncLaunchRejected = false
         preservedConsentOwner?.let { pending ->
             synchronized(pending) {
                 pending.epoch = sessionEpoch
@@ -5970,6 +6002,12 @@ class AppSession(
         val generation: Int,
         val sessionEpoch: Int,
         val healthSyncSequenceAtEntry: Long,
+    )
+
+    private fun currentForegroundHealthClaim() = ForegroundRefreshClaim(
+        generation = foregroundGeneration,
+        sessionEpoch = sessionEpoch,
+        healthSyncSequenceAtEntry = lastStartedHealthSyncSequence,
     )
 
     private sealed interface JunctionIdentificationResult {
@@ -6116,6 +6154,8 @@ class AppSession(
             "Murph couldn't verify current Health Connect permissions. Saved status is still shown."
         const val HEALTH_RECONNECT_REQUIRED_MESSAGE =
             "Health Connect needs to reconnect before syncing can resume."
+        const val HEALTH_FOREGROUND_SYNC_RETRY_MESSAGE =
+            "Health sync didn't start before Murph left the foreground. Return to Murph and tap Sync now."
     }
 
     private fun signInTokenRequest(intent: ConnectionIntent?): SignInTokenRequest =

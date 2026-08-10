@@ -7,6 +7,7 @@ import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.JunctionExternalUserId
 import io.tryvital.client.AuthenticateRequest
@@ -16,6 +17,7 @@ import io.tryvital.vitalhealthconnect.model.PermissionOutcome
 import io.tryvital.vitalhealthcore.model.ConnectionPolicy
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -109,7 +111,7 @@ class JunctionHealthSyncService(
     private val backfillDays: Int = 30,
 ) : HealthSyncing {
     private val appContext = context.applicationContext
-    private val manager = VitalHealthConnectManager.getOrCreate(appContext)
+    private val manager = createVitalManagerAfterGuardedWorkManager(appContext)
 
     override val totalResourceCount: Int = healthConnectReadResources.size
 
@@ -189,9 +191,18 @@ class JunctionHealthSyncService(
         )
         if (resources.isEmpty()) return
         VitalHealthWorkerLease.openFor(expectedMemberKey)
+        var launchRejected = false
         try {
             setManualSyncPaused(false)
             manager.syncData(resources = resources)
+            launchRejected = VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)) {
+                throw HealthSyncForegroundLaunchRejectedException()
+            }
+            throw error
         } finally {
             withContext(NonCancellable) {
                 try {
@@ -201,12 +212,17 @@ class JunctionHealthSyncService(
                 }
             }
         }
+        if (launchRejected) throw HealthSyncForegroundLaunchRejectedException()
     }
 
     override fun grantedResourceCount(): Int =
         configuredHealthConnectReadResources(
             manager.resourcesWithReadPermission(),
         ).size
+
+    override fun revokeUnpromotedSyncLaunch() {
+        VitalHealthWorkerLease.rejectUnpromoted()
+    }
 
     override suspend fun revokeActiveSyncAuthorization() {
         VitalHealthWorkerLease.close()
@@ -252,6 +268,16 @@ class JunctionHealthSyncService(
             "Vital health workers were not terminal before identity teardown"
         }
     }
+}
+
+private fun createVitalManagerAfterGuardedWorkManager(
+    appContext: Context,
+): VitalHealthConnectManager {
+    // Vital 5.0.2's Startup initializer depends on WorkManagerInitializer and is
+    // removed from the manifest. This on-demand call must install the
+    // MurphApplication Configuration.Provider before the Vital manager exists.
+    WorkManager.getInstance(appContext)
+    return VitalHealthConnectManager.getOrCreate(appContext)
 }
 
 internal fun ProviderAvailability.toAppAvailability(): HealthConnectAvailability = when (this) {

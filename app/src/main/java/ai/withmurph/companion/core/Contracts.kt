@@ -121,6 +121,7 @@ interface HealthSyncing {
     fun pauseAutomaticSync()
     fun configure()
     fun grantedResourceCount(): Int
+    fun revokeUnpromotedSyncLaunch()
 
     suspend fun identify(
         memberKey: String,
@@ -133,6 +134,8 @@ interface HealthSyncing {
     suspend fun revokeActiveSyncAuthorization()
     suspend fun signOutSdk()
 }
+
+class HealthSyncForegroundLaunchRejectedException : Exception()
 
 enum class HealthPermissionRequestResult {
     Ready,

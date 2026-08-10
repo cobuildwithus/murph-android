@@ -24,24 +24,84 @@ internal val vitalHealthWorkerClasses = setOf(
  * from stale preferences alone.
  */
 internal object VitalHealthWorkerLease {
-    private val memberKey = AtomicReference<String?>(null)
+    private enum class Stage {
+        LaunchAuthorized,
+        Promoted,
+        LaunchRejected,
+    }
+
+    private data class Lease(
+        val memberKey: String,
+        val stage: Stage,
+    )
+
+    private val lease = AtomicReference<Lease?>(null)
 
     fun openFor(expectedMemberKey: String) {
         require(expectedMemberKey.isNotBlank())
-        check(memberKey.compareAndSet(null, expectedMemberKey)) {
+        check(
+            lease.compareAndSet(
+                null,
+                Lease(expectedMemberKey, Stage.LaunchAuthorized),
+            ),
+        ) {
             "A Vital health worker lease is already open"
         }
     }
 
-    fun isOpenFor(expectedMemberKey: String?): Boolean =
-        expectedMemberKey != null && memberKey.get() == expectedMemberKey
+    fun isOpenFor(expectedMemberKey: String?): Boolean {
+        val current = lease.get()
+        return expectedMemberKey != null &&
+            current?.memberKey == expectedMemberKey &&
+            current.stage != Stage.LaunchRejected
+    }
+
+    fun isLaunchAuthorizedFor(expectedMemberKey: String): Boolean =
+        lease.get() == Lease(expectedMemberKey, Stage.LaunchAuthorized)
+
+    fun markPromotedFor(expectedMemberKey: String): Boolean {
+        while (true) {
+            val current = lease.get() ?: return false
+            if (
+                current.memberKey != expectedMemberKey ||
+                current.stage != Stage.LaunchAuthorized
+            ) return false
+            if (lease.compareAndSet(current, current.copy(stage = Stage.Promoted))) return true
+        }
+    }
+
+    fun rejectUnpromotedFor(expectedMemberKey: String) {
+        while (true) {
+            val current = lease.get() ?: return
+            if (
+                current.memberKey != expectedMemberKey ||
+                current.stage != Stage.LaunchAuthorized
+            ) return
+            if (lease.compareAndSet(current, current.copy(stage = Stage.LaunchRejected))) return
+        }
+    }
+
+    fun rejectUnpromoted() {
+        while (true) {
+            val current = lease.get() ?: return
+            if (current.stage != Stage.LaunchAuthorized) return
+            if (lease.compareAndSet(current, current.copy(stage = Stage.LaunchRejected))) return
+        }
+    }
+
+    fun wasLaunchRejectedFor(expectedMemberKey: String): Boolean =
+        lease.get() == Lease(expectedMemberKey, Stage.LaunchRejected)
 
     fun closeFor(expectedMemberKey: String) {
-        memberKey.compareAndSet(expectedMemberKey, null)
+        while (true) {
+            val current = lease.get() ?: return
+            if (current.memberKey != expectedMemberKey) return
+            if (lease.compareAndSet(current, null)) return
+        }
     }
 
     fun close() {
-        memberKey.set(null)
+        lease.set(null)
     }
 }
 

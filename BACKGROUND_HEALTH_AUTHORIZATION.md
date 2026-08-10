@@ -69,6 +69,15 @@ terminal. The factory requires that lease again when constructing Vital's real
 per-resource worker. Process death resets the lease closed, so WorkManager
 reconstruction rejects the durable request.
 
+Vital's discoverable Startup initializer is also excluded: it declares
+`WorkManagerInitializer` as a dependency and would otherwise initialize the
+default factory before `MurphApplication`'s configuration could take effect.
+The adapter obtains the on-demand WorkManager instance through that guarded
+configuration before creating the Vital manager. The lease starts in a
+launch-authorized state, becomes promoted only after `setForeground` succeeds,
+and is rejected if the Activity backgrounds first. A promoted visible transfer
+may continue; an unpromoted request cannot reach a resource reader.
+
 That design intentionally cannot authorize an alarm, boot, or other unattended
 entry point: no live foreground member/backend preflight exists to open the
 lease. Making the lease durable would recreate the stale-authority gap this
@@ -77,10 +86,11 @@ boundary is designed to close.
 ## Current enforcement
 
 The application manifest removes Vital's `SyncBroadcastReceiver`,
-`SyncOnExactAlarmService`, and inherited `RECEIVE_BOOT_COMPLETED` permission.
-It does not request `READ_HEALTH_DATA_IN_BACKGROUND`. `scripts/verify.sh`
-builds both variants, inspects each merged manifest, and fails if those entry
-points or permissions reappear.
+`SyncOnExactAlarmService`, discoverable Startup initializer, and inherited
+`RECEIVE_BOOT_COMPLETED` permission, as well as WorkManager's default
+initializer. It does not request `READ_HEALTH_DATA_IN_BACKGROUND`.
+`scripts/verify.sh` builds both variants, inspects each merged manifest, and
+fails if those entry points, initializers, or permissions reappear.
 
 Foreground app entry, foreground return, and **Sync now** remain the only sync
 owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
@@ -90,9 +100,11 @@ Vital synchronization paused across permission and connect flows and unpauses
 only inside an explicit foreground call. Its default-closed process lease and
 authorization-aware factory reject reconstructed work, while its `dataSync`
 starter preserves Vital's real per-resource readers and uploaders. Teardown
-fences new app-owned health work, drains the current foreground chain under the
-session's health mutex, and only then crosses the Junction identity, member, or
-consent boundary.
+fences new app-owned health work, cancels and proves the current foreground chain
+terminal, and only then crosses the Junction identity, member, or consent
+boundary. Backgrounding before foreground-service promotion rejects the launch
+and leaves an explicit foreground retry; backgrounding after promotion does not
+interrupt the visible transfer.
 
 ## Smallest future unlock
 
