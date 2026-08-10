@@ -39,6 +39,10 @@ internal object VitalHealthWorkerLease {
     fun closeFor(expectedMemberKey: String) {
         memberKey.compareAndSet(expectedMemberKey, null)
     }
+
+    fun close() {
+        memberKey.set(null)
+    }
 }
 
 internal fun vitalHealthWorkerIsAuthorized(

@@ -195,12 +195,14 @@ upload from durable preferences. WorkManager 2.11.2 substitutes a Murph-owned
 retaining Vital's real per-resource readers, uploaders, input contract,
 notification, and unique work names.
 An empty intersection is a no-op. Shared permissions can activate multiple SDK
-resources, so the app declares the relevant aggregate owners explicitly. If a
-member selects a workout or reproductive detail without its required aggregate
-base, the app names the missing Workouts or Menstruation grant instead of
-silently accepting an unusable selection. Actual source availability and backend
-receipt remain physical-device release gates; this permission surface does not
-claim that every source exports or Murph ingests every requested category.
+resources, so the app declares the relevant aggregate owners explicitly. When
+no usable resource is active, a workout or reproductive detail without its
+required aggregate base names the missing Workouts or Menstruation grant instead
+of silently accepting an unusable detail-only selection. An orphan detail does
+not block a separate configured resource that is already usable. Actual source
+availability and backend receipt remain physical-device release gates; this
+permission surface does not claim that every source exports or Murph ingests
+every requested category.
 
 Junction/Vital Android 5.0.2 hard-clamps backfill to the ordinary 30-day Health
 Connect read window, so the app does not request broader history access with no
@@ -288,6 +290,11 @@ message.
   permission launch before the Activity is resumed.
 - Returning from a consent document or account-control page reloads consent and
   rechecks the Privy member/account boundary before any paused action resumes.
+- **Delete Account** first records a durable local stop boundary, revokes the
+  active process lease, cancels and awaits every exact Vital work chain, signs
+  out Junction, and clears local member/setup authority before opening the HTTPS
+  deletion resource. If the web flow is abandoned, foreground return must pass
+  fresh backend admission and setup before any health sync can resume.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
@@ -295,9 +302,10 @@ message.
   account verification is temporarily unavailable.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
-- Signing out atomically records a durable pending-sign-out tombstone and
-  invalidates health restoration before waiting on other app work. Startup
-  finishes Junction-first, Privy-second teardown before any session restore.
+- Signing out atomically records a durable pending-sign-out tombstone, revokes
+  the active process lease, and cancels the exact health work before crossing
+  Junction and Privy identity boundaries. Startup finishes Junction-first,
+  Privy-second teardown before any session restore.
 - A failed preferences commit restores the pre-call live authorization snapshot,
   so an undurable tombstone or marker removal cannot drive SDK work.
 - Address-book Settings state comes from

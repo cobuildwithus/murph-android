@@ -31,9 +31,9 @@ The source manifest declares 29 Health Connect record-type read permissions cove
 - Contact reads are foreground, explicit, bounded, and replace a server-side projection; Stop requests server-side deletion.
 - Health access is read-only and starts only after the member launches the system permission flow. SDK app-start sync and the Vital boot/exact-alarm components are removed from this release. Vital synchronization stays paused before permission, through `connect()`, and outside app-owned foreground sync calls; those calls use only the configured-and-granted intersection. Their visible WorkManager notification runs under `android.permission.FOREGROUND_SERVICE_DATA_SYNC`, a platform service type for the explicit device-to-cloud transfer, not background Health Connect read authority.
 - The complete resource list is authored explicitly and checked against `VitalResource.values()`. A future SDK resource addition therefore fails review-time tests rather than silently broadening permissions.
-- Sign-out and member switching revoke durable local health authorization and tear down Junction before Privy logout.
+- Sign-out and member switching durably fence new health work, revoke the live process lease, cancel and await exact Vital work, and tear down Junction before Privy logout.
 - Initial-onboarding drafts stay in memory. The server receives only the selected avatar ID for contact-card preparation and the saved persona, supporting-persona, voice, and tone IDs; skip sends no preferences.
-- Settings exposes a **Delete Account** action that opens the configured HTTPS deletion resource. Source inspection proves the path exists, not that the external resource completes account and associated-data deletion.
+- Settings exposes a **Delete Account** action that completes the same local health-work and Junction teardown before opening the configured HTTPS deletion resource. Privy remains available for that web request, but local member/setup authority is cleared and an abandoned flow requires fresh backend admission before health work. Source inspection proves these local boundaries and the path exist, not that the external resource completes account and associated-data deletion.
 
 These facts do not prove the backend's encryption at rest, retention schedule, deletion completion, or each SDK's diagnostic/analytics collection.
 

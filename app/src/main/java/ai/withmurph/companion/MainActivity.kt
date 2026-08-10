@@ -232,7 +232,15 @@ class MainActivity : ComponentActivity() {
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
                         onOpenAiSafety = { openUri(AppLinks.AiSafety) },
                         onOpenSupport = { openUri(AppLinks.Support) },
-                        onDeleteAccount = { openUri(AppLinks.AccountDeletion) },
+                        onDeleteAccount = {
+                            graph.applicationScope.launch {
+                                if (graph.session.prepareAccountDeletionHandoff()) {
+                                    if (!openUri(AppLinks.AccountDeletion)) {
+                                        graph.session.retry()
+                                    }
+                                }
+                            }
+                        },
                         onRetry = {
                             graph.applicationScope.launch { graph.session.retry() }
                         },

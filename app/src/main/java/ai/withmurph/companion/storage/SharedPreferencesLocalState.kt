@@ -288,8 +288,8 @@ class SharedPreferencesLocalState internal constructor(
         val previousPrivySignOutMemberKey = pendingPrivySignOutMemberKey
         val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
-        // Persist the teardown request before SDK work is drained. Health authority
-        // remains committed until Vital's durable workers are terminal and its
+        // Persist the teardown request before SDK work is cancelled. Health authority
+        // remains committed until Vital's durable workers are proven terminal and its
         // identity is signed out; the WorkManager factory rejects new or restarted
         // Vital work whenever this tombstone is present.
         val editor = preferences.edit()

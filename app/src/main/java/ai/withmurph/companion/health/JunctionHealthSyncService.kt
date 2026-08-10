@@ -85,6 +85,9 @@ internal fun healthPermissionRequestResult(
     activeResources: Set<VitalResource>,
     grantedPermissions: Set<String>,
 ): HealthPermissionRequestResult {
+    if (configuredHealthConnectReadResources(activeResources).isNotEmpty()) {
+        return HealthPermissionRequestResult.Ready
+    }
     val workoutBaseMissing =
         grantedPermissions.any(workoutDetailPermissions::contains) &&
             readExercise !in grantedPermissions
@@ -96,9 +99,7 @@ internal fun healthPermissionRequestResult(
             HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases
         workoutBaseMissing -> HealthPermissionRequestResult.MissingWorkoutBase
         menstrualBaseMissing -> HealthPermissionRequestResult.MissingMenstrualBase
-        configuredHealthConnectReadResources(activeResources).isEmpty() ->
-            HealthPermissionRequestResult.NoActiveResource
-        else -> HealthPermissionRequestResult.Ready
+        else -> HealthPermissionRequestResult.NoActiveResource
     }
 }
 
@@ -207,8 +208,13 @@ class JunctionHealthSyncService(
             manager.resourcesWithReadPermission(),
         ).size
 
-    override suspend fun signOutSdk() {
+    override suspend fun revokeActiveSyncAuthorization() {
+        VitalHealthWorkerLease.close()
         cancelAndAwaitVitalWork()
+    }
+
+    override suspend fun signOutSdk() {
+        revokeActiveSyncAuthorization()
         VitalClient.getOrCreate(appContext).signOut()
     }
 

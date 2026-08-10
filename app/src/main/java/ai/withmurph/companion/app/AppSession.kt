@@ -2237,6 +2237,15 @@ class AppSession(
         ownsForegroundRefresh(claim.generation) &&
             claim.sessionEpoch == sessionEpoch
 
+    suspend fun prepareAccountDeletionHandoff(): Boolean = withContext(NonCancellable) {
+        startMutex.withLock {
+            val expectedMemberKey = localState.memberKey
+            val resetSucceeded = resetMemberAtTrustBoundary(expectedMemberKey)
+            if (resetSucceeded) clearInitialOnboardingState()
+            resetSucceeded
+        }
+    }
+
     suspend fun signOut() = withContext(NonCancellable) {
         val expectedMemberKey = localState.memberKey
         val mountedMemberKey = currentMemberKey?.takeIf { it == expectedMemberKey }
@@ -3154,7 +3163,7 @@ class AppSession(
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         try {
-            signOutHealthSdkAfterDrainingWork()
+            revokeWorkAndSignOutHealthSdk()
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -4116,7 +4125,7 @@ class AppSession(
         }
         invalidateSessionEpoch(acceptedConsentOwner)
         return try {
-            signOutHealthSdkAfterDrainingWork()
+            revokeWorkAndSignOutHealthSdk()
             true
         } catch (error: CancellationException) {
             throw error
@@ -4150,7 +4159,7 @@ class AppSession(
                 if (healthMutexHeld) {
                     health.signOutSdk()
                 } else {
-                    signOutHealthSdkAfterDrainingWork()
+                    revokeWorkAndSignOutHealthSdk()
                 }
                 true
             } catch (error: CancellationException) {
@@ -4173,10 +4182,14 @@ class AppSession(
     /**
      * Called only after epoch and phase state have fenced new health work.
      * Vital 5.0.2 cancels its starter before a separately scheduled child is
-     * guaranteed terminal, so drain the app-owned chain before changing SDK
-     * identity instead of treating cancellation state as execution proof.
+     * guaranteed terminal, so revoke the live lease and prove the exact chain
+     * terminal before changing SDK identity.
      */
-    private suspend fun signOutHealthSdkAfterDrainingWork() {
+    private suspend fun revokeWorkAndSignOutHealthSdk() {
+        // Revoke the process lease and cancel the exact active chain before
+        // waiting for its AppSession owner to release healthMutex. Otherwise an
+        // external trust-boundary handoff could serialize behind the old upload.
+        health.revokeActiveSyncAuthorization()
         healthMutex.withLock { health.signOutSdk() }
     }
 
@@ -4393,7 +4406,7 @@ class AppSession(
             )
         }
         val teardownSucceeded = try {
-            signOutHealthSdkAfterDrainingWork()
+            revokeWorkAndSignOutHealthSdk()
             true
         } catch (error: CancellationException) {
             throw error

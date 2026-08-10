@@ -1854,6 +1854,7 @@ class AddressBookSessionTest {
             syncEntered.complete(Unit)
             syncGate?.await()
         }
+        override suspend fun revokeActiveSyncAuthorization() = Unit
         override suspend fun signOutSdk() {
             signOutCalls += 1
             signedIn = false

@@ -33,15 +33,22 @@ class JunctionHealthSyncServiceTest {
     }
 
     @Test
-    fun optionalWorkoutDetailsRequireTheWorkoutBasePermission() {
+    fun orphanWorkoutDetailsDoNotBlockAnUnrelatedActiveResource() {
         assertEquals(
-            HealthPermissionRequestResult.MissingWorkoutBase,
+            HealthPermissionRequestResult.Ready,
             healthPermissionRequestResult(
                 activeResources = setOf(VitalResource.Sleep),
                 grantedPermissions = setOf(
                     "android.permission.health.READ_SLEEP",
                     "android.permission.health.READ_POWER",
                 ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingWorkoutBase,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf("android.permission.health.READ_POWER"),
             ),
         )
         assertEquals(
@@ -59,13 +66,22 @@ class JunctionHealthSyncServiceTest {
     }
 
     @Test
-    fun optionalMenstrualDetailsRequireTheMenstruationBasePermission() {
+    fun orphanMenstrualDetailsDoNotBlockAnUnrelatedActiveResource() {
         assertEquals(
-            HealthPermissionRequestResult.MissingMenstrualBase,
+            HealthPermissionRequestResult.Ready,
             healthPermissionRequestResult(
                 activeResources = setOf(VitalResource.Activity),
                 grantedPermissions = setOf(
                     "android.permission.health.READ_STEPS",
+                    "android.permission.health.READ_SEXUAL_ACTIVITY",
+                ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingMenstrualBase,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf(
                     "android.permission.health.READ_SEXUAL_ACTIVITY",
                 ),
             ),
@@ -86,13 +102,23 @@ class JunctionHealthSyncServiceTest {
     }
 
     @Test
-    fun bothMissingBasesWinOverAnUnrelatedActiveResource() {
+    fun activeResourcesWinWhileDetailOnlySelectionNamesBothMissingBases() {
         assertEquals(
-            HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases,
+            HealthPermissionRequestResult.Ready,
             healthPermissionRequestResult(
                 activeResources = setOf(VitalResource.Sleep),
                 grantedPermissions = setOf(
                     "android.permission.health.READ_SLEEP",
+                    "android.permission.health.READ_SPEED",
+                    "android.permission.health.READ_OVULATION_TEST",
+                ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf(
                     "android.permission.health.READ_SPEED",
                     "android.permission.health.READ_OVULATION_TEST",
                 ),
