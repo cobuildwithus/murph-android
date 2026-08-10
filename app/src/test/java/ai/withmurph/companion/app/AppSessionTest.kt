@@ -5900,6 +5900,22 @@ class AppSessionTest {
     }
 
     @Test
+    fun permissionPreparationPausesSdkBeforeConnectCanStartAResourceChain() = runTest {
+        val fixture = fixture()
+        fixture.health.startAutomaticSyncOnConnect = true
+        fixture.session.start()
+
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertEquals(1, fixture.health.pauseAutomaticSyncCalls)
+
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+
+        assertEquals(1, fixture.health.automaticConnectSyncAttempts)
+        assertEquals(0, fixture.health.automaticConnectResourceStarts)
+        assertEquals(1, fixture.health.syncCalls)
+    }
+
+    @Test
     fun signOutCancelsFirstSetupSyncBeforeAnotherResourceStarts() = runTest {
         val fixture = fixture()
         fixture.session.start()
@@ -5927,6 +5943,39 @@ class AppSessionTest {
         assertEquals(1, fixture.health.syncResourceStarts)
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertEquals(listOf("sign-out", "privy-sign-out"), fixture.events.takeLast(2))
+    }
+
+    @Test
+    fun consentRecoveryCancelsForegroundSyncBeforeAnotherResourceStarts() = runTest {
+        val fixture = fixture(contacts = SupportedContacts)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt = InstantValue(1)
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.signedIn = true
+        fixture.session.start()
+        fixture.health.syncResourceCount = fixture.health.totalResourceCount
+        fixture.health.syncResourceStarts = 0
+        fixture.health.cancelSyncOnSignOut = true
+        fixture.health.syncGate = CompletableDeferred()
+        fixture.health.syncEntered = CompletableDeferred()
+        fixture.api.addressStatusError = CompanionApiException.ConsentRequired
+
+        val sync = async { fixture.session.syncNow() }
+        fixture.health.syncEntered.await()
+        val addressBook = async { fixture.session.prepareAddressBookSharing() }
+        runCurrent()
+
+        assertTrue(fixture.health.signOutEntered.isCompleted)
+        assertEquals(1, fixture.health.syncResourceStarts)
+
+        sync.await()
+        assertFalse(addressBook.await())
+
+        assertEquals(1, fixture.health.syncResourceStarts)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
     }
 
     @Test
@@ -7913,7 +7962,11 @@ class AppSessionTest {
         var identifyCalls = 0
         val identifiedMemberKeys = mutableListOf<String>()
         var configureCalls = 0
+        var pauseAutomaticSyncCalls = 0
         var connectCalls = 0
+        var startAutomaticSyncOnConnect = false
+        var automaticConnectSyncAttempts = 0
+        var automaticConnectResourceStarts = 0
         var syncCalls = 0
         var syncResourceCount = 1
         var syncResourceStarts = 0
@@ -7946,6 +7999,7 @@ class AppSessionTest {
         var availabilityHook: (() -> Unit)? = null
         private var identifiedInCurrentProcess = false
         private var configuredInCurrentProcess = false
+        private var automaticSyncPaused = false
 
         override fun availability(): HealthConnectAvailability {
             availabilityHook?.invoke()
@@ -7953,9 +8007,14 @@ class AppSessionTest {
         }
         override fun openHealthConnectIntent(): Intent? = null
         override fun isSignedIn(): Boolean = signedIn
+        override fun pauseAutomaticSync() {
+            pauseAutomaticSyncCalls += 1
+            automaticSyncPaused = true
+        }
         override fun configure() {
             configureCalls += 1
             configuredInCurrentProcess = true
+            automaticSyncPaused = true
             events += "configure"
             configureError?.let { throw it }
         }
@@ -7981,6 +8040,15 @@ class AppSessionTest {
             connectGate?.await()
             connectError?.let { throw it }
             grantedCount = totalResourceCount
+            if (startAutomaticSyncOnConnect) {
+                automaticConnectSyncAttempts += 1
+                if (!automaticSyncPaused) {
+                    repeat(totalResourceCount) {
+                        if (!signedIn) return
+                        automaticConnectResourceStarts += 1
+                    }
+                }
+            }
         }
 
         override suspend fun refreshPermissionState() {

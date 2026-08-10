@@ -118,6 +118,7 @@ interface HealthSyncing {
     fun availability(): HealthConnectAvailability
     fun openHealthConnectIntent(): Intent?
     fun isSignedIn(): Boolean
+    fun pauseAutomaticSync()
     fun configure()
     fun grantedResourceCount(): Int
 

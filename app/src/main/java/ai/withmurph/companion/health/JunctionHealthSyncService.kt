@@ -14,6 +14,9 @@ import kotlinx.coroutines.Deferred
 import io.tryvital.vitalhealthcore.model.ConnectionPolicy
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 class JunctionHealthSyncService(
     context: Context,
@@ -43,6 +46,10 @@ class JunctionHealthSyncService(
 
     override fun isSignedIn(): Boolean = VitalClient.Status.SignedIn in VitalClient.status
 
+    override fun pauseAutomaticSync() {
+        manager.pauseSynchronization = true
+    }
+
     override suspend fun identify(
         memberKey: String,
         authenticate: suspend () -> String,
@@ -60,6 +67,7 @@ class JunctionHealthSyncService(
     }
 
     override fun configure() {
+        pauseAutomaticSync()
         manager.configureHealthConnectClient(
             logsEnabled = false,
             syncOnAppStart = false,
@@ -77,9 +85,18 @@ class JunctionHealthSyncService(
     }
 
     override suspend fun syncAllGrantedResources() {
-        manager.syncData(
-            resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
-        )
+        withContext(Dispatchers.Main.immediate) {
+            manager.pauseSynchronization = false
+        }
+        try {
+            manager.syncData(
+                resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
+            )
+        } finally {
+            withContext(NonCancellable + Dispatchers.Main.immediate) {
+                manager.pauseSynchronization = true
+            }
+        }
     }
 
     override fun grantedResourceCount(): Int =
@@ -99,12 +116,13 @@ class JunctionHealthSyncService(
          * the unbounded standalone stream from default ingestion.
          *
          * Vital 5.0.2 discovers granted resources by scanning every SDK
-         * resource, then may automatically sync that discovered set after both
-         * permission and connect flows. Its resource remapping is an identity
-         * operation in this version, so Activity, Steps, and ActiveEnergyBurned
-         * remain separate sync owners. Keep all three explicit here so manual
-         * sync and resource counts match the already-shipped manifest grants
-         * and the SDK's automatic behavior. Murph's current default intake
+         * resource. Murph keeps the SDK paused across permission and connect
+         * flows, then briefly unpauses only inside syncAllGrantedResources so
+         * this configured, post-commit call owns the resource chain. Vital's
+         * resource remapping is an identity operation in this version, so
+         * Activity, Steps, and ActiveEnergyBurned remain separate sync owners.
+         * Keep all three explicit here so manual sync and resource counts match
+         * the already-shipped manifest grants. Murph's current default intake
          * admits the Activity summary but not the two standalone timeseries;
          * preserving their client upload behavior avoids a silent mobile
          * regression while that backend boundary remains explicit.

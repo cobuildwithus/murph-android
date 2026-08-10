@@ -1497,6 +1497,17 @@ class AppSession(
                     if (!ownsHealthConnectionPreparation(memberKey, validatedEpoch)) {
                         return false
                     }
+                    try {
+                        health.pauseAutomaticSync()
+                    } catch (_: Exception) {
+                        _state.update {
+                            it.copy(
+                                healthMessage =
+                                    "Murph couldn't safely prepare Health Connect. Try again.",
+                            )
+                        }
+                        return false
+                    }
                     val hadCompletedSetup = healthWasRequested()
                     if (hadCompletedSetup) {
                         if (!localState.revokeHealthSetupAuthorization()) {
@@ -4164,7 +4175,6 @@ class AppSession(
                 healthAvailability = health.availability(),
                 healthSync = deriveCachedHealthState(),
                 isConnectingHealth = false,
-                isSyncingHealth = false,
                 healthMessage = "Murph paused health sync while you review the latest launch consent.",
                 grantedResourceCount = health.grantedResourceCount(),
                 addressBookSharing = if (contacts.isSupported) {
@@ -4288,6 +4298,7 @@ class AppSession(
         }
         _state.update { current ->
             current.copy(
+                isSyncingHealth = false,
                 launchConsentRecovery = current.launchConsentRecovery?.copy(
                     phase = LaunchConsentRecoveryPhase.Loading,
                     message = "Loading the latest consent documents.",
