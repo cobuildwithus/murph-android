@@ -166,6 +166,7 @@ internal enum class ScreenshotScenario {
     OnboardingSaving,
     OnboardingWelcome,
     OnboardingConsentBanner,
+    OnboardingConsentLoadFailure,
     OnboardingReconnectRequired,
     FriendlyNames,
     FriendlyNamesReconnectRequired,
@@ -246,7 +247,7 @@ internal enum class ScreenshotScenario {
         )
         OnboardingError -> onboardingState(InitialOnboardingStage.Tone).copy(
             initialOnboardingMessage =
-                "Couldn't save. Your choices are still here.",
+                "Couldn't save. Try again.",
         )
         OnboardingSaving -> onboardingState(InitialOnboardingStage.Tone).copy(
             isInitialOnboardingSaving = true,
@@ -259,6 +260,14 @@ internal enum class ScreenshotScenario {
                 phase = LaunchConsentRecoveryPhase.Required,
                 status = consentStatus(),
                 showSheet = false,
+            ),
+        )
+        OnboardingConsentLoadFailure -> onboardingState(InitialOnboardingStage.MainPersona).copy(
+            launchConsentRecovery = LaunchConsentRecoveryUiState(
+                phase = LaunchConsentRecoveryPhase.LoadFailed,
+                message =
+                    "Murph couldn't load the latest consent documents. Check your connection and try again.",
+                showSheet = true,
             ),
         )
         OnboardingReconnectRequired -> onboardingState(InitialOnboardingStage.MainPersona).copy(
@@ -348,6 +357,7 @@ internal enum class ScreenshotScenario {
         OnboardingSaving,
         OnboardingWelcome,
         OnboardingConsentBanner,
+        OnboardingConsentLoadFailure,
         OnboardingReconnectRequired,
         FriendlyNames,
     FriendlyNamesReconnectRequired,
@@ -371,6 +381,7 @@ internal enum class ScreenshotScenario {
         OnboardingSaving,
         OnboardingWelcome,
         OnboardingConsentBanner,
+        OnboardingConsentLoadFailure,
         OnboardingReconnectRequired -> true
         else -> false
     }

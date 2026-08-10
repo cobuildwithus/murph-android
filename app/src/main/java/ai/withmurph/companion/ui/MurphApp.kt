@@ -431,6 +431,7 @@ private fun ReadyApp(
                 onAccept = actions.onAcceptLaunchConsent,
                 onRetry = actions.onRetryLaunchConsent,
                 onDismiss = actions.onDismissLaunchConsent,
+                onSignOut = if (state.initialOnboarding != null) actions.onSignOut else null,
                 onOpenDocument = actions.onOpenConsentDocument,
             )
         }
@@ -687,6 +688,7 @@ private fun LaunchConsentRecoveryContent(
     onAccept: () -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
+    onSignOut: (() -> Unit)?,
     onOpenDocument: (String) -> Unit,
 ) {
     val status = recovery.status
@@ -801,8 +803,8 @@ private fun LaunchConsentRecoveryContent(
                     LaunchConsentRecoveryPhase.LoadFailed -> {
                         MurphPrimaryButton("Try again", onRetry)
                         MurphLinkButton(
-                            text = "Not now",
-                            onClick = onDismiss,
+                            text = if (onSignOut == null) "Not now" else "Sign out",
+                            onClick = onSignOut ?: onDismiss,
                             modifier = Modifier.align(Alignment.CenterHorizontally),
                         )
                     }

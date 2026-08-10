@@ -466,7 +466,7 @@ class AppSession(
                     authoritativeLocalAuth = error.observedState
                 } else {
                     publishInitialOnboardingFailure(
-                        "Couldn't save. Your choices are still here.",
+                        "Couldn't save. Try again.",
                     )
                 }
             } catch (_: CompanionApiException.ConsentRequired) {
@@ -494,13 +494,13 @@ class AppSession(
                     publishTerminalMemberBoundaryFailure(error)
                 } else {
                     publishInitialOnboardingFailure(
-                        "Couldn't save. Your choices are still here.",
+                        "Couldn't save. Try again.",
                     )
                 }
             } catch (_: Exception) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishInitialOnboardingFailure(
-                        "Couldn't save. Your choices are still here.",
+                        "Couldn't save. Try again.",
                     )
                 }
             } finally {

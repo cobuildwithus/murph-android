@@ -46,8 +46,8 @@ class ScreenshotScenarioSmokeTest {
 
     @Test
     fun onboardingErrorFixtureKeepsRecoveryOutOfTheForm() = withScenario("onboardingError") {
-        onNodeWithText("Couldn't save. Your choices are still here.").assertIsDisplayed()
-        onNodeWithText("Help").assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Couldn't save. Try again.").assertIsDisplayed()
+        onNodeWithText("Sign out").assertIsDisplayed().assertHasClickAction()
         onNodeWithText("Formal").assertIsDisplayed().assertHasClickAction()
         onNodeWithText("Continue").assertIsDisplayed().assertHasClickAction()
         onNodeWithText("Back").assertIsDisplayed().assertHasClickAction()
@@ -62,7 +62,7 @@ class ScreenshotScenarioSmokeTest {
         withScenario("onboardingContactError") {
             onNodeWithText("We couldn't open the contact card. Check your connection and try again.")
                 .assertIsDisplayed()
-            onNodeWithText("Help").assertIsDisplayed().assertHasClickAction()
+            onNodeWithText("Sign out").assertIsDisplayed().assertHasClickAction()
             onNodeWithText("Add Murph to Contacts").assertIsDisplayed().assertHasClickAction()
             onNodeWithText("Skip").assertIsDisplayed().assertHasClickAction()
             onAllNodesWithText("Contact support").assertCountEquals(0)
@@ -75,6 +75,15 @@ class ScreenshotScenarioSmokeTest {
     fun onboardingConsentRecoveryDoesNotExposeSettings() =
         withScenario("onboardingConsentBanner") {
             onNodeWithText("Consent needed").assertIsDisplayed().assertHasClickAction()
+            onAllNodesWithText("Settings").assertCountEquals(0)
+        }
+
+    @Test
+    fun onboardingConsentLoadFailureOffersRetryOrSignOutWithoutSettings() =
+        withScenario("onboardingConsentLoadFailure") {
+            onNodeWithText("Try again").assertIsDisplayed().assertHasClickAction()
+            onNodeWithText("Sign out").assertIsDisplayed().assertHasClickAction()
+            onAllNodesWithText("Not now").assertCountEquals(0)
             onAllNodesWithText("Settings").assertCountEquals(0)
         }
 

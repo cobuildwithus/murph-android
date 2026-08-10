@@ -85,6 +85,8 @@ class ScreenshotFixtureTest {
         val error = ScreenshotScenario.from("onboardingError").appState(now)
         val contactError = ScreenshotScenario.from("onboardingContactError").appState(now)
         val saving = ScreenshotScenario.from("onboardingSaving").appState(now)
+        val consentLoadFailure =
+            ScreenshotScenario.from("onboardingConsentLoadFailure").appState(now)
 
         assertEquals(AppPhase.Launching, loading.phase)
         assertNull(loading.initialOnboarding)
@@ -96,7 +98,7 @@ class ScreenshotFixtureTest {
         assertFalse(error.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingError.isInitialOnboarding())
         assertEquals(
-            "Couldn't save. Your choices are still here.",
+            "Couldn't save. Try again.",
             error.initialOnboardingMessage,
         )
 
@@ -112,6 +114,14 @@ class ScreenshotFixtureTest {
         assertTrue(saving.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingSaving.isInitialOnboarding())
         assertNull(saving.initialOnboardingMessage)
+
+        assertNotNull(consentLoadFailure.initialOnboarding)
+        assertEquals(
+            LaunchConsentRecoveryPhase.LoadFailed,
+            consentLoadFailure.launchConsentRecovery?.phase,
+        )
+        assertTrue(requireNotNull(consentLoadFailure.launchConsentRecovery).showSheet)
+        assertTrue(ScreenshotScenario.OnboardingConsentLoadFailure.isInitialOnboarding())
     }
 
     @Test

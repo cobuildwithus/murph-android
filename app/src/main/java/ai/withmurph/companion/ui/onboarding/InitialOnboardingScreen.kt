@@ -186,7 +186,6 @@ fun InitialOnboardingScreen(
     val stageScrollState = key(stage) { rememberScrollState() }
     val stageHeadingFocus = remember(stage) { FocusRequester() }
     val snackbarHostState = remember { SnackbarHostState() }
-    val stackSnackbarAction = LocalDensity.current.fontScale >= 1.3f
     LaunchedEffect(stage) {
         stageHeadingFocus.requestFocus()
         stageScrollState.scrollTo(0)
@@ -196,11 +195,11 @@ fun InitialOnboardingScreen(
         state.initialOnboardingMessage?.let { message ->
             val result = snackbarHostState.showSnackbar(
                 message = message,
-                actionLabel = "Help",
-                duration = SnackbarDuration.Long,
+                actionLabel = "Sign out",
+                duration = SnackbarDuration.Indefinite,
             )
             if (result == SnackbarResult.ActionPerformed) {
-                actions.onOpenSupport()
+                actions.onSignOut()
             }
         }
     }
@@ -277,7 +276,6 @@ fun InitialOnboardingScreen(
             Snackbar(
                 snackbarData = snackbarData,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                actionOnNewLine = stackSnackbarAction,
                 shape = RoundedCornerShape(14.dp),
                 containerColor = MurphColors.Slate,
                 contentColor = MurphColors.Cream,
@@ -297,7 +295,7 @@ fun InitialOnboardingScreen(
                 modifier = Modifier
                     .widthIn(max = 680.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -917,7 +915,7 @@ private fun OnboardingFooter(
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         MurphPrimaryButton(
