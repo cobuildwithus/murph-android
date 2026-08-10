@@ -40,6 +40,7 @@ Every unchecked item is a release blocker. Keep private evidence in the approved
 - [ ] Put reusable, non-production reviewer access and English OTP instructions only in Play Console. The instructions must let Google exercise both returning sign-in and canonical first-run account creation without relying on expiring, location-dependent, or privately committed credentials. See [Prepare your app for review](https://support.google.com/googleplay/android-developer/answer/9859455).
 - [ ] Demonstrate first-run account admission, launch-consent acceptance, system time-zone transmission, optional contact-card setup, avatar/persona/supporting-persona/voice/tone selection or skip, saved completion, and **Settings → Delete Account** from the exact signed candidate.
 - [ ] Demonstrate Health Connect setup, granular selective grants, initial data receipt, permission loss, reconnect, sign-out, and member switch on supported Pixel and Samsung devices.
+- [ ] Verify detail-only Health Connect selections name the required Workouts or Menstruation base grant, then verify the corrected selection syncs without broadening any unrelated category.
 - [ ] Verify real backend receipt for at least activity, sleep, body/weight, and blood-pressure records, and document which requested categories each chosen source app does not export.
 - [ ] Demonstrate optional Contacts denial, Share, Update, Retry, permission loss, and Stop on the same device matrix.
 - [ ] Confirm unsupported/unavailable Health Connect states and no-background-sync behavior match the listing and reviewer notes.

@@ -183,13 +183,17 @@ is requested.
 
 Vital 5.0.2 scans all resources during permission reconciliation and its
 `remapped()` operation is an identity operation in this version. Murph pauses
-SDK synchronization before permission and through `connect()`, then unpauses
-only around an explicit foreground call with the configured-and-granted
-intersection. An empty intersection is a no-op. Shared permissions can activate
-multiple SDK resources, so the app declares the relevant aggregate owners
-explicitly. Actual source availability and backend receipt remain physical-device
-release gates; this permission surface does not claim that every source exports
-or Murph ingests every requested category.
+SDK synchronization before permission and through `connect()`. Before each
+explicit foreground sync, it retires any pinned durable starter/resource work,
+opens Vital's manual gate without invoking the SDK setter that schedules an
+all-granted worker, and sends only the configured-and-granted intersection.
+An empty intersection is a no-op. Shared permissions can activate multiple SDK
+resources, so the app declares the relevant aggregate owners explicitly. If a
+member selects a workout or reproductive detail without its required aggregate
+base, the app names the missing Workouts or Menstruation grant instead of
+silently accepting an unusable selection. Actual source availability and backend
+receipt remain physical-device release gates; this permission surface does not
+claim that every source exports or Murph ingests every requested category.
 
 Junction/Vital Android 5.0.2 hard-clamps backfill to the ordinary 30-day Health
 Connect read window, so the app does not request broader history access with no
@@ -238,8 +242,10 @@ message.
   app-owned foreground sync attempt after the setup marker, receipt baseline,
   observation time, and reconnect clearance commit as one restart snapshot.
   SDK automatic synchronization stays paused across permission and connect,
-  and the adapter unpauses only for that explicit configured-resource call. A
-  failed commit rolls back the live Junction identity. The SDK's reachable
+  and the adapter opens its manual gate only for that explicit configured-resource
+  call. A durable WorkManager factory rejects new or restarted Vital workers
+  without a member, completed setup, or while sign-out is pending. A failed
+  commit rolls back the live Junction identity. The SDK's reachable
   backfill is already limited to 30 days, so setup does not request an
   extended-history grant.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.

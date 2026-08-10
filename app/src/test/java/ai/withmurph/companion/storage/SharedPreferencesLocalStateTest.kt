@@ -583,7 +583,7 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
-    fun automaticMemberResetFencesRestorationButPreservesMetadataUntilCompletion() {
+    fun automaticMemberResetFencesWorkersButPreservesAuthorityUntilSdkTeardown() {
         val state = SharedPreferencesLocalState(FaultInjectedPreferences())
         val replacement = AddressBookMutation(12, MUTATION_ONE)
         state.memberKey = "member-a"
@@ -600,7 +600,7 @@ class SharedPreferencesLocalStateTest {
         )
 
         assertTrue(state.signOutPending)
-        assertNull(state.healthAccessRequestedAt)
+        assertEquals(InstantValue(800), state.healthAccessRequestedAt)
         assertEquals(InitialSetupStep.FriendlyNames, state.initialSetupStep)
         assertEquals(12, state.addressBookRevision)
         assertEquals(replacement, state.pendingAddressBookReplacement)
@@ -608,6 +608,7 @@ class SharedPreferencesLocalStateTest {
         assertTrue(state.completeSignOut("member-a"))
         assertFalse(state.signOutPending)
         assertNull(state.memberKey)
+        assertNull(state.healthAccessRequestedAt)
         assertNull(state.initialSetupStep)
         assertNull(state.addressBookRevision)
         assertNull(state.pendingAddressBookReplacement)

@@ -20,6 +20,7 @@ import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
 import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
 import ai.withmurph.companion.ui.theme.MurphTheme
@@ -57,7 +58,7 @@ class MainActivity : ComponentActivity() {
                     graph.session.cancelHealthPermissionFlow()
                     throw error
                 } catch (_: Exception) {
-                    false
+                    HealthPermissionRequestResult.NoActiveResource
                 }
                 graph.session.completeHealthPermissionFlow(completed)
             }

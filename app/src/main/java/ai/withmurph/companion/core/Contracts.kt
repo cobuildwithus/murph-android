@@ -133,6 +133,14 @@ interface HealthSyncing {
     suspend fun signOutSdk()
 }
 
+enum class HealthPermissionRequestResult {
+    Ready,
+    NoActiveResource,
+    MissingWorkoutBase,
+    MissingMenstrualBase,
+    MissingWorkoutAndMenstrualBases,
+}
+
 interface LocalState {
     val installationId: String
     var memberKey: String?

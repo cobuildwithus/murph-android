@@ -246,6 +246,8 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.coroutines.android)
+    implementation(libs.coroutines.guava)
+    implementation(libs.androidx.work.runtime)
 
     implementation(libs.privy.core)
     implementation(libs.vital.client)

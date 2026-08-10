@@ -15,6 +15,7 @@ import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
@@ -1618,12 +1619,23 @@ class AppSession(
 
     suspend fun completeHealthPermissionFlow(permissionRequestCompleted: Boolean): Boolean =
         completeHealthPermissionFlow(
-            permissionRequestCompleted = permissionRequestCompleted,
+            permissionResult = if (permissionRequestCompleted) {
+                HealthPermissionRequestResult.Ready
+            } else {
+                HealthPermissionRequestResult.NoActiveResource
+            },
             acceptedConsentOwner = null,
         )
 
+    suspend fun completeHealthPermissionFlow(
+        permissionResult: HealthPermissionRequestResult,
+    ): Boolean = completeHealthPermissionFlow(
+        permissionResult = permissionResult,
+        acceptedConsentOwner = null,
+    )
+
     private suspend fun completeHealthPermissionFlow(
-        permissionRequestCompleted: Boolean,
+        permissionResult: HealthPermissionRequestResult,
         acceptedConsentOwner: PendingLaunchConsentRecovery?,
     ): Boolean {
         _state.update { it.copy(pendingHealthPermissionRequestId = null) }
@@ -1641,13 +1653,13 @@ class AppSession(
             }
             val epoch = pending.epoch
             try {
-                if (!permissionRequestCompleted) {
+                if (permissionResult != HealthPermissionRequestResult.Ready) {
                     pendingHealthConnection = null
                     _state.update { current ->
                         current.copy(
                             isConnectingHealth = false,
                             grantedResourceCount = health.grantedResourceCount(),
-                            healthMessage = "Choose at least one Health Connect category to connect Murph.",
+                            healthMessage = permissionResult.recoveryMessage(),
                         )
                     }
                     return false
@@ -5117,7 +5129,7 @@ class AppSession(
         }
         if (permissionStillGranted) {
             completeHealthPermissionFlow(
-                permissionRequestCompleted = true,
+                permissionResult = HealthPermissionRequestResult.Ready,
                 acceptedConsentOwner = acceptedConsentOwner,
             )
         }
@@ -5895,6 +5907,18 @@ class AppSession(
                 "Reconnect Health Connect to resume syncing."
             else -> "Murph couldn't finish connecting Health Connect. Try again in a moment."
         }
+    }
+
+    private fun HealthPermissionRequestResult.recoveryMessage(): String = when (this) {
+        HealthPermissionRequestResult.Ready -> error("Ready permissions do not need recovery")
+        HealthPermissionRequestResult.NoActiveResource ->
+            "Choose at least one Health Connect category to connect Murph."
+        HealthPermissionRequestResult.MissingWorkoutBase ->
+            "Power, speed, and elevation require Workouts. Allow Workouts in Health Connect, then try again."
+        HealthPermissionRequestResult.MissingMenstrualBase ->
+            "Reproductive details require Menstruation. Allow Menstruation in Health Connect, then try again."
+        HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases ->
+            "Power, speed, and elevation require Workouts; reproductive details require Menstruation. Update Health Connect permissions, then try again."
     }
 
     private fun isTerminalMemberBoundaryError(error: CompanionApiException): Boolean =

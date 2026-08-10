@@ -288,14 +288,12 @@ class SharedPreferencesLocalState internal constructor(
         val previousPrivySignOutMemberKey = pendingPrivySignOutMemberKey
         val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
-        // One durable boundary records the request and revokes member-scoped restoration.
+        // Persist the teardown request before SDK work is drained. Health authority
+        // remains committed until Vital's durable workers are terminal and its
+        // identity is signed out; the WorkManager factory rejects new or restarted
+        // Vital work whenever this tombstone is present.
         val editor = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
-            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
-            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
-            .remove(KEY_LAST_DATA_RECEIVED_AT)
-            .remove(KEY_LAST_STATUS_OBSERVED_AT)
-            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
         if (privySignOutMemberKey == null) {
             editor.remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
         } else {

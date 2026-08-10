@@ -2,8 +2,11 @@ package ai.withmurph.companion.health
 
 import android.content.Context
 import android.content.Intent
+import androidx.health.connect.client.HealthConnectClient
+import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.JunctionExternalUserId
 import io.tryvital.client.AuthenticateRequest
@@ -16,7 +19,33 @@ import io.tryvital.vitalhealthcore.model.VitalResource
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.withContext
+
+private const val vitalPausePreference = "pauseSync"
+internal const val vitalResourceSyncStarter = "HC.ResourceSyncStarter"
+
+internal fun vitalResourceSyncWorkerName(resource: VitalResource): String =
+    "HC.ResourceSyncWorker.${resource.name}"
+
+private const val readExercise = "android.permission.health.READ_EXERCISE"
+private const val readElevation = "android.permission.health.READ_ELEVATION_GAINED"
+private const val readPower = "android.permission.health.READ_POWER"
+private const val readSpeed = "android.permission.health.READ_SPEED"
+private const val readMenstruation = "android.permission.health.READ_MENSTRUATION"
+private const val readCervicalMucus = "android.permission.health.READ_CERVICAL_MUCUS"
+private const val readIntermenstrualBleeding =
+    "android.permission.health.READ_INTERMENSTRUAL_BLEEDING"
+private const val readOvulationTest = "android.permission.health.READ_OVULATION_TEST"
+private const val readSexualActivity = "android.permission.health.READ_SEXUAL_ACTIVITY"
+
+private val workoutDetailPermissions = setOf(readElevation, readPower, readSpeed)
+private val menstrualDetailPermissions = setOf(
+    readCervicalMucus,
+    readIntermenstrualBleeding,
+    readOvulationTest,
+    readSexualActivity,
+)
 
 // Explicitly enumerate the complete Vital 5.0.2 Health Connect surface.
 // The parity test fails when a future SDK release adds a resource so dependency
@@ -52,6 +81,27 @@ internal fun configuredHealthConnectReadResources(
     grantedResources: Set<VitalResource>,
 ): Set<VitalResource> = healthConnectReadResources.intersect(grantedResources)
 
+internal fun healthPermissionRequestResult(
+    activeResources: Set<VitalResource>,
+    grantedPermissions: Set<String>,
+): HealthPermissionRequestResult {
+    val workoutBaseMissing =
+        grantedPermissions.any(workoutDetailPermissions::contains) &&
+            readExercise !in grantedPermissions
+    val menstrualBaseMissing =
+        grantedPermissions.any(menstrualDetailPermissions::contains) &&
+            readMenstruation !in grantedPermissions
+    return when {
+        workoutBaseMissing && menstrualBaseMissing ->
+            HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases
+        workoutBaseMissing -> HealthPermissionRequestResult.MissingWorkoutBase
+        menstrualBaseMissing -> HealthPermissionRequestResult.MissingMenstrualBase
+        configuredHealthConnectReadResources(activeResources).isEmpty() ->
+            HealthPermissionRequestResult.NoActiveResource
+        else -> HealthPermissionRequestResult.Ready
+    }
+}
+
 class JunctionHealthSyncService(
     context: Context,
     private val environment: AppEnvironment,
@@ -67,11 +117,19 @@ class JunctionHealthSyncService(
         writeResources = emptySet(),
     )
 
-    suspend fun permissionRequestCompleted(outcome: Deferred<PermissionOutcome>): Boolean {
-        if (outcome.await() !is PermissionOutcome.Success) return false
-        return configuredHealthConnectReadResources(
-            manager.resourcesWithReadPermission(),
-        ).isNotEmpty()
+    suspend fun permissionRequestCompleted(
+        outcome: Deferred<PermissionOutcome>,
+    ): HealthPermissionRequestResult {
+        if (outcome.await() !is PermissionOutcome.Success) {
+            return HealthPermissionRequestResult.NoActiveResource
+        }
+        val grantedPermissions = HealthConnectClient.getOrCreate(appContext)
+            .permissionController
+            .getGrantedPermissions()
+        return healthPermissionRequestResult(
+            activeResources = manager.resourcesWithReadPermission(),
+            grantedPermissions = grantedPermissions,
+        )
     }
 
     override fun availability(): HealthConnectAvailability =
@@ -121,18 +179,20 @@ class JunctionHealthSyncService(
     }
 
     override suspend fun syncAllGrantedResources() {
-        withContext(Dispatchers.Main.immediate) {
-            manager.pauseSynchronization = false
-        }
+        // An upgrade can inherit durable all-granted work enqueued by Vital's public
+        // unpause setter. Retire every pinned chain before evaluating the exact set,
+        // including when the new configured-and-granted intersection is empty.
+        cancelAndAwaitVitalWork()
+        val resources = configuredHealthConnectReadResources(
+            manager.resourcesWithReadPermission(),
+        )
+        if (resources.isEmpty()) return
+        setManualSyncPaused(false)
         try {
-            manager.syncData(
-                resources = configuredHealthConnectReadResources(
-                    manager.resourcesWithReadPermission(),
-                ),
-            )
+            manager.syncData(resources = resources)
         } finally {
-            withContext(NonCancellable + Dispatchers.Main.immediate) {
-                manager.pauseSynchronization = true
+            withContext(NonCancellable) {
+                setManualSyncPaused(true)
             }
         }
     }
@@ -143,7 +203,43 @@ class JunctionHealthSyncService(
         ).size
 
     override suspend fun signOutSdk() {
+        cancelAndAwaitVitalWork()
         VitalClient.getOrCreate(appContext).signOut()
+    }
+
+    /**
+     * Vital 5.0.2's public pause setter starts an all-granted automatic worker
+     * when unpaused. The pinned preference is the narrower manual-sync gate:
+     * changing it directly lets syncData() enqueue only the supplied set.
+     */
+    private suspend fun setManualSyncPaused(paused: Boolean) {
+        val committed = withContext(Dispatchers.IO) {
+            manager.sharedPreferences.edit()
+                .putBoolean(vitalPausePreference, paused)
+                .commit()
+        }
+        check(committed) { "Could not durably update the Vital manual-sync gate" }
+    }
+
+    /** Cancel every pinned Vital foreground worker and prove terminal state. */
+    private suspend fun cancelAndAwaitVitalWork() {
+        setManualSyncPaused(true)
+        val workManager = WorkManager.getInstance(appContext)
+        val workNames = buildList {
+            add(vitalResourceSyncStarter)
+            healthConnectReadResources.forEach { resource ->
+                add(vitalResourceSyncWorkerName(resource))
+            }
+        }
+        workNames.forEach { workName ->
+            workManager.cancelUniqueWork(workName).result.await()
+        }
+        val remaining = workNames.flatMap { workName ->
+            workManager.getWorkInfosForUniqueWork(workName).await()
+        }
+        check(remaining.all { it.state.isFinished }) {
+            "Vital health workers were not terminal before identity teardown"
+        }
     }
 }
 

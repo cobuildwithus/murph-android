@@ -6,6 +6,7 @@ activity-compose = "1.10.1"
 core-ktx = "1.16.0"
 lifecycle = "2.9.1"
 coroutines = "1.10.2"
+work = "2.7.1"
 health-connect = "1.1.0"
 privy = "0.12.0"
 vital = "5.0.2"
@@ -26,6 +27,8 @@ compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+coroutines-guava = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-guava", version.ref = "coroutines" }
+androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 privy-core = { module = "io.privy:privy-core", version.ref = "privy" }
 vital-client = { module = "io.tryvital:vital-client", version.ref = "vital" }
 vital-health-connect = { module = "io.tryvital:vital-health-connect", version.ref = "vital" }
