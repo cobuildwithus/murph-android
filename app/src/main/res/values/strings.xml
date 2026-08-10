@@ -2,4 +2,22 @@
 <resources>
     <string name="app_name">Murph</string>
     <string name="address_book_phone_disclosure">Android asks for Contacts access only after you continue. Murph reads given and family names and checks phone values for this update only — never in the background. Ordinary local numbers are converted using the contact or device country when valid.</string>
+    <string name="health_sync_reminder_channel_name">Sync reminders</string>
+    <string name="health_sync_reminder_channel_description">Optional reminders to reopen Murph when sync needs attention</string>
+    <string name="health_sync_reminder_notification_title">Open Murph</string>
+    <string name="health_sync_reminder_notification_body">This app hasn’t confirmed recent Health Connect data. Open Murph to refresh and review sync settings.</string>
+    <string name="health_sync_reminder_title">Sync reminder</string>
+    <string name="health_sync_reminder_off_detail">Optional. Turn on a reminder if this app hasn’t confirmed Health Connect data for three days.</string>
+    <string name="health_sync_reminder_on_detail">On. Android will remind you to reopen Murph if this app hasn’t confirmed Health Connect data for three days.</string>
+    <string name="health_sync_reminder_unavailable_detail">Available after Health Connect is connected.</string>
+    <string name="health_sync_reminder_requires_online_detail">Available after Murph checks sync status online.</string>
+    <string name="health_sync_reminder_notifications_blocked_detail">Reminders are on in Murph, but notifications are off in Android settings.</string>
+    <string name="health_sync_reminder_section_footer">Health Connect sync in this Android app runs only while Murph is open. Reminders do not sync in the background and never include health details.</string>
+    <string name="health_sync_reminder_turn_on">Turn on</string>
+    <string name="health_sync_reminder_turn_off">Turn off</string>
+    <string name="health_sync_reminder_notification_settings_title">Notification settings</string>
+    <string name="health_sync_reminder_notification_settings_action">Settings</string>
+    <string name="health_sync_reminder_notification_settings_detail">Allow sync reminders so Android can deliver the optional reminder.</string>
+    <string name="health_sync_reminder_permission_denied">Sync reminders are off. Allow notifications in Android settings if you want to turn them on.</string>
+    <string name="health_sync_reminder_save_failed">Murph couldn’t save that reminder setting. Try again.</string>
 </resources>

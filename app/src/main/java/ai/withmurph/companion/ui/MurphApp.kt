@@ -114,6 +114,8 @@ internal fun failureExternalActions(
     onDeleteAccount: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
+    onOpenHealthNotice: () -> Unit,
+    onOpenAiSafety: () -> Unit,
 ): List<FailureExternalAction> {
     if (!failure.canSignOut) return emptyList()
     return when (failure.supplementalActions) {
@@ -126,6 +128,8 @@ internal fun failureExternalActions(
             FailureExternalAction("Delete account", onDeleteAccount),
             FailureExternalAction("Privacy Policy", onOpenPrivacy),
             FailureExternalAction("Terms", onOpenTerms),
+            FailureExternalAction("Health Data Notice", onOpenHealthNotice),
+            FailureExternalAction("AI Safety Disclosure", onOpenAiSafety),
         )
     }
 }
@@ -160,6 +164,10 @@ internal fun readyAppShellState(
 fun MurphApp(
     appState: AppUiState,
     loginState: LoginUiState,
+    healthSyncNotificationsAllowed: Boolean = false,
+    healthSyncNotificationRecoveryNeeded: Boolean = false,
+    openSettingsRequestId: Int = 0,
+    onOpenSettingsRequestConsumed: (Int) -> Unit = {},
     actions: MurphActions,
     initialOnboardingContactAvatarPainters: Map<String, Painter> = emptyMap(),
 ) {
@@ -180,6 +188,10 @@ fun MurphApp(
         )
         AppPhase.Ready -> ReadyApp(
             state = appState,
+            healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
+            healthSyncNotificationRecoveryNeeded = healthSyncNotificationRecoveryNeeded,
+            openSettingsRequestId = openSettingsRequestId,
+            onOpenSettingsRequestConsumed = onOpenSettingsRequestConsumed,
             actions = actions,
             initialOnboardingContactAvatarPainters = initialOnboardingContactAvatarPainters,
         )
@@ -191,6 +203,10 @@ fun MurphApp(
 @Composable
 private fun ReadyApp(
     state: AppUiState,
+    healthSyncNotificationsAllowed: Boolean,
+    healthSyncNotificationRecoveryNeeded: Boolean,
+    openSettingsRequestId: Int,
+    onOpenSettingsRequestConsumed: (Int) -> Unit,
     actions: MurphActions,
     initialOnboardingContactAvatarPainters: Map<String, Painter>,
 ) {
@@ -209,6 +225,13 @@ private fun ReadyApp(
         hasLaunchConsentRecovery = state.launchConsentRecovery != null,
     )
     val bannerRecovery = state.launchConsentRecovery?.takeIf { !it.showSheet }
+
+    LaunchedEffect(openSettingsRequestId) {
+        if (openSettingsRequestId > 0) {
+            selectedTab = AppTab.Settings
+            onOpenSettingsRequestConsumed(openSettingsRequestId)
+        }
+    }
 
     LaunchedEffect(showsHealthConsent, connectAfterConsent) {
         if (!showsHealthConsent && connectAfterConsent) {
@@ -347,6 +370,9 @@ private fun ReadyApp(
                         }
                         AppTab.Settings -> SettingsScreen(
                             state = state,
+                            healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
+                            healthSyncNotificationRecoveryNeeded =
+                                healthSyncNotificationRecoveryNeeded,
                             onShareAddressBook = {
                                 if (state.launchConsentRecovery == null) {
                                     addressBookConsentAction = AddressBookConsentAction.Settings
@@ -365,6 +391,8 @@ private fun ReadyApp(
                             onStopAddressBook = actions.onStopAddressBook,
                             onOpenAppSettings = actions.onOpenAppSettings,
                             onOpenHealthConnect = actions.onOpenHealthConnect,
+                            onSetHealthSyncReminderEnabled =
+                                actions.onSetHealthSyncReminderEnabled,
                             onOpenPrivacy = actions.onOpenPrivacy,
                             onOpenTerms = actions.onOpenTerms,
                             onOpenHealthNotice = actions.onOpenHealthNotice,
@@ -1253,6 +1281,8 @@ private fun FailureScreen(
         onDeleteAccount = actions.onDeleteAccount,
         onOpenPrivacy = actions.onOpenPrivacy,
         onOpenTerms = actions.onOpenTerms,
+        onOpenHealthNotice = actions.onOpenHealthNotice,
+        onOpenAiSafety = actions.onOpenAiSafety,
     )
     Box(
         modifier = Modifier
@@ -1335,6 +1365,7 @@ data class MurphActions(
     val onConnectHealth: () -> Unit,
     val onDeferHealthConnectInitialSetup: () -> Unit,
     val onOpenHealthConnect: () -> Unit,
+    val onSetHealthSyncReminderEnabled: (Boolean) -> Unit = {},
     val onSyncNow: () -> Unit,
     val onPrepareInitialAddressBookSharing: () -> Unit,
     val onDeferAddressBookSharingInitialSetup: () -> Unit,

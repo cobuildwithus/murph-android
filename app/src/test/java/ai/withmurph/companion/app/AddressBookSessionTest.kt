@@ -16,6 +16,7 @@ import ai.withmurph.companion.core.CompanionApi
 import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
@@ -1878,6 +1879,7 @@ class AddressBookSessionTest {
             requestedAt: InstantValue,
             receiptBaselineAt: InstantValue?,
             statusObservedAt: InstantValue,
+            reminderDeadline: HealthSyncReminderDeadline?,
             completesInitialSetup: Boolean,
         ): Boolean {
             if (completesInitialSetup && initialSetupStep != InitialSetupStep.HealthConnect) {
