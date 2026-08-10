@@ -68,30 +68,12 @@ class SharedPreferencesLocalStateTest {
         state.lastKnownDataReceivedAt = InstantValue(50)
         state.healthReconnectRequired = true
         state.initialSetupStep = InitialSetupStep.HealthConnect
-        state.memberKey = "member-one"
-        val replacementDeadline = HealthSyncReminderDeadline(
-            basisToken = "b".repeat(64),
-            bootCount = 8,
-            triggerElapsedRealtimeMillis = 900_000L,
-        )
-        assertTrue(
-            state.setHealthSyncReminderEnabled(
-                memberKey = "member-one",
-                enabled = true,
-                initialDeadline = HealthSyncReminderDeadline(
-                    basisToken = "a".repeat(64),
-                    bootCount = 7,
-                    triggerElapsedRealtimeMillis = 24_000L,
-                ),
-            ),
-        )
 
         assertTrue(
             state.completeHealthSetupAuthorization(
                 requestedAt = InstantValue(100),
                 receiptBaselineAt = InstantValue(75),
                 statusObservedAt = InstantValue(100),
-                reminderDeadline = replacementDeadline,
                 completesInitialSetup = true,
             ),
         )
@@ -102,41 +84,7 @@ class SharedPreferencesLocalStateTest {
         assertNull(reconstructed.lastKnownDataReceivedAt)
         assertEquals(InstantValue(100), reconstructed.lastKnownStatusObservedAt)
         assertFalse(reconstructed.healthReconnectRequired)
-        assertEquals(replacementDeadline, reconstructed.healthSyncReminderDeadline)
         assertEquals(InitialSetupStep.FriendlyNames, reconstructed.initialSetupStep)
-    }
-
-    @Test
-    fun optedInSetupAuthorizationFailsClosedWithoutAReplacementDeadline() {
-        val preferences = FaultInjectedPreferences()
-        val state = SharedPreferencesLocalState(preferences)
-        val originalDeadline = HealthSyncReminderDeadline(
-            basisToken = "a".repeat(64),
-            bootCount = 7,
-            triggerElapsedRealtimeMillis = 24_000L,
-        )
-        state.memberKey = "member-one"
-        state.healthAccessRequestedAt = InstantValue(50)
-        assertTrue(
-            state.setHealthSyncReminderEnabled(
-                memberKey = "member-one",
-                enabled = true,
-                initialDeadline = originalDeadline,
-            ),
-        )
-
-        assertFalse(
-            state.completeHealthSetupAuthorization(
-                requestedAt = InstantValue(100),
-                receiptBaselineAt = null,
-                statusObservedAt = InstantValue(100),
-            ),
-        )
-
-        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
-        assertEquals(InstantValue(50), reconstructed.healthAccessRequestedAt)
-        assertEquals(originalDeadline, reconstructed.healthSyncReminderDeadline)
-        assertTrue(reconstructed.isHealthSyncReminderEnabled("member-one"))
     }
 
     @Test
@@ -177,6 +125,39 @@ class SharedPreferencesLocalStateTest {
         assertEquals(observedAt, reconstructed.lastKnownStatusObservedAt)
         assertTrue(reconstructed.healthReconnectRequired)
         assertEquals(InitialSetupStep.HealthConnect, reconstructed.initialSetupStep)
+    }
+
+    @Test
+    fun optedInSetupAuthorizationFailsClosedWithoutAReplacementDeadline() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val originalDeadline = HealthSyncReminderDeadline(
+            basisToken = "a".repeat(64),
+            bootCount = 7,
+            triggerElapsedRealtimeMillis = 24_000L,
+        )
+        state.memberKey = "member-one"
+        state.healthAccessRequestedAt = InstantValue(50)
+        assertTrue(
+            state.setHealthSyncReminderEnabled(
+                memberKey = "member-one",
+                enabled = true,
+                initialDeadline = originalDeadline,
+            ),
+        )
+
+        assertFalse(
+            state.completeHealthSetupAuthorization(
+                requestedAt = InstantValue(100),
+                receiptBaselineAt = null,
+                statusObservedAt = InstantValue(100),
+            ),
+        )
+
+        val reconstructed = SharedPreferencesLocalState(preferences.recreated())
+        assertEquals(InstantValue(50), reconstructed.healthAccessRequestedAt)
+        assertEquals(originalDeadline, reconstructed.healthSyncReminderDeadline)
+        assertTrue(reconstructed.isHealthSyncReminderEnabled("member-one"))
     }
 
     @Test
@@ -271,15 +252,20 @@ class SharedPreferencesLocalStateTest {
         assertNull(reconstructed.healthSyncReminderDeadline)
         assertTrue(reconstructed.setHealthSyncReminderEnabled("member-one", true))
         assertTrue(reconstructed.persistHealthSyncReminderDeadline("member-one", deadline))
+        val replacementDeadline = HealthSyncReminderDeadline(
+            basisToken = "b".repeat(64),
+            bootCount = 8,
+            triggerElapsedRealtimeMillis = 900_000L,
+        )
         assertTrue(
             reconstructed.completeHealthSetupAuthorization(
                 requestedAt = InstantValue(100),
                 receiptBaselineAt = null,
                 statusObservedAt = InstantValue(100),
-                reminderDeadline = deadline,
+                reminderDeadline = replacementDeadline,
             ),
         )
-        assertEquals(deadline, reconstructed.healthSyncReminderDeadline)
+        assertEquals(replacementDeadline, reconstructed.healthSyncReminderDeadline)
 
         assertTrue(reconstructed.persistHealthSyncReminderDeadline("member-one", deadline))
         assertTrue(reconstructed.revokeHealthSetupAuthorization())

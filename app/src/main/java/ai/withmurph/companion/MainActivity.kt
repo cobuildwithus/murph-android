@@ -39,10 +39,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        openSettingsRequestId = savedInstanceState?.getInt(
+            STATE_OPEN_SETTINGS_REQUEST_ID,
+        ) ?: 0
         graph = (application as MurphApplication).graph
         graph.healthSyncReminder.didEnterForeground()
         healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
-        handleHealthSyncReminderIntent(intent)
+        handleHealthSyncReminderIntent(
+            intent = intent,
+            isRestoring = savedInstanceState != null,
+        )
 
         if (isHealthPermissionRationaleIntent(intent)) {
             openUri(AppLinks.Privacy)
@@ -306,6 +312,11 @@ class MainActivity : ComponentActivity() {
         graph.applicationScope.launch { graph.session.start() }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_OPEN_SETTINGS_REQUEST_ID, openSettingsRequestId)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -396,8 +407,11 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
-    private fun handleHealthSyncReminderIntent(intent: Intent?) {
-        if (consumeHealthSyncReminderSettingsIntent(intent)) {
+    private fun handleHealthSyncReminderIntent(
+        intent: Intent?,
+        isRestoring: Boolean = false,
+    ) {
+        if (consumeHealthSyncReminderSettingsIntent(intent, isRestoring)) {
             openSettingsRequestId += 1
         }
     }
@@ -427,9 +441,17 @@ class MainActivity : ComponentActivity() {
         return action == "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" ||
             action == "android.intent.action.VIEW_PERMISSION_USAGE"
     }
+
+    private companion object {
+        const val STATE_OPEN_SETTINGS_REQUEST_ID = "open_settings_request_id"
+    }
 }
 
-internal fun consumeHealthSyncReminderSettingsIntent(intent: Intent?): Boolean {
+internal fun consumeHealthSyncReminderSettingsIntent(
+    intent: Intent?,
+    isRestoring: Boolean = false,
+): Boolean {
+    if (isRestoring) return false
     if (intent?.action != HealthSyncReminderController.ACTION_OPEN_SETTINGS) return false
     intent.action = null
     return true

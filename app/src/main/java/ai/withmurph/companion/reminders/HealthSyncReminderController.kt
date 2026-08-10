@@ -138,16 +138,11 @@ class HealthSyncReminderController internal constructor(
     override fun deadlineForSetupAuthorization(
         memberKey: String,
         requestedAt: InstantValue,
-    ): HealthSyncReminderDeadline? {
-        val admission = setupAuthorizationReminderAdmission(
-            localState = localState,
-            memberKey = memberKey,
-            requestedAt = requestedAt,
-        ) ?: return null
-        return deadlineFor(admission).takeIf {
-            localState.isHealthSyncReminderEnabled(memberKey)
-        }
-    }
+    ): HealthSyncReminderDeadline? = setupAuthorizationReminderAdmission(
+        localState = localState,
+        memberKey = memberKey,
+        requestedAt = requestedAt,
+    )?.let(::deadlineFor)
 
     override fun refreshSchedule(freshBackendStatus: Boolean) {
         if (freshBackendStatus) {

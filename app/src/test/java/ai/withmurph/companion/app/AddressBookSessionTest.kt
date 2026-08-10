@@ -32,6 +32,7 @@ import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -948,6 +949,97 @@ class AddressBookSessionTest {
     }
 
     @Test
+    fun backgroundCancelsContactReadAndKeepsTheExactMutationRetryable() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.contacts.readGate = CompletableDeferred()
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        fixture.contacts.readEntered.await()
+        val savedMutation = requireNotNull(
+            fixture.localState.pendingAddressBookReplacement,
+        )
+
+        fixture.session.didEnterBackground()
+        completion.join()
+
+        assertTrue(completion.isCancelled)
+        assertTrue(fixture.contacts.readCancellationObserved)
+        assertTrue(fixture.api.replacements.isEmpty())
+        assertFalse(fixture.session.state.value.isAddressBookBusy)
+        assertEquals(savedMutation, fixture.localState.pendingAddressBookReplacement)
+
+        fixture.contacts.readGate = null
+        fixture.session.didBecomeActive()
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements.single().second.mutation)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+    }
+
+    @Test
+    fun backgroundCancelsStartedReplacementAndFencesItsLateResult() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val replaceEntered = CompletableDeferred<Unit>()
+        val replaceGate = CompletableDeferred<Unit>()
+        val replaceCancellationObserved = CompletableDeferred<Unit>()
+        fixture.api.replaceHandler = { memberKey, request ->
+            replaceEntered.complete(Unit)
+            try {
+                replaceGate.await()
+            } catch (error: CancellationException) {
+                replaceCancellationObserved.complete(Unit)
+                throw error
+            }
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        replaceEntered.await()
+        val savedMutation = requireNotNull(
+            fixture.localState.pendingAddressBookReplacement,
+        )
+
+        fixture.session.didEnterBackground()
+        replaceCancellationObserved.await()
+        completion.join()
+
+        assertTrue(completion.isCancelled)
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements.single().second.mutation)
+        assertEquals(0, fixture.localState.addressBookRevision)
+        assertEquals(savedMutation, fixture.localState.pendingAddressBookReplacement)
+        assertFalse(fixture.session.state.value.isAddressBookBusy)
+
+        fixture.api.replaceHandler = { memberKey, request ->
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+        fixture.session.didBecomeActive()
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertTrue(fixture.api.replacements.all { it.second.mutation == savedMutation })
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(1, fixture.localState.addressBookRevision)
+    }
+
+    @Test
     fun explicitStopWaitsForForegroundReconciliationThenDeletesOnce() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
@@ -1043,7 +1135,8 @@ class AddressBookSessionTest {
         assertEquals(MEMBER_TWO, fixture.localState.memberKey)
 
         release.complete(Unit)
-        assertFalse(oldCompletion.await())
+        oldCompletion.join()
+        assertTrue(oldCompletion.isCancelled)
 
         assertEquals(MEMBER_TWO, fixture.localState.memberKey)
         assertEquals(9, fixture.localState.addressBookRevision)
@@ -1678,7 +1771,14 @@ class AddressBookSessionTest {
                 "00000000-0000-4000-8000-${mutationSequence.toString().padStart(12, '0')}"
             },
         )
+        session.markForegroundForTest()
         return Fixture(session, auth, api, contacts, localState, health, events)
+    }
+
+    private fun AppSession.markForegroundForTest() {
+        val field = AppSession::class.java.getDeclaredField("isForeground")
+        field.isAccessible = true
+        field.setBoolean(this, true)
     }
 
     private data class Fixture(
@@ -1813,6 +1913,9 @@ class AddressBookSessionTest {
         var permissionGranted = false
         var rows: List<AddressBookPersonContact> = emptyList()
         var readCalls = 0
+        var readGate: CompletableDeferred<Unit>? = null
+        var readEntered = CompletableDeferred<Unit>()
+        var readCancellationObserved = false
 
         override fun hasPermission(): Boolean = permissionGranted
 
@@ -1820,6 +1923,13 @@ class AddressBookSessionTest {
             check(permissionGranted)
             readCalls += 1
             events += "contacts-read"
+            readEntered.complete(Unit)
+            try {
+                readGate?.await()
+            } catch (error: CancellationException) {
+                readCancellationObserved = true
+                throw error
+            }
             return rows
         }
     }

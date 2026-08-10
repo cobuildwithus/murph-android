@@ -142,6 +142,21 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
+    fun restoredTaskIntentDoesNotCreateANewReminderSettingsRequest() {
+        val intent = Intent().setAction(HealthSyncReminderController.ACTION_OPEN_SETTINGS)
+
+        assertFalse(
+            consumeHealthSyncReminderSettingsIntent(
+                intent = intent,
+                isRestoring = true,
+            ),
+        )
+        assertEquals(HealthSyncReminderController.ACTION_OPEN_SETTINGS, intent.action)
+        assertTrue(consumeHealthSyncReminderSettingsIntent(intent))
+        assertNull(intent.action)
+    }
+
+    @Test
     fun staleOfflineStatusKeepsReminderOptInUnavailable() = withScenario("savedStatus") {
         onNodeWithText("Available after Murph checks sync status online.").assertIsDisplayed()
     }
@@ -158,8 +173,22 @@ class ScreenshotScenarioSmokeTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val intent = Intent(context, ScreenshotActivity::class.java)
             .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "reminderOff")
+            .putExtra(ScreenshotActivity.START_LAUNCHING_EXTRA, true)
 
         ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.waitForIdle()
+            scenario.onActivity { activity ->
+                assertEquals(1, activity.openSettingsRequestId)
+                assertEquals(0, activity.consumedOpenSettingsRequestCount)
+            }
+
+            scenario.recreate()
+            compose.waitForIdle()
+            scenario.onActivity { activity ->
+                assertEquals(1, activity.openSettingsRequestId)
+                assertEquals(0, activity.consumedOpenSettingsRequestCount)
+                activity.publishReadyApp()
+            }
             compose.waitForIdle()
             compose.onNodeWithText("Sync reminder").assertIsDisplayed()
             scenario.onActivity { activity ->
@@ -178,6 +207,27 @@ class ScreenshotScenarioSmokeTest {
             compose.onNodeWithText("Sync reminder").assertIsDisplayed()
             scenario.onActivity { activity ->
                 assertEquals(0, activity.openSettingsRequestId)
+                assertEquals(2, activity.consumedOpenSettingsRequestCount)
+            }
+        }
+    }
+
+    @Test
+    fun reminderTogglePassesTheRequestedTargetValue() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "reminderOff")
+        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.waitForIdle()
+            compose.onNodeWithText("TURN ON").performClick()
+            compose.onNodeWithText("Turning on… You can turn this off while Murph checks current sync status.")
+                .assertIsDisplayed()
+            compose.onNodeWithText("TURN OFF").performClick()
+            scenario.onActivity { activity ->
+                assertEquals(
+                    listOf(true, false),
+                    activity.healthSyncReminderPreferenceRequests,
+                )
             }
         }
     }

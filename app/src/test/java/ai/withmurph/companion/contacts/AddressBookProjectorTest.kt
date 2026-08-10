@@ -1,6 +1,7 @@
 package ai.withmurph.companion.contacts
 
 import ai.withmurph.companion.core.AddressBookPersonContact
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -259,6 +260,32 @@ class AddressBookProjectorTest {
             person("", null, *List(8) { "local" }.toTypedArray())
         } + person("Anna", "Smith", "+12125550123")
         assertTrue(AddressBookProjector.project(afterPhoneValueLimit).isEmpty())
+    }
+
+    @Test
+    fun projectionChecksCancellationWhileProcessingContactRows() {
+        var checks = 0
+        var cancelled = false
+
+        try {
+            AddressBookProjector.project(
+                contacts = listOf(
+                    person("Anna", "Smith", "+12125550123"),
+                    person("Ben", "Jones", "+12125550124"),
+                ),
+                ensureActive = {
+                    checks += 1
+                    if (checks == 3) {
+                        throw CancellationException("test cancellation")
+                    }
+                },
+            )
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+
+        assertTrue(cancelled)
+        assertEquals(3, checks)
     }
 
     @Test
