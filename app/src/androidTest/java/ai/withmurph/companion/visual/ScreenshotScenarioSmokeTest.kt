@@ -58,6 +58,19 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
+    fun contactCardErrorKeepsOnlyContactStageRecovery() =
+        withScenario("onboardingContactError") {
+            onNodeWithText("We couldn't open the contact card. Check your connection and try again.")
+                .assertIsDisplayed()
+            onNodeWithText("Add Murph to Contacts").assertIsDisplayed().assertHasClickAction()
+            onNodeWithText("Skip").assertIsDisplayed().assertHasClickAction()
+            onAllNodesWithText("Contact support").assertCountEquals(0)
+            onAllNodesWithText("Delete account").assertCountEquals(0)
+            onAllNodesWithText("Sign out and stop syncing").assertCountEquals(0)
+            onAllNodesWithText("Settings").assertCountEquals(0)
+        }
+
+    @Test
     fun onboardingConsentRecoveryDoesNotExposeSettings() =
         withScenario("onboardingConsentBanner") {
             onNodeWithText("Consent needed").assertIsDisplayed().assertHasClickAction()

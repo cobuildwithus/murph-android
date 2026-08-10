@@ -58,7 +58,7 @@ data class AppUiState(
     val initialOnboardingDraft: InitialOnboardingDraft? = null,
     val isInitialOnboardingSaving: Boolean = false,
     val initialOnboardingCompletedNow: Boolean = false,
-    val initialOnboardingMessage: String? = null,
+    val initialOnboardingNotice: InitialOnboardingNotice? = null,
     val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
     val pendingHealthPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
@@ -67,6 +67,16 @@ data class AppUiState(
 data class PendingInitialOnboardingContactCardHandoff(
     val id: Int,
 )
+
+data class InitialOnboardingNotice(
+    val message: String,
+    val recoveryActions: InitialOnboardingRecoveryActions,
+)
+
+enum class InitialOnboardingRecoveryActions {
+    None,
+    Account,
+}
 
 enum class InitialOnboardingStage {
     Contact,

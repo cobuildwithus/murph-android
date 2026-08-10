@@ -1226,7 +1226,14 @@ class AppSessionTest {
         fixture.session.saveInitialOnboarding()
 
         assertEquals("coach", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
-        assertTrue(fixture.session.state.value.initialOnboardingMessage.orEmpty().contains("choices"))
+        assertTrue(
+            fixture.session.state.value.initialOnboardingNotice?.message.orEmpty()
+                .contains("choices"),
+        )
+        assertEquals(
+            InitialOnboardingRecoveryActions.Account,
+            fixture.session.state.value.initialOnboardingNotice?.recoveryActions,
+        )
         assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
     }
 
@@ -1346,6 +1353,29 @@ class AppSessionTest {
     }
 
     @Test
+    fun failedContactCardHandoffDoesNotOfferAccountRecovery() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.api.initialOnboardingContactCardError = CompanionApiException.Network
+
+        fixture.session.prepareInitialOnboardingContactCard()
+        val event = fixture.session.state.value.initialOnboardingContactCardHandoff!!
+        assertFalse(fixture.session.launchInitialOnboardingContactCardHandoff(event.id) { true })
+
+        assertEquals(InitialOnboardingStage.Contact, fixture.session.state.value.initialOnboardingStage)
+        assertEquals(
+            InitialOnboardingRecoveryActions.None,
+            fixture.session.state.value.initialOnboardingNotice?.recoveryActions,
+        )
+        assertNull(fixture.session.state.value.initialOnboardingContactCardHandoff)
+        assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
+
+        fixture.session.setInitialOnboardingStage(InitialOnboardingStage.MainPersona)
+        assertNull(fixture.session.state.value.initialOnboardingNotice)
+    }
+
+    @Test
     fun failedContactCardMemberBoundaryResetReleasesSavingState() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding = pendingInitialOnboarding()
@@ -1429,6 +1459,10 @@ class AppSessionTest {
         assertTrue(fixture.api.initialOnboardingContactCards.isEmpty())
         assertNull(fixture.session.state.value.initialOnboardingContactCardHandoff)
         assertEquals(InitialOnboardingStage.Contact, fixture.session.state.value.initialOnboardingStage)
+        assertEquals(
+            InitialOnboardingRecoveryActions.None,
+            fixture.session.state.value.initialOnboardingNotice?.recoveryActions,
+        )
     }
 
     @Test

@@ -7,6 +7,8 @@ import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
 import ai.withmurph.companion.app.InitialOnboardingDraft
+import ai.withmurph.companion.app.InitialOnboardingNotice
+import ai.withmurph.companion.app.InitialOnboardingRecoveryActions
 import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.auth.CountryDialCode
 import ai.withmurph.companion.auth.LoginUiState
@@ -161,6 +163,7 @@ internal enum class ScreenshotScenario {
     OnboardingSupporting,
     OnboardingVoice,
     OnboardingTone,
+    OnboardingContactError,
     OnboardingError,
     OnboardingSaving,
     OnboardingWelcome,
@@ -239,9 +242,17 @@ internal enum class ScreenshotScenario {
         OnboardingSupporting -> onboardingState(InitialOnboardingStage.SupportingPersona)
         OnboardingVoice -> onboardingState(InitialOnboardingStage.Voice)
         OnboardingTone -> onboardingState(InitialOnboardingStage.Tone)
+        OnboardingContactError -> onboardingState(InitialOnboardingStage.Contact).copy(
+            initialOnboardingNotice = InitialOnboardingNotice(
+                message = "We couldn't open the contact card. Check your connection and try again.",
+                recoveryActions = InitialOnboardingRecoveryActions.None,
+            ),
+        )
         OnboardingError -> onboardingState(InitialOnboardingStage.Tone).copy(
-            initialOnboardingMessage =
-                "We couldn't save your setup yet. Your choices are still here. Try again.",
+            initialOnboardingNotice = InitialOnboardingNotice(
+                message = "We couldn't save your setup yet. Your choices are still here. Try again.",
+                recoveryActions = InitialOnboardingRecoveryActions.Account,
+            ),
         )
         OnboardingSaving -> onboardingState(InitialOnboardingStage.Tone).copy(
             isInitialOnboardingSaving = true,
@@ -338,6 +349,7 @@ internal enum class ScreenshotScenario {
         OnboardingSupporting,
         OnboardingVoice,
         OnboardingTone,
+        OnboardingContactError,
         OnboardingError,
         OnboardingSaving,
         OnboardingWelcome,
@@ -360,6 +372,7 @@ internal enum class ScreenshotScenario {
         OnboardingSupporting,
         OnboardingVoice,
         OnboardingTone,
+        OnboardingContactError,
         OnboardingError,
         OnboardingSaving,
         OnboardingWelcome,

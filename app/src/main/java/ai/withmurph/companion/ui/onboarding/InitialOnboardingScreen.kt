@@ -2,6 +2,7 @@ package ai.withmurph.companion.ui.onboarding
 
 import ai.withmurph.companion.app.AppUiState
 import ai.withmurph.companion.app.InitialOnboardingDraft
+import ai.withmurph.companion.app.InitialOnboardingRecoveryActions
 import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.core.InitialOnboardingContactAvatar
 import ai.withmurph.companion.core.InitialOnboardingPersona
@@ -185,8 +186,8 @@ fun InitialOnboardingScreen(
         stageHeadingFocus.requestFocus()
         stageScrollState.scrollTo(0)
     }
-    LaunchedEffect(state.initialOnboardingMessage) {
-        if (state.initialOnboardingMessage != null) {
+    LaunchedEffect(state.initialOnboardingNotice) {
+        if (state.initialOnboardingNotice != null) {
             stageScrollState.animateScrollTo(0)
         }
     }
@@ -210,14 +211,14 @@ fun InitialOnboardingScreen(
             verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
-            state.initialOnboardingMessage?.let { message ->
+            state.initialOnboardingNotice?.let { notice ->
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        text = message,
+                        text = notice.message,
                         modifier = Modifier.semantics {
                             liveRegion = LiveRegionMode.Assertive
                         },
@@ -225,21 +226,23 @@ fun InitialOnboardingScreen(
                         color = MurphColors.Sienna,
                         textAlign = TextAlign.Center,
                     )
-                    MurphLinkButton(
-                        text = "Contact support",
-                        onClick = actions.onOpenSupport,
-                        enabled = !state.isInitialOnboardingSaving,
-                    )
-                    MurphLinkButton(
-                        text = "Delete account",
-                        onClick = actions.onDeleteAccount,
-                        enabled = !state.isInitialOnboardingSaving,
-                    )
-                    MurphLinkButton(
-                        text = "Sign out and stop syncing",
-                        onClick = actions.onSignOut,
-                        enabled = !state.isInitialOnboardingSaving,
-                    )
+                    if (notice.recoveryActions == InitialOnboardingRecoveryActions.Account) {
+                        MurphLinkButton(
+                            text = "Contact support",
+                            onClick = actions.onOpenSupport,
+                            enabled = !state.isInitialOnboardingSaving,
+                        )
+                        MurphLinkButton(
+                            text = "Delete account",
+                            onClick = actions.onDeleteAccount,
+                            enabled = !state.isInitialOnboardingSaving,
+                        )
+                        MurphLinkButton(
+                            text = "Sign out and stop syncing",
+                            onClick = actions.onSignOut,
+                            enabled = !state.isInitialOnboardingSaving,
+                        )
+                    }
                 }
             }
             when (stage) {

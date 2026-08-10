@@ -3,6 +3,7 @@ package ai.withmurph.companion.visual
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.InitialOnboardingStage
+import ai.withmurph.companion.app.InitialOnboardingRecoveryActions
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
@@ -83,6 +84,7 @@ class ScreenshotFixtureTest {
         val now = Instant.parse("2026-08-06T12:00:00Z")
         val loading = ScreenshotScenario.from("onboardingLoading").appState(now)
         val error = ScreenshotScenario.from("onboardingError").appState(now)
+        val contactError = ScreenshotScenario.from("onboardingContactError").appState(now)
         val saving = ScreenshotScenario.from("onboardingSaving").appState(now)
 
         assertEquals(AppPhase.Launching, loading.phase)
@@ -96,7 +98,17 @@ class ScreenshotFixtureTest {
         assertTrue(ScreenshotScenario.OnboardingError.isInitialOnboarding())
         assertEquals(
             "We couldn't save your setup yet. Your choices are still here. Try again.",
-            error.initialOnboardingMessage,
+            error.initialOnboardingNotice?.message,
+        )
+        assertEquals(
+            InitialOnboardingRecoveryActions.Account,
+            error.initialOnboardingNotice?.recoveryActions,
+        )
+
+        assertEquals(InitialOnboardingStage.Contact, contactError.initialOnboardingStage)
+        assertEquals(
+            InitialOnboardingRecoveryActions.None,
+            contactError.initialOnboardingNotice?.recoveryActions,
         )
 
         assertEquals(AppPhase.Ready, saving.phase)
@@ -104,7 +116,7 @@ class ScreenshotFixtureTest {
         assertNotNull(saving.initialOnboarding)
         assertTrue(saving.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingSaving.isInitialOnboarding())
-        assertNull(saving.initialOnboardingMessage)
+        assertNull(saving.initialOnboardingNotice)
     }
 
     @Test

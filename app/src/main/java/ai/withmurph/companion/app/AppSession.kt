@@ -239,7 +239,9 @@ class AppSession(
             current.launchConsentRecovery != null ||
             current.isInitialOnboardingSaving
         ) return
-        _state.update { state -> state.copy(initialOnboardingStage = stage) }
+        _state.update { state ->
+            state.copy(initialOnboardingStage = stage, initialOnboardingNotice = null)
+        }
     }
 
     suspend fun skipInitialOnboarding() {
@@ -330,6 +332,7 @@ class AppSession(
                 } else {
                     publishInitialOnboardingFailure(
                         "We couldn't open the contact card. Check your connection and try again.",
+                        InitialOnboardingRecoveryActions.None,
                     )
                 }
                 return@withLock false
@@ -337,6 +340,7 @@ class AppSession(
                 clearInitialOnboardingContactCardHandoff(pending)
                 publishInitialOnboardingFailure(
                     "We couldn't open the contact card. Check your connection and try again.",
+                    InitialOnboardingRecoveryActions.None,
                 )
                 return@withLock false
             }
@@ -429,7 +433,7 @@ class AppSession(
             initialOnboardingGeneration += 1
             val generation = initialOnboardingGeneration
             _state.update {
-                it.copy(isInitialOnboardingSaving = true, initialOnboardingMessage = null)
+                it.copy(isInitialOnboardingSaving = true, initialOnboardingNotice = null)
             }
             try {
                 val response = api.completeInitialOnboarding(memberKey, request)
@@ -448,7 +452,7 @@ class AppSession(
                             isInitialOnboardingSaving = false,
                             initialOnboardingCompletedNow = true,
                             initialOnboardingStage = InitialOnboardingStage.Welcome,
-                            initialOnboardingMessage = null,
+                            initialOnboardingNotice = null,
                         )
                     }
                 } else {
@@ -465,6 +469,7 @@ class AppSession(
                 } else {
                     publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
+                        InitialOnboardingRecoveryActions.Account,
                     )
                 }
             } catch (_: CompanionApiException.ConsentRequired) {
@@ -493,12 +498,14 @@ class AppSession(
                 } else {
                     publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
+                        InitialOnboardingRecoveryActions.Account,
                     )
                 }
             } catch (_: Exception) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishInitialOnboardingFailure(
                         "We couldn't save your setup yet. Your choices are still here. Try again.",
+                        InitialOnboardingRecoveryActions.Account,
                     )
                 }
             } finally {
@@ -538,7 +545,7 @@ class AppSession(
             _state.update {
                 it.copy(
                     isInitialOnboardingSaving = true,
-                    initialOnboardingMessage = null,
+                    initialOnboardingNotice = null,
                     initialOnboardingContactCardHandoff =
                         PendingInitialOnboardingContactCardHandoff(handoffId),
                 )
@@ -3734,7 +3741,7 @@ class AppSession(
         ) {
             // A retry after consent keeps the exact ephemeral draft. The
             // canonical server is still authoritative for completion only.
-            _state.update { it.copy(initialOnboardingMessage = null) }
+            _state.update { it.copy(initialOnboardingNotice = null) }
             return
         }
         val personaParts = resolveInitialOnboardingPersonaParts(
@@ -3768,7 +3775,7 @@ class AppSession(
                 ),
                 isInitialOnboardingSaving = false,
                 initialOnboardingCompletedNow = false,
-                initialOnboardingMessage = null,
+                initialOnboardingNotice = null,
                 initialOnboardingContactCardHandoff = null,
             )
         }
@@ -3800,7 +3807,7 @@ class AppSession(
                 initialOnboardingDraft = null,
                 isInitialOnboardingSaving = false,
                 initialOnboardingCompletedNow = false,
-                initialOnboardingMessage = null,
+                initialOnboardingNotice = null,
                 initialOnboardingContactCardHandoff = null,
             )
         }
@@ -3859,6 +3866,7 @@ class AppSession(
         } else {
             publishInitialOnboardingFailure(
                 "We couldn't verify your session. Check your connection and try again.",
+                InitialOnboardingRecoveryActions.None,
             )
         }
     }
@@ -3903,9 +3911,15 @@ class AppSession(
         prioritizeActiveLaunchConsentFollowUp(followUp)
     }
 
-    private fun publishInitialOnboardingFailure(message: String) {
+    private fun publishInitialOnboardingFailure(
+        message: String,
+        recoveryActions: InitialOnboardingRecoveryActions,
+    ) {
         _state.update {
-            it.copy(isInitialOnboardingSaving = false, initialOnboardingMessage = message)
+            it.copy(
+                isInitialOnboardingSaving = false,
+                initialOnboardingNotice = InitialOnboardingNotice(message, recoveryActions),
+            )
         }
     }
 
