@@ -1128,7 +1128,11 @@ private fun HealthConsentContent(onContinue: () -> Unit) {
         MurphCard {
             ConsentRow(
                 icon = MurphIconKind.Checklist,
-                text = "Choose each category on the next screen.",
+                text = "Choose the categories Murph may read: activity and workouts, sleep, body measurements, vital signs, nutrition and hydration, and menstrual and reproductive health.",
+            )
+            ConsentRow(
+                icon = MurphIconKind.Sparkles,
+                text = "Murph uses the categories you allow to answer your questions, build longitudinal trends and baselines, and confirm that your data reached your account.",
             )
             ConsentRow(
                 icon = MurphIconKind.Sparkles,

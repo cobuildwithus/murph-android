@@ -38,14 +38,32 @@ if ! grep -Fq 'package="ai.withmurph.app.synthetic"' "$synthetic_manifest" ||
 fi
 
 expected_health_read_permissions='android.permission.health.READ_ACTIVE_CALORIES_BURNED
+android.permission.health.READ_BASAL_METABOLIC_RATE
+android.permission.health.READ_BLOOD_GLUCOSE
+android.permission.health.READ_BLOOD_PRESSURE
 android.permission.health.READ_BODY_FAT
+android.permission.health.READ_BODY_TEMPERATURE
+android.permission.health.READ_CERVICAL_MUCUS
+android.permission.health.READ_DISTANCE
+android.permission.health.READ_ELEVATION_GAINED
 android.permission.health.READ_EXERCISE
+android.permission.health.READ_FLOORS_CLIMBED
+android.permission.health.READ_HEART_RATE
 android.permission.health.READ_HEART_RATE_VARIABILITY
 android.permission.health.READ_HEIGHT
+android.permission.health.READ_HYDRATION
+android.permission.health.READ_INTERMENSTRUAL_BLEEDING
+android.permission.health.READ_MENSTRUATION
+android.permission.health.READ_NUTRITION
+android.permission.health.READ_OVULATION_TEST
 android.permission.health.READ_OXYGEN_SATURATION
+android.permission.health.READ_POWER
 android.permission.health.READ_RESPIRATORY_RATE
+android.permission.health.READ_SEXUAL_ACTIVITY
 android.permission.health.READ_SLEEP
+android.permission.health.READ_SPEED
 android.permission.health.READ_STEPS
+android.permission.health.READ_TOTAL_CALORIES_BURNED
 android.permission.health.READ_VO2_MAX
 android.permission.health.READ_WEIGHT'
 
@@ -68,7 +86,7 @@ do
     fi
     actual_health_read_permissions=$(grep -o 'android.permission.health.READ_[A-Z0-9_]*' "$merged_manifest" | sort -u)
     if [ "$actual_health_read_permissions" != "$expected_health_read_permissions" ]; then
-        echo "Merged manifest Health Connect read permissions differ from the reviewed 11-name allowlist: $merged_manifest" >&2
+        echo "Merged manifest Health Connect read permissions differ from the reviewed 29-name allowlist: $merged_manifest" >&2
         exit 1
     fi
 done
