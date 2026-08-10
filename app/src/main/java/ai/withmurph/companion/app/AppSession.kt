@@ -17,6 +17,7 @@ import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
+import ai.withmurph.companion.core.HealthSyncReminderLifecycle
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
@@ -31,6 +32,7 @@ import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
+import ai.withmurph.companion.core.NoopHealthSyncReminderLifecycle
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CancellationException
@@ -46,6 +48,7 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 class AppSession(
     private val auth: AuthProvider,
@@ -54,10 +57,13 @@ class AppSession(
     private val contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
     private val localState: LocalState,
     private val config: AppConfig,
+    private val healthSyncReminder: HealthSyncReminderLifecycle =
+        NoopHealthSyncReminderLifecycle,
     private val newMutationId: () -> String = { UUID.randomUUID().toString() },
 ) {
     private val startMutex = Mutex()
     private val healthMutex = Mutex()
+    private val healthSyncReminderIntentMutex = Mutex()
     private val foregroundMutex = Mutex()
     private val addressBookMutex = Mutex()
     private val launchConsentMutex = Mutex()
@@ -75,6 +81,9 @@ class AppSession(
     private val pendingAddressBookReconcileLock = Any()
     private var pendingAddressBookReconcile: PendingAddressBookReconcile? = null
     private var pendingLaunchConsentRecovery: PendingLaunchConsentRecovery? = null
+    private val healthSyncReminderIntent = AtomicReference(
+        HealthSyncReminderIntent(revision = 0, enabled = false),
+    )
     private var nextHealthPermissionRequestId = 1
     private var nextAddressBookPermissionRequestId = 1
     private var nextInitialOnboardingContactCardHandoffId = 1
@@ -1488,6 +1497,7 @@ class AppSession(
                     currentAuthOwnershipLoss(memberKey)?.let { authState ->
                         localState.lastKnownDataReceivedAt = receiptBeforePreflight
                         localState.lastKnownStatusObservedAt = observationBeforePreflight
+                        healthSyncReminder.refreshSchedule()
                         publishPermissionAwareHealthState(
                             status = cachedHealthStatus(),
                             message = _state.value.healthMessage,
@@ -1751,12 +1761,17 @@ class AppSession(
                 val completesInitialSetup =
                     _state.value.initialSetupStep == InitialSetupStep.HealthConnect &&
                         localState.initialSetupStep == InitialSetupStep.HealthConnect
+                val reminderDeadline = healthSyncReminder.deadlineForSetupAuthorization(
+                    memberKey = refreshedPending.memberKey,
+                    requestedAt = requestedAt,
+                )
                 val committed = localState.completeHealthSetupAuthorization(
                     requestedAt = requestedAt,
                     receiptBaselineAt = refreshedPending.receiptBaselineAt?.let {
                         InstantValue(it.toEpochMilli())
                     },
                     statusObservedAt = requestedAt,
+                    reminderDeadline = reminderDeadline,
                     completesInitialSetup = completesInitialSetup,
                 )
                 if (!committed) {
@@ -1774,6 +1789,7 @@ class AppSession(
                     }
                     return@withLock false
                 }
+                healthSyncReminder.refreshSchedule()
                 if (completesInitialSetup) {
                     projectInitialSetupStep(
                         expected = InitialSetupStep.HealthConnect,
@@ -1819,7 +1835,9 @@ class AppSession(
                         message = terminalMemberBoundaryMessage(error),
                         canRetry = false,
                         signOutLabel = terminalMemberBoundarySignOutLabel(error),
-                        supplementalActions = FailureSupplementalActions.Support,
+                        supplementalActions = supplementalActionsForBoundMember(
+                            pending.memberKey,
+                        ),
                         revokeAuthorization = true,
                     )
                 } else {
@@ -2248,6 +2266,113 @@ class AppSession(
         needsForegroundRefresh = true
     }
 
+    suspend fun setHealthSyncReminderEnabled(enabled: Boolean): Boolean {
+        val intent = claimHealthSyncReminderIntent(enabled)
+        if (!enabled) {
+            return healthSyncReminderIntentMutex.withLock disableCommit@{
+                if (healthSyncReminderIntent.get() != intent) return@disableCommit false
+                val memberKey = currentMemberKey ?: return@disableCommit false
+                if (
+                    memberKey != localState.memberKey ||
+                    localState.signOutPending ||
+                    _state.value.phase != AppPhase.Ready
+                ) {
+                    return@disableCommit false
+                }
+                if (!localState.setHealthSyncReminderEnabled(memberKey, false)) {
+                    return@disableCommit false
+                }
+                healthSyncReminder.cancel()
+                _state.update { it.copy(healthSyncReminderEnabled = false) }
+                true
+            }
+        }
+
+        var authoritativeLocalAuth: AuthSessionState? = null
+        var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
+        val updated = healthMutex.withLock {
+            val memberKey = currentMemberKey ?: return@withLock false
+            if (
+                memberKey != localState.memberKey ||
+                localState.signOutPending ||
+                _state.value.phase != AppPhase.Ready ||
+                !healthWasRequested() ||
+                _state.value.healthSync == HealthSyncState.NotConnected
+            ) {
+                return@withLock false
+            }
+            val epoch = sessionEpoch
+            if (
+                fetchValidatedHealthStatus(
+                    epoch = epoch,
+                    consentFollowUp = LaunchConsentFollowUp.Reconcile,
+                    onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+                    onConsentRequired = { deferredConsentRecovery = it },
+                ) == null
+            ) {
+                return@withLock false
+            }
+            healthSyncReminderIntentMutex.withLock enableCommit@{
+                if (healthSyncReminderIntent.get() != intent) return@enableCommit false
+                if (
+                    epoch != sessionEpoch ||
+                    memberKey != currentMemberKey ||
+                    memberKey != localState.memberKey ||
+                    localState.signOutPending ||
+                    _state.value.phase != AppPhase.Ready ||
+                    !healthWasRequested() ||
+                    _state.value.healthSync == HealthSyncState.NotConnected
+                ) {
+                    return@enableCommit false
+                }
+                val initialDeadline = healthSyncReminder.initialDeadline(memberKey)
+                    ?: return@enableCommit false
+                if (
+                    !localState.setHealthSyncReminderEnabled(
+                        memberKey = memberKey,
+                        enabled = true,
+                        initialDeadline = initialDeadline,
+                    )
+                ) {
+                    return@enableCommit false
+                }
+                healthSyncReminder.refreshSchedule()
+                _state.update {
+                    it.copy(
+                        authVerifiedOnline = true,
+                        healthSyncReminderEnabled = true,
+                    )
+                }
+                true
+            }
+        }
+        deferredConsentRecovery?.let { deferred ->
+            beginLaunchConsentRecovery(
+                deferred,
+                onAuthoritativeLocalAuth = { authoritativeLocalAuth = it },
+            )
+        }
+        authoritativeLocalAuth?.let {
+            handleAuthoritativeLocalAuthObservation(it)
+            return false
+        }
+        return updated
+    }
+
+    private fun claimHealthSyncReminderIntent(
+        enabled: Boolean,
+    ): HealthSyncReminderIntent {
+        while (true) {
+            val current = healthSyncReminderIntent.get()
+            if (current.enabled == enabled) return current
+            val next = HealthSyncReminderIntent(
+                revision = current.revision + 1,
+                enabled = enabled,
+            )
+            if (healthSyncReminderIntent.compareAndSet(current, next)) return next
+        }
+    }
+
     private fun ownsForegroundRefresh(generation: Int): Boolean =
         generation == foregroundGeneration
 
@@ -2306,6 +2431,7 @@ class AppSession(
             }
             return@withContext
         }
+        healthSyncReminder.cancel()
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         startMutex.withLock {
@@ -2550,6 +2676,8 @@ class AppSession(
                     authState.verifiedOnline -> null
                     else -> "You're offline. Murph will verify the session and resume sync when the connection returns."
                 },
+                healthSyncReminderEnabled =
+                    localState.isHealthSyncReminderEnabled(authState.memberKey),
                 addressBookSharing = if (contacts.isSupported && authState.verifiedOnline) {
                     AddressBookSharingState.Loading
                 } else {
@@ -2642,6 +2770,7 @@ class AppSession(
     }
 
     private suspend fun enterSignedOut() {
+        healthSyncReminder.cancel()
         if (health.isSignedIn() || localState.memberKey != null || healthWasRequested()) {
             if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         } else {
@@ -2653,6 +2782,7 @@ class AppSession(
 
     private fun finishSignedOut() {
         currentMemberKey = null
+        clearMemberScopedStateAndReminder()
         clearInitialOnboardingState()
         _state.value = AppUiState(
             phase = AppPhase.NeedsLogin,
@@ -2877,6 +3007,8 @@ class AppSession(
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
                     else -> "You're offline. Saved sync status is shown until Murph reconnects."
                 },
+                healthSyncReminderEnabled =
+                    localState.isHealthSyncReminderEnabled(memberKey),
                 addressBookSharing = AddressBookSharingState.Unavailable,
                 isAddressBookBusy = false,
                 addressBookHasInterruptedReplacement =
@@ -3188,6 +3320,7 @@ class AppSession(
         val expectedMemberKey = localState.memberKey
         val privySignOutMemberKey =
             localState.pendingPrivySignOutMemberKey ?: expectedMemberKey
+        healthSyncReminder.cancel()
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         try {
@@ -3308,7 +3441,7 @@ class AppSession(
                     message = terminalMemberBoundaryMessage(error),
                     canRetry = false,
                     signOutLabel = terminalMemberBoundarySignOutLabel(error),
-                    supplementalActions = FailureSupplementalActions.Support,
+                    supplementalActions = supplementalActionsForBoundMember(memberKey),
                     revokeAuthorization = true,
                 )
             } else {
@@ -3338,6 +3471,7 @@ class AppSession(
         localState.lastKnownDataReceivedAt = qualifyingReceipt?.let {
             InstantValue(it.toEpochMilli())
         }
+        healthSyncReminder.refreshSchedule(freshBackendStatus = true)
         publishPermissionAwareHealthState(
             status = status.copy(lastDataReceivedAt = qualifyingReceipt),
             message = null,
@@ -3899,7 +4033,7 @@ class AppSession(
             publishBackendBootstrapFailure(
                 message = "Murph account setup is temporarily unavailable. Try again.",
                 canRetry = true,
-                supplementalActions = FailureSupplementalActions.Support,
+                supplementalActions = supplementalActionsForBoundMember(memberKey),
             )
             false
         } catch (_: CompanionApiException.AdmissionSupportRequired) {
@@ -3917,7 +4051,7 @@ class AppSession(
             publishBackendBootstrapFailure(
                 message = "Murph couldn't finish account setup. Check your connection and try again.",
                 canRetry = true,
-                supplementalActions = FailureSupplementalActions.Support,
+                supplementalActions = supplementalActionsForBoundMember(memberKey),
             )
             false
         }
@@ -3980,13 +4114,14 @@ class AppSession(
         message: String,
         signOutLabel: String = "Sign out and start fresh",
     ) {
+        val supplementalActions = supplementalActionsForBoundMember()
         closeProductAuthorityForBoundary()
         if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         publishBackendBootstrapFailure(
             message = message,
             canRetry = false,
             signOutLabel = signOutLabel,
-            supplementalActions = FailureSupplementalActions.Support,
+            supplementalActions = supplementalActions,
         )
     }
 
@@ -3995,6 +4130,7 @@ class AppSession(
         canRetry: Boolean,
         signOutLabel: String = "Sign out and start fresh",
     ) {
+        val supplementalActions = supplementalActionsForBoundMember()
         closeProductAuthorityForBoundary()
         if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
         _state.update { current ->
@@ -4004,7 +4140,7 @@ class AppSession(
                     canRetry = canRetry,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
-                    supplementalActions = FailureSupplementalActions.Support,
+                    supplementalActions = supplementalActions,
                 ),
             )
         }
@@ -4018,6 +4154,16 @@ class AppSession(
             canRetry = false,
             signOutLabel = terminalMemberBoundarySignOutLabel(error),
         )
+    }
+
+    private fun supplementalActionsForBoundMember(
+        memberKey: String? = currentMemberKey,
+    ): FailureSupplementalActions = if (
+        memberKey != null && memberKey == localState.memberKey
+    ) {
+        FailureSupplementalActions.AccountAndLegal
+    } else {
+        FailureSupplementalActions.Support
     }
 
     private fun closeProductAuthorityForBoundary() {
@@ -4180,6 +4326,7 @@ class AppSession(
             publishHealthResetFailure()
             return false
         }
+        healthSyncReminder.cancel()
         val sdkResetSucceeded = if (healthAlreadySignedOut) {
             true
         } else {
@@ -4768,6 +4915,7 @@ class AppSession(
         signOutLabel: String = "Sign out and start fresh",
     ) {
         if (!ownsLaunchConsentRecovery(pending)) return
+        val supplementalActions = supplementalActionsForBoundMember(pending.memberKey)
         val clearsAdmissionCandidate =
             pending.memberOwnership == LaunchConsentMemberOwnership.AdmissionCandidate &&
                 localState.memberKey == null
@@ -4781,7 +4929,7 @@ class AppSession(
                     canRetry = canRetry,
                     canSignOut = true,
                     signOutLabel = signOutLabel,
-                    supplementalActions = FailureSupplementalActions.Support,
+                    supplementalActions = supplementalActions,
                 ),
             )
         }
@@ -5941,6 +6089,11 @@ class AppSession(
         }
     }
 
+    private fun clearMemberScopedStateAndReminder() {
+        localState.clearMemberScopedState()
+        healthSyncReminder.cancel()
+    }
+
     private fun connectionErrorMessage(error: Exception): String = when {
         error is CompanionApiException && isTerminalMemberBoundaryError(error) ->
             terminalMemberBoundaryMessage(error)
@@ -6036,6 +6189,11 @@ class AppSession(
         val memberKey: String?,
         val epoch: Int,
         val showBusy: Boolean,
+    )
+
+    private data class HealthSyncReminderIntent(
+        val revision: Long,
+        val enabled: Boolean,
     )
 
     private data class PendingInitialOnboardingContactCardHandoffRequest(

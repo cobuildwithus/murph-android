@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +60,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
@@ -863,19 +865,32 @@ fun SettingsRow(
     actionLabel: String? = null,
     showsExternalLink: Boolean = false,
     enabled: Boolean = true,
+    checked: Boolean? = null,
     onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val interactionModifier = if (checked == null) {
+        Modifier.clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            onClick = onClick,
+        )
+    } else {
+        Modifier.toggleable(
+            value = checked,
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            role = Role.Switch,
+            onValueChange = { onClick() },
+        )
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                enabled = enabled,
-                onClick = onClick,
-            )
+            .then(interactionModifier)
             .padding(horizontal = 16.dp, vertical = 15.dp)
             .heightIn(min = 44.dp),
         verticalAlignment = Alignment.CenterVertically,

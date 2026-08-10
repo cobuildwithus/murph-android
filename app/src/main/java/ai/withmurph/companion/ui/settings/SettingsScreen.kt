@@ -1,6 +1,8 @@
 package ai.withmurph.companion.ui.settings
 
+import ai.withmurph.companion.R
 import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.ui.components.MurphIconKind
 import ai.withmurph.companion.ui.components.SettingsDivider
 import ai.withmurph.companion.ui.components.SettingsRow
@@ -23,16 +25,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun SettingsScreen(
     state: AppUiState,
+    healthSyncNotificationsAllowed: Boolean,
+    healthSyncNotificationRecoveryNeeded: Boolean,
     onShareAddressBook: () -> Unit,
     onRefreshAddressBook: () -> Unit,
     onStopAddressBook: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onOpenHealthConnect: () -> Unit,
+    onSetHealthSyncReminderEnabled: (Boolean) -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
     onOpenHealthNotice: () -> Unit,
@@ -109,12 +115,64 @@ fun SettingsScreen(
             )
         }
 
-        Section("Health Connect") {
+        val healthConnected = state.healthSync != HealthSyncState.NotConnected
+        val reminderCanEnable =
+            healthConnected && state.authVerifiedOnline && !state.healthStatusIsStale
+        Section(
+            title = "Health Connect",
+            footer = stringResource(R.string.health_sync_reminder_section_footer),
+        ) {
             SettingsRow(
                 title = "Health Connect Access",
                 icon = MurphIconKind.HealthCard,
                 onClick = onOpenHealthConnect,
             )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.health_sync_reminder_title),
+                detail = stringResource(
+                    when {
+                        !healthConnected -> R.string.health_sync_reminder_unavailable_detail
+                        !reminderCanEnable && !state.healthSyncReminderEnabled ->
+                            R.string.health_sync_reminder_requires_online_detail
+                        state.healthSyncReminderEnabled && !healthSyncNotificationsAllowed ->
+                            R.string.health_sync_reminder_notifications_blocked_detail
+                        state.healthSyncReminderEnabled -> R.string.health_sync_reminder_on_detail
+                        else -> R.string.health_sync_reminder_off_detail
+                    },
+                ),
+                icon = MurphIconKind.Bell,
+                actionLabel = when {
+                    state.healthSyncReminderEnabled ->
+                        stringResource(R.string.health_sync_reminder_turn_off)
+                    reminderCanEnable -> stringResource(R.string.health_sync_reminder_turn_on)
+                    else -> null
+                },
+                enabled = reminderCanEnable || state.healthSyncReminderEnabled,
+                checked = state.healthSyncReminderEnabled,
+                onClick = {
+                    onSetHealthSyncReminderEnabled(!state.healthSyncReminderEnabled)
+                },
+            )
+            if (
+                !healthSyncNotificationsAllowed &&
+                (state.healthSyncReminderEnabled || healthSyncNotificationRecoveryNeeded)
+            ) {
+                SettingsDivider()
+                SettingsRow(
+                    title = stringResource(
+                        R.string.health_sync_reminder_notification_settings_title,
+                    ),
+                    detail = stringResource(
+                        R.string.health_sync_reminder_notification_settings_detail,
+                    ),
+                    icon = MurphIconKind.Gear,
+                    actionLabel = stringResource(
+                        R.string.health_sync_reminder_notification_settings_action,
+                    ),
+                    onClick = onOpenAppSettings,
+                )
+            }
         }
 
         Section("Legal") {

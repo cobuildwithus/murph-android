@@ -16,6 +16,8 @@ import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
+import ai.withmurph.companion.core.HealthSyncReminderDeadline
+import ai.withmurph.companion.core.HealthSyncReminderLifecycle
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.InstantValue
@@ -72,6 +74,126 @@ import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppSessionTest {
+    @Test
+    fun syncReminderOptInRequiresAConnectedActiveMemberAndSignOutCancelsIt() = runTest {
+        val disconnected = fixture()
+        disconnected.session.start()
+        assertFalse(disconnected.session.setHealthSyncReminderEnabled(true))
+
+        val connected = completedHealthFixture()
+        val statusCallsBeforeEnable = connected.api.statusSources.size
+        connected.reminder.freshBackendStatusRequests.clear()
+        assertTrue(connected.session.setHealthSyncReminderEnabled(true))
+        assertTrue(connected.session.state.value.healthSyncReminderEnabled)
+        assertTrue(connected.localState.reminderEnabled)
+        assertEquals(statusCallsBeforeEnable + 1, connected.api.statusSources.size)
+        assertEquals(1, connected.reminder.initialDeadlineCalls)
+        assertTrue(connected.localState.healthSyncReminderDeadline != null)
+        assertTrue(connected.reminder.freshBackendStatusRequests.contains(true))
+
+        connected.session.signOut()
+
+        assertFalse(connected.localState.reminderEnabled)
+        assertTrue(connected.reminder.cancelCalls > 0)
+    }
+
+    @Test
+    fun laterOptOutInvalidatesAnOlderPendingReminderEnable() = runTest {
+        val fixture = completedHealthFixture()
+        val secondStatusGate = CompletableDeferred<Unit>()
+        fixture.api.statusGate = secondStatusGate
+        fixture.api.statusGateOnCall = fixture.api.statusSources.size + 2
+
+        val firstEnable = async {
+            fixture.session.setHealthSyncReminderEnabled(true)
+        }
+        val secondEnable = async {
+            fixture.session.setHealthSyncReminderEnabled(true)
+        }
+        fixture.api.statusGateEntered.await()
+
+        assertTrue(firstEnable.await())
+        assertTrue(fixture.localState.reminderEnabled)
+        val scheduleCountAfterFirstEnable = fixture.reminder.refreshRequests.count { it }
+        val initialDeadlineCallsAfterFirstEnable = fixture.reminder.initialDeadlineCalls
+        val cancelCallsBeforeDisable = fixture.reminder.cancelCalls
+
+        assertTrue(fixture.session.setHealthSyncReminderEnabled(false))
+        assertFalse(fixture.session.state.value.healthSyncReminderEnabled)
+        assertFalse(fixture.localState.reminderEnabled)
+        assertNull(fixture.localState.healthSyncReminderDeadline)
+        assertEquals(cancelCallsBeforeDisable + 1, fixture.reminder.cancelCalls)
+
+        secondStatusGate.complete(Unit)
+
+        assertFalse(secondEnable.await())
+        assertFalse(fixture.session.state.value.healthSyncReminderEnabled)
+        assertFalse(fixture.localState.reminderEnabled)
+        assertNull(fixture.localState.healthSyncReminderDeadline)
+        assertEquals(initialDeadlineCallsAfterFirstEnable, fixture.reminder.initialDeadlineCalls)
+        assertEquals(
+            scheduleCountAfterFirstEnable,
+            fixture.reminder.refreshRequests.count { it },
+        )
+    }
+
+    @Test
+    fun staleOfflineHealthStatusCannotEnableTheSyncReminder() = runTest {
+        val fixture = offlineRestoredFixture()
+        fixture.session.start()
+
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertFalse(fixture.session.setHealthSyncReminderEnabled(true))
+        assertFalse(fixture.localState.reminderEnabled)
+        assertEquals(0, fixture.reminder.initialDeadlineCalls)
+        assertNull(fixture.localState.healthSyncReminderDeadline)
+    }
+
+    @Test
+    fun backgroundStatusRefreshCanCreateARecentlyMissingReminderSchedule() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.reminder.didEnterBackground()
+        fixture.reminder.refreshRequests.clear()
+        fixture.reminder.freshBackendStatusRequests.clear()
+        fixture.session.didEnterBackground()
+
+        fixture.session.syncNow()
+
+        assertTrue(fixture.reminder.refreshRequests.isNotEmpty())
+        assertTrue(fixture.reminder.refreshRequests.all { it })
+        assertTrue(fixture.reminder.freshBackendStatusRequests.contains(true))
+    }
+
+    @Test
+    fun foregroundStatusRefreshNeverCreatesAMissingReminderSchedule() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.reminder.refreshRequests.clear()
+        fixture.reminder.freshBackendStatusRequests.clear()
+
+        fixture.session.syncNow()
+
+        assertTrue(fixture.reminder.refreshRequests.isNotEmpty())
+        assertTrue(fixture.reminder.refreshRequests.none { it })
+        assertTrue(fixture.reminder.freshBackendStatusRequests.contains(true))
+    }
+
+    @Test
+    fun synchronousForegroundCancellationWinsBeforeAsyncSessionRefreshStarts() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.reminder.didEnterBackground()
+        fixture.session.didEnterBackground()
+        fixture.reminder.refreshRequests.clear()
+        fixture.reminder.freshBackendStatusRequests.clear()
+
+        fixture.reminder.didEnterForeground()
+        fixture.session.syncNow()
+
+        assertTrue(fixture.reminder.refreshRequests.isNotEmpty())
+        assertTrue(fixture.reminder.refreshRequests.none { it })
+        assertTrue(fixture.reminder.freshBackendStatusRequests.contains(true))
+    }
+
     @Test
     fun freshStartupContainsTransientAuthInspectionFailureAndRetries() = runTest {
         val fixture = fixture()
@@ -715,7 +837,7 @@ class AppSessionTest {
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
         assertEquals("Try a different sign-in", failure.signOutLabel)
-        assertEquals(FailureSupplementalActions.Support, failure.supplementalActions)
+        assertEquals(FailureSupplementalActions.AccountAndLegal, failure.supplementalActions)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
@@ -733,7 +855,7 @@ class AppSessionTest {
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
         assertEquals("Try a different sign-in", failure.signOutLabel)
-        assertEquals(FailureSupplementalActions.Support, failure.supplementalActions)
+        assertEquals(FailureSupplementalActions.AccountAndLegal, failure.supplementalActions)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
@@ -870,6 +992,11 @@ class AppSessionTest {
     @Test
     fun admissionFailuresStopBeforeStatusOrHealthWithTypedRecovery() = runTest {
         val cases = listOf(
+            Triple(
+                CompanionApiException.NoAccount,
+                false,
+                "This sign-in isn't linked to an active Murph account.",
+            ),
             Triple(
                 CompanionApiException.AccessRequired,
                 false,
@@ -1176,6 +1303,10 @@ class AppSessionTest {
             val failure = fixture.session.state.value.phase as AppPhase.Failed
             assertFalse(failure.canRetry)
             assertEquals(signOutLabel, failure.signOutLabel)
+            assertEquals(
+                FailureSupplementalActions.AccountAndLegal,
+                failure.supplementalActions,
+            )
             assertNull(fixture.localState.memberKey)
             assertEquals(exactDraft, fixture.session.state.value.initialOnboardingDraft)
             assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
@@ -1838,6 +1969,10 @@ class AppSessionTest {
             val failure = fixture.session.state.value.phase as AppPhase.Failed
             assertFalse(failure.canRetry)
             assertEquals(signOutLabel, failure.signOutLabel)
+            assertEquals(
+                FailureSupplementalActions.AccountAndLegal,
+                failure.supplementalActions,
+            )
             assertNull(fixture.localState.memberKey)
             assertNull(fixture.localState.healthAccessRequestedAt)
             assertFalse(fixture.health.signedIn)
@@ -1858,6 +1993,10 @@ class AppSessionTest {
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
         assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertEquals(
+            FailureSupplementalActions.AccountAndLegal,
+            failure.supplementalActions,
+        )
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
@@ -1893,6 +2032,10 @@ class AppSessionTest {
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
         assertEquals("Try a different sign-in", failure.signOutLabel)
+        assertEquals(
+            FailureSupplementalActions.AccountAndLegal,
+            failure.supplementalActions,
+        )
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertFalse(fixture.health.signedIn)
@@ -2579,6 +2722,51 @@ class AppSessionTest {
         assertEquals(1, fixture.health.connectCalls)
         assertEquals(1, fixture.health.syncCalls)
         assertEquals(statusCallsBeforeCompletion + 2, fixture.api.statusSources.size)
+    }
+
+    @Test
+    fun backgroundedReconnectCompletionRecreatesAnOptedInReminderSchedule() = runTest {
+        val fixture = completedHealthFixture()
+        assertTrue(fixture.session.setHealthSyncReminderEnabled(true))
+        assertTrue(fixture.session.prepareHealthConnection())
+        val syncCalls = fixture.health.syncCalls
+        val connectGate = CompletableDeferred<Unit>()
+        fixture.health.connectGate = connectGate
+        val completion = async {
+            fixture.session.completeHealthPermissionFlow(true)
+        }
+        fixture.health.connectEntered.await()
+        fixture.reminder.didEnterBackground()
+        fixture.session.didEnterBackground()
+        fixture.reminder.refreshRequests.clear()
+
+        connectGate.complete(Unit)
+
+        assertTrue(completion.await())
+        assertTrue(fixture.localState.reminderEnabled)
+        assertEquals(listOf(true), fixture.reminder.refreshRequests)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun foregroundReconnectCommitsTheOptedInDeadlineBeforePostCommitStatusFailure() = runTest {
+        val fixture = completedHealthFixture()
+        assertTrue(fixture.session.setHealthSyncReminderEnabled(true))
+        assertTrue(fixture.session.prepareHealthConnection())
+        assertNull(fixture.localState.healthSyncReminderDeadline)
+        val postCommitStatusCall = fixture.api.statusSources.size + 2
+        fixture.api.statusError = CompanionApiException.Network
+        fixture.api.statusErrorOnCall = postCommitStatusCall
+
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+
+        assertTrue(fixture.localState.reminderEnabled)
+        assertEquals(
+            fixture.reminder.setupAuthorizationDeadline,
+            fixture.localState.healthSyncReminderDeadline,
+        )
+        assertTrue(fixture.reminder.setupAuthorizationDeadlineCalls > 0)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
     }
 
     @Test
@@ -7794,8 +7982,16 @@ class AppSessionTest {
         val api = FakeApi(events, now)
         val health = FakeHealth(events)
         val localState = FakeLocalState()
-        val session = createSession(auth, api, health, localState, contacts)
-        return Fixture(session, auth, api, health, localState, events)
+        val reminder = FakeReminder()
+        val session = createSession(
+            auth = auth,
+            api = api,
+            health = health,
+            localState = localState,
+            contacts = contacts,
+            reminder = reminder,
+        )
+        return Fixture(session, auth, api, health, localState, reminder, events)
     }
 
     private fun recreatedSession(
@@ -7806,6 +8002,7 @@ class AppSessionTest {
         api = fixture.api,
         health = health,
         localState = fixture.localState,
+        reminder = fixture.reminder,
     )
 
     private fun createSession(
@@ -7814,12 +8011,14 @@ class AppSessionTest {
         health: FakeHealth,
         localState: FakeLocalState,
         contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
+        reminder: FakeReminder = FakeReminder(),
     ) = AppSession(
         auth = auth,
         api = api,
         health = health,
         contacts = contacts,
         localState = localState,
+        healthSyncReminder = reminder,
         config = AppConfig(
             backendBaseUrl = "https://example.test",
             environment = AppEnvironment.Sandbox,
@@ -7926,6 +8125,7 @@ class AppSessionTest {
         val api: FakeApi,
         val health: FakeHealth,
         val localState: FakeLocalState,
+        val reminder: FakeReminder,
         val events: MutableList<String>,
     )
 
@@ -8383,6 +8583,8 @@ class AppSessionTest {
         var advanceInitialSetupSucceeds = true
         var beginSignOutSucceeds = true
         var completeSignOutSucceeds = true
+        var reminderEnabled = false
+        private var storedHealthSyncReminderDeadline: HealthSyncReminderDeadline? = null
         var clearMemberScopedStateCalls = 0
         private var storedAddressBookRevision: Int? = null
         private var storedAddressBookReplacement: AddressBookMutation? = null
@@ -8394,6 +8596,26 @@ class AppSessionTest {
             get() = storedAddressBookReplacement
         override val pendingAddressBookDeletion: AddressBookMutation?
             get() = storedAddressBookDeletion
+        override val healthSyncReminderDeadline: HealthSyncReminderDeadline?
+            get() = storedHealthSyncReminderDeadline
+
+        override fun isHealthSyncReminderEnabled(memberKey: String): Boolean =
+            !signOutPending && memberKey == this.memberKey && reminderEnabled
+
+        override fun setHealthSyncReminderEnabled(
+            memberKey: String,
+            enabled: Boolean,
+            initialDeadline: HealthSyncReminderDeadline?,
+        ): Boolean {
+            if (signOutPending || memberKey != this.memberKey) return false
+            reminderEnabled = enabled
+            storedHealthSyncReminderDeadline = if (enabled) {
+                initialDeadline
+            } else {
+                null
+            }
+            return true
+        }
 
         override fun advanceInitialSetupStep(
             expected: InitialSetupStep,
@@ -8430,17 +8652,24 @@ class AppSessionTest {
             requestedAt: InstantValue,
             receiptBaselineAt: InstantValue?,
             statusObservedAt: InstantValue,
+            reminderDeadline: HealthSyncReminderDeadline?,
             completesInitialSetup: Boolean,
         ): Boolean {
             if (!completeHealthAuthorizationSucceeds) return false
             if (completesInitialSetup && initialSetupStep != InitialSetupStep.HealthConnect) {
                 return false
             }
+            if (reminderEnabled && reminderDeadline == null) return false
             healthAccessRequestedAt = requestedAt
             healthReceiptBaselineAt = receiptBaselineAt
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = statusObservedAt
             healthReconnectRequired = false
+            storedHealthSyncReminderDeadline = if (reminderEnabled) {
+                reminderDeadline
+            } else {
+                null
+            }
             if (completesInitialSetup) {
                 initialSetupStep = InitialSetupStep.FriendlyNames
             }
@@ -8454,6 +8683,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = true
+            storedHealthSyncReminderDeadline = null
             return true
         }
 
@@ -8464,6 +8694,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            storedHealthSyncReminderDeadline = null
             return true
         }
 
@@ -8476,6 +8707,8 @@ class AppSessionTest {
             if (!beginSignOutSucceeds) return false
             signOutPending = true
             pendingPrivySignOutMemberKey = privySignOutMemberKey
+            reminderEnabled = false
+            storedHealthSyncReminderDeadline = null
             if (!preserveMemberState) {
                 initialSetupStep = null
                 storedAddressBookRevision = null
@@ -8502,10 +8735,62 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            reminderEnabled = false
+            storedHealthSyncReminderDeadline = null
             initialSetupStep = null
             storedAddressBookRevision = null
             storedAddressBookReplacement = null
             storedAddressBookDeletion = null
+        }
+    }
+
+    private class FakeReminder : HealthSyncReminderLifecycle {
+        var cancelCalls = 0
+        val refreshRequests = mutableListOf<Boolean>()
+        val freshBackendStatusRequests = mutableListOf<Boolean>()
+        var initialDeadlineCalls = 0
+        var setupAuthorizationDeadlineCalls = 0
+        val setupAuthorizationDeadline = HealthSyncReminderDeadline(
+            basisToken = "e".repeat(64),
+            bootCount = 2,
+            triggerElapsedRealtimeMillis = 1_800_000L,
+        )
+        private var isForeground = true
+
+        override fun cancel() {
+            cancelCalls += 1
+        }
+
+        override fun didEnterForeground() {
+            isForeground = true
+            cancel()
+        }
+
+        override fun didEnterBackground() {
+            isForeground = false
+            refreshRequests += true
+        }
+
+        override fun initialDeadline(memberKey: String): HealthSyncReminderDeadline {
+            initialDeadlineCalls += 1
+            return HealthSyncReminderDeadline(
+                basisToken = "d".repeat(64),
+                bootCount = 1,
+                triggerElapsedRealtimeMillis = 900_000L,
+            )
+        }
+
+        override fun deadlineForSetupAuthorization(
+            memberKey: String,
+            requestedAt: InstantValue,
+        ): HealthSyncReminderDeadline {
+            setupAuthorizationDeadlineCalls += 1
+            return setupAuthorizationDeadline
+        }
+
+        override fun refreshSchedule(freshBackendStatus: Boolean) {
+            refreshRequests += !isForeground
+            freshBackendStatusRequests += freshBackendStatus
         }
     }
 

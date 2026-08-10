@@ -6,16 +6,12 @@ import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.health.MurphHealthWorkerFactory
 
 class MurphApplication : Application(), Configuration.Provider {
-    lateinit var graph: AppGraph
-        private set
+    val graph: AppGraph by lazy(LazyThreadSafetyMode.NONE) {
+        AppGraph.create(this)
+    }
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(MurphHealthWorkerFactory())
             .build()
-
-    override fun onCreate() {
-        super.onCreate()
-        graph = AppGraph.create(this)
-    }
 }

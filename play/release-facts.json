@@ -23,6 +23,10 @@
       "declarationCategory": "transport for declared off-device data paths"
     },
     {
+      "name": "android.permission.POST_NOTIFICATIONS",
+      "declarationCategory": "local reminder delivery only; no user-data type"
+    },
+    {
       "name": "android.permission.READ_CONTACTS",
       "declarationCategory": "Contacts"
     },
@@ -161,6 +165,9 @@
     },
     {
       "android:name": "android.permission.INTERNET"
+    },
+    {
+      "android:name": "android.permission.POST_NOTIFICATIONS"
     },
     {
       "android:name": "android.permission.READ_CONTACTS"
@@ -309,6 +316,13 @@
           "android:exported": "true",
           "android:permission": "android.permission.START_VIEW_PERMISSION_USAGE",
           "android:targetActivity": "ai.withmurph.companion.MainActivity"
+        }
+      },
+      {
+        "componentType": "receivers",
+        "component": "ai.withmurph.companion.reminders.HealthSyncReminderReceiver",
+        "attributes": {
+          "android:exported": "false"
         }
       }
     ],

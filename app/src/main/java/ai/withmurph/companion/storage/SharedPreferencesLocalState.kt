@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import ai.withmurph.companion.core.AddressBookMutation
+import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.LocalState
@@ -75,6 +76,33 @@ class SharedPreferencesLocalState internal constructor(
             preferences.edit().putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, value).apply()
         }
 
+    override val healthSyncReminderDeadline: HealthSyncReminderDeadline?
+        get() {
+            val basisToken = preferences.getString(
+                KEY_HEALTH_SYNC_REMINDER_DEADLINE_BASIS,
+                null,
+            ) ?: return null
+            if (
+                !preferences.contains(KEY_HEALTH_SYNC_REMINDER_DEADLINE_BOOT_COUNT) ||
+                !preferences.contains(KEY_HEALTH_SYNC_REMINDER_DEADLINE_TRIGGER)
+            ) {
+                return null
+            }
+            return runCatching {
+                HealthSyncReminderDeadline(
+                    basisToken = basisToken,
+                    bootCount = preferences.getInt(
+                        KEY_HEALTH_SYNC_REMINDER_DEADLINE_BOOT_COUNT,
+                        -1,
+                    ),
+                    triggerElapsedRealtimeMillis = preferences.getLong(
+                        KEY_HEALTH_SYNC_REMINDER_DEADLINE_TRIGGER,
+                        -1L,
+                    ),
+                )
+            }.getOrNull()
+        }
+
     override val signOutPending: Boolean
         get() = preferences.getBoolean(KEY_SIGN_OUT_PENDING, false)
 
@@ -106,6 +134,63 @@ class SharedPreferencesLocalState internal constructor(
             writeInitialSetupStep(next)
             if (abandonPendingAddressBookReplacement) removeAddressBookReplacement()
         }
+    }
+
+    override fun isHealthSyncReminderEnabled(memberKey: String): Boolean =
+        !signOutPending &&
+            memberKey == this.memberKey &&
+            preferences.getBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, false)
+
+    @SuppressLint("ApplySharedPref")
+    override fun setHealthSyncReminderEnabled(
+        memberKey: String,
+        enabled: Boolean,
+        initialDeadline: HealthSyncReminderDeadline?,
+    ): Boolean {
+        if (signOutPending || memberKey != this.memberKey) return false
+        val wasPresent = preferences.contains(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+        val wasEnabled = preferences.getBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, false)
+        val previousDeadline = healthSyncReminderDeadline
+        val committed = preferences.edit().apply {
+            if (enabled) {
+                putBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, true)
+                if (initialDeadline != null) {
+                    writeHealthSyncReminderDeadline(initialDeadline)
+                } else {
+                    removeHealthSyncReminderDeadline()
+                }
+            } else {
+                remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+                removeHealthSyncReminderDeadline()
+            }
+        }.commit()
+        if (!committed) {
+            preferences.edit().apply {
+                if (wasPresent) {
+                    putBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, wasEnabled)
+                } else {
+                    remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+                }
+                writeHealthSyncReminderDeadline(previousDeadline)
+            }.commit()
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun persistHealthSyncReminderDeadline(
+        memberKey: String,
+        deadline: HealthSyncReminderDeadline,
+    ): Boolean {
+        if (!isHealthSyncReminderEnabled(memberKey)) return false
+        val previousDeadline = healthSyncReminderDeadline
+        val committed = preferences.edit()
+            .writeHealthSyncReminderDeadline(deadline)
+            .commit()
+        if (!committed) {
+            preferences.edit().writeHealthSyncReminderDeadline(previousDeadline).commit()
+        }
+        return committed
     }
 
     override fun recordAddressBookRevision(revision: Int): Boolean {
@@ -186,6 +271,7 @@ class SharedPreferencesLocalState internal constructor(
         requestedAt: InstantValue,
         receiptBaselineAt: InstantValue?,
         statusObservedAt: InstantValue,
+        reminderDeadline: HealthSyncReminderDeadline?,
         completesInitialSetup: Boolean,
     ): Boolean {
         val previousRequestedAt = healthAccessRequestedAt
@@ -193,7 +279,10 @@ class SharedPreferencesLocalState internal constructor(
         val previousReceivedAt = lastKnownDataReceivedAt
         val previousStatusObservedAt = lastKnownStatusObservedAt
         val previousReconnectRequired = healthReconnectRequired
+        val previousReminderDeadline = healthSyncReminderDeadline
         val previousSetupStep = initialSetupStep
+        val reminderEnabled = currentReminderPreference()
+        if (reminderEnabled && reminderDeadline == null) return false
         if (completesInitialSetup && previousSetupStep != InitialSetupStep.HealthConnect) {
             return false
         }
@@ -203,6 +292,9 @@ class SharedPreferencesLocalState internal constructor(
             remove(KEY_LAST_DATA_RECEIVED_AT)
             writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
             remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            writeHealthSyncReminderDeadline(
+                if (reminderEnabled) reminderDeadline else null,
+            )
             if (completesInitialSetup) {
                 writeInitialSetupStep(InitialSetupStep.FriendlyNames)
             }
@@ -214,6 +306,7 @@ class SharedPreferencesLocalState internal constructor(
                 previousReceivedAt,
                 previousStatusObservedAt,
                 previousReconnectRequired,
+                previousReminderDeadline,
                 setupStep = previousSetupStep,
             )
         }
@@ -227,12 +320,14 @@ class SharedPreferencesLocalState internal constructor(
         val receivedAt = lastKnownDataReceivedAt
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
+        val reminderDeadline = healthSyncReminderDeadline
         val committed = preferences.edit()
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, true)
+            .removeHealthSyncReminderDeadline()
             .commit()
         if (!committed) {
             restoreAuthorizationSnapshot(
@@ -241,6 +336,7 @@ class SharedPreferencesLocalState internal constructor(
                 receivedAt,
                 statusObservedAt,
                 reconnectRequired,
+                reminderDeadline,
             )
         }
         return committed
@@ -253,12 +349,14 @@ class SharedPreferencesLocalState internal constructor(
         val receivedAt = lastKnownDataReceivedAt
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
+        val reminderDeadline = healthSyncReminderDeadline
         val committed = preferences.edit()
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
             .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .removeHealthSyncReminderDeadline()
             .commit()
         if (!committed) {
             restoreAuthorizationSnapshot(
@@ -267,6 +365,7 @@ class SharedPreferencesLocalState internal constructor(
                 receivedAt,
                 statusObservedAt,
                 reconnectRequired,
+                reminderDeadline,
             )
         }
         return committed
@@ -284,6 +383,8 @@ class SharedPreferencesLocalState internal constructor(
         val receivedAt = lastKnownDataReceivedAt
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
+        val reminderEnabled = currentReminderPreference()
+        val reminderDeadline = healthSyncReminderDeadline
         val wasSignOutPending = signOutPending
         val previousPrivySignOutMemberKey = pendingPrivySignOutMemberKey
         val setupStep = initialSetupStep
@@ -294,6 +395,8 @@ class SharedPreferencesLocalState internal constructor(
         // Vital work whenever this tombstone is present.
         val editor = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
+            .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+            .removeHealthSyncReminderDeadline()
         if (privySignOutMemberKey == null) {
             editor.remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
         } else {
@@ -312,6 +415,8 @@ class SharedPreferencesLocalState internal constructor(
                 receivedAt,
                 statusObservedAt,
                 reconnectRequired,
+                reminderDeadline,
+                reminderEnabled,
                 wasSignOutPending,
                 previousPrivySignOutMemberKey,
                 setupStep,
@@ -333,6 +438,8 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .remove(KEY_INITIAL_SETUP_STEP)
+            .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+            .removeHealthSyncReminderDeadline()
             .remove(KEY_SIGN_OUT_PENDING)
             .remove(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY)
             .removeAddressBookMetadata()
@@ -366,6 +473,8 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
             .remove(KEY_INITIAL_SETUP_STEP)
+            .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+            .removeHealthSyncReminderDeadline()
             .removeAddressBookMetadata()
             .apply()
     }
@@ -386,6 +495,8 @@ class SharedPreferencesLocalState internal constructor(
         receivedAt: InstantValue?,
         statusObservedAt: InstantValue?,
         reconnectRequired: Boolean,
+        reminderDeadline: HealthSyncReminderDeadline?,
+        reminderEnabled: Boolean? = null,
         pendingSignOut: Boolean? = null,
         pendingPrivySignOutMemberKey: String? = null,
         setupStep: InitialSetupStep? = initialSetupStep,
@@ -397,7 +508,15 @@ class SharedPreferencesLocalState internal constructor(
             writeInstant(KEY_LAST_DATA_RECEIVED_AT, receivedAt)
             writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
             putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, reconnectRequired)
+            writeHealthSyncReminderDeadline(reminderDeadline)
             writeInitialSetupStep(setupStep)
+            if (reminderEnabled != null) {
+                if (reminderEnabled) {
+                    putBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, true)
+                } else {
+                    remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
+                }
+            }
             if (pendingSignOut != null) {
                 if (pendingSignOut) {
                     putBoolean(KEY_SIGN_OUT_PENDING, true)
@@ -477,6 +596,26 @@ class SharedPreferencesLocalState internal constructor(
         remove(KEY_ADDRESS_BOOK_DELETION_BASE_REVISION)
             .remove(KEY_ADDRESS_BOOK_DELETION_MUTATION_ID)
 
+    private fun SharedPreferences.Editor.writeHealthSyncReminderDeadline(
+        deadline: HealthSyncReminderDeadline?,
+    ): SharedPreferences.Editor {
+        removeHealthSyncReminderDeadline()
+        if (deadline != null) {
+            putString(KEY_HEALTH_SYNC_REMINDER_DEADLINE_BASIS, deadline.basisToken)
+            putInt(KEY_HEALTH_SYNC_REMINDER_DEADLINE_BOOT_COUNT, deadline.bootCount)
+            putLong(
+                KEY_HEALTH_SYNC_REMINDER_DEADLINE_TRIGGER,
+                deadline.triggerElapsedRealtimeMillis,
+            )
+        }
+        return this
+    }
+
+    private fun SharedPreferences.Editor.removeHealthSyncReminderDeadline():
+        SharedPreferences.Editor = remove(KEY_HEALTH_SYNC_REMINDER_DEADLINE_BASIS)
+            .remove(KEY_HEALTH_SYNC_REMINDER_DEADLINE_BOOT_COUNT)
+            .remove(KEY_HEALTH_SYNC_REMINDER_DEADLINE_TRIGGER)
+
     private data class AddressBookSnapshot(
         val revision: Int?,
         val replacement: AddressBookMutation?,
@@ -492,6 +631,9 @@ class SharedPreferencesLocalState internal constructor(
         else putString(KEY_INITIAL_SETUP_STEP, value.wireValue)
     }
 
+    private fun currentReminderPreference(): Boolean =
+        preferences.getBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, false)
+
     private companion object {
         const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_MEMBER_KEY = "member_key"
@@ -501,6 +643,13 @@ class SharedPreferencesLocalState internal constructor(
         const val KEY_LAST_DATA_RECEIVED_AT = "last_data_received_at"
         const val KEY_LAST_STATUS_OBSERVED_AT = "last_status_observed_at"
         const val KEY_HEALTH_RECONNECT_REQUIRED = "health_reconnect_required"
+        const val KEY_HEALTH_SYNC_REMINDER_ENABLED = "health_sync_reminder_enabled"
+        const val KEY_HEALTH_SYNC_REMINDER_DEADLINE_BASIS =
+            "health_sync_reminder_deadline_basis"
+        const val KEY_HEALTH_SYNC_REMINDER_DEADLINE_BOOT_COUNT =
+            "health_sync_reminder_deadline_boot_count"
+        const val KEY_HEALTH_SYNC_REMINDER_DEADLINE_TRIGGER =
+            "health_sync_reminder_deadline_trigger"
         const val KEY_SIGN_OUT_PENDING = "sign_out_pending"
         const val KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY =
             "pending_privy_sign_out_member_key"

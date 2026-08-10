@@ -294,11 +294,14 @@ sealed interface HealthSyncState {
     data class NeedsAttention(val lastDataReceivedAt: Instant?) : HealthSyncState
 
     companion object {
+        val defaultDelayedAfter: Duration = Duration.ofHours(36)
+        val defaultAttentionAfter: Duration = Duration.ofHours(72)
+
         fun derive(
             requestedAt: Instant?,
             status: CompanionSyncStatus?,
-            delayedAfter: Duration = Duration.ofHours(36),
-            attentionAfter: Duration = Duration.ofHours(72),
+            delayedAfter: Duration = defaultDelayedAfter,
+            attentionAfter: Duration = defaultAttentionAfter,
         ): HealthSyncState {
             if (requestedAt == null) return NotConnected
             val observedAt = status?.observedAt ?: requestedAt
@@ -318,6 +321,20 @@ sealed interface HealthSyncState {
                 age >= delayedAfter -> Delayed(receivedAt)
                 else -> Synced(receivedAt)
             }
+        }
+
+        fun attentionRemaining(
+            requestedAt: Instant?,
+            lastDataReceivedAt: Instant?,
+            statusObservedAt: Instant?,
+            attentionAfter: Duration = defaultAttentionAfter,
+        ): Duration? {
+            val setup = requestedAt ?: return null
+            val observedAt = statusObservedAt ?: return null
+            val qualifyingReceipt = lastDataReceivedAt?.takeUnless { it.isBefore(setup) }
+            val age = Duration.between(qualifyingReceipt ?: setup, observedAt)
+                .coerceAtLeast(Duration.ZERO)
+            return attentionAfter.minus(age).coerceAtLeast(Duration.ZERO)
         }
     }
 }

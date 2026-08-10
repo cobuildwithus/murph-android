@@ -11,22 +11,38 @@ import org.junit.Test
 
 class MurphAppShellStateTest {
     @Test
-    fun signedInFailureKeepsSupportAccountAndLegalActionsReachable() {
+    fun suspendedBoundMemberKeepsSupportAccountAndLegalActionsReachable() {
         val invoked = mutableListOf<String>()
         val actions = failureExternalActions(
-            failure = AppPhase.Failed(message = "Account unavailable", canSignOut = true),
+            failure = AppPhase.Failed(
+                message = "Account paused",
+                canSignOut = true,
+                supplementalActions = FailureSupplementalActions.AccountAndLegal,
+            ),
             onOpenSupport = { invoked += "support" },
             onDeleteAccount = { invoked += "delete" },
             onOpenPrivacy = { invoked += "privacy" },
             onOpenTerms = { invoked += "terms" },
+            onOpenHealthNotice = { invoked += "health-notice" },
+            onOpenAiSafety = { invoked += "ai-safety" },
         )
 
         assertEquals(
-            listOf("Contact support", "Delete account", "Privacy Policy", "Terms"),
+            listOf(
+                "Contact support",
+                "Delete account",
+                "Privacy Policy",
+                "Terms",
+                "Health Data Notice",
+                "AI Safety Disclosure",
+            ),
             actions.map { it.label },
         )
         actions.forEach { it.onClick() }
-        assertEquals(listOf("support", "delete", "privacy", "terms"), invoked)
+        assertEquals(
+            listOf("support", "delete", "privacy", "terms", "health-notice", "ai-safety"),
+            invoked,
+        )
     }
 
     @Test
@@ -37,6 +53,8 @@ class MurphAppShellStateTest {
             onDeleteAccount = {},
             onOpenPrivacy = {},
             onOpenTerms = {},
+            onOpenHealthNotice = {},
+            onOpenAiSafety = {},
         )
 
         assertTrue(actions.isEmpty())
@@ -56,6 +74,8 @@ class MurphAppShellStateTest {
             onDeleteAccount = { invoked += "delete" },
             onOpenPrivacy = { invoked += "privacy" },
             onOpenTerms = { invoked += "terms" },
+            onOpenHealthNotice = { invoked += "health-notice" },
+            onOpenAiSafety = { invoked += "ai-safety" },
         )
 
         assertEquals(listOf("Contact support"), actions.map { it.label })
