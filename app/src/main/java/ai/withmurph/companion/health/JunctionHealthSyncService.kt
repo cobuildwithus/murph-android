@@ -11,6 +11,7 @@ import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.JunctionExternalUserId
+import ai.withmurph.companion.core.TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
 import io.tryvital.client.AuthenticateRequest
 import io.tryvital.client.VitalClient
 import io.tryvital.vitalhealthconnect.VitalHealthConnectManager
@@ -84,28 +85,28 @@ internal fun configuredHealthConnectReadResources(
     grantedResources: Set<VitalResource>,
 ): Set<VitalResource> = healthConnectReadResources.intersect(grantedResources)
 
-internal fun backendResourceKeysFor(resource: VitalResource): Set<String> = when (resource) {
-    VitalResource.Profile -> setOf("profile")
-    VitalResource.Body -> setOf("body")
-    VitalResource.Workout -> setOf("workouts")
-    VitalResource.Activity -> setOf("activity")
-    VitalResource.Sleep -> setOf("sleep")
-    VitalResource.Glucose -> setOf("glucose")
-    VitalResource.BloodPressure -> setOf("blood_pressure")
-    VitalResource.BloodOxygen -> setOf("blood_oxygen")
-    VitalResource.HeartRate -> setOf("heartrate")
-    VitalResource.Water -> setOf("water")
-    VitalResource.HeartRateVariability -> setOf("hrv")
-    VitalResource.MenstrualCycle -> setOf("menstrual_cycle")
-    VitalResource.Steps -> setOf("steps")
-    VitalResource.ActiveEnergyBurned -> setOf("calories_active")
-    VitalResource.BasalEnergyBurned -> setOf("calories_basal")
-    VitalResource.FloorsClimbed -> setOf("floors_climbed")
-    VitalResource.DistanceWalkingRunning -> setOf("distance")
-    VitalResource.Vo2Max -> setOf("vo2_max")
-    VitalResource.RespiratoryRate -> setOf("respiratory_rate")
-    VitalResource.Temperature -> setOf("body_temperature", "basal_body_temperature")
-    VitalResource.Meal -> setOf("meal")
+internal fun backendFailureOwnerKeyFor(resource: VitalResource): String = when (resource) {
+    VitalResource.Profile -> "profile"
+    VitalResource.Body -> "body"
+    VitalResource.Workout -> "workouts"
+    VitalResource.Activity -> "activity"
+    VitalResource.Sleep -> "sleep"
+    VitalResource.Glucose -> "glucose"
+    VitalResource.BloodPressure -> "blood_pressure"
+    VitalResource.BloodOxygen -> "blood_oxygen"
+    VitalResource.HeartRate -> "heartrate"
+    VitalResource.Water -> "water"
+    VitalResource.HeartRateVariability -> "hrv"
+    VitalResource.MenstrualCycle -> "menstrual_cycle"
+    VitalResource.Steps -> "steps"
+    VitalResource.ActiveEnergyBurned -> "calories_active"
+    VitalResource.BasalEnergyBurned -> "calories_basal"
+    VitalResource.FloorsClimbed -> "floors_climbed"
+    VitalResource.DistanceWalkingRunning -> "distance"
+    VitalResource.Vo2Max -> "vo2_max"
+    VitalResource.RespiratoryRate -> "respiratory_rate"
+    VitalResource.Temperature -> TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
+    VitalResource.Meal -> "meal"
 }
 
 internal fun healthPermissionRequestResult(
@@ -274,7 +275,7 @@ class JunctionHealthSyncService(
     override fun grantedResourceKeys(): Set<String> =
         configuredHealthConnectReadResources(
             manager.resourcesWithReadPermission(),
-        ).flatMapTo(linkedSetOf(), ::backendResourceKeysFor)
+        ).mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor)
 
     override fun revokeUnpromotedSyncLaunch() {
         VitalHealthWorkerLease.rejectUnpromoted()
@@ -338,7 +339,7 @@ class JunctionHealthSyncService(
             existingIds = existingStarterIds,
         ) ?: return null
         return HealthSyncAttemptResult.PartialFailure(
-            failedResources.flatMapTo(linkedSetOf(), ::backendResourceKeysFor),
+            failedResources.mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor),
         )
     }
 }

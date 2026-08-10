@@ -88,6 +88,14 @@ internal fun vitalResourceTerminalDecision(
     else -> VitalResourceTerminalDecision.Stop
 }
 
+internal fun vitalResourcesFailedByHardStop(
+    orderedResources: List<VitalResource>,
+    stoppedAtIndex: Int,
+): Set<VitalResource> {
+    require(stoppedAtIndex in orderedResources.indices)
+    return orderedResources.drop(stoppedAtIndex).toCollection(linkedSetOf())
+}
+
 /**
  * Vital 5.0.2's umbrella worker declares shortService, which Android limits to
  * roughly three minutes. This replacement preserves the SDK's input contract,
@@ -100,11 +108,15 @@ internal class MurphVitalResourceSyncStarter(
     private val expectedMemberKey: String,
 ) : CoroutineWorker(appContext, workerParameters) {
     override suspend fun doWork(): Result {
-        if (!inputData.getBoolean(startForegroundInputKey, false)) return Result.failure()
-        if (!VitalHealthWorkerLease.isOpenFor(expectedMemberKey)) return Result.failure()
         val resources = runCatching { vitalStarterResources(inputData) }.getOrNull()
             ?: return Result.failure()
         if (resources.isEmpty()) return Result.success()
+        if (!inputData.getBoolean(startForegroundInputKey, false)) {
+            return Result.failure(vitalFailedResourcesOutputData(resources))
+        }
+        if (!VitalHealthWorkerLease.isOpenFor(expectedMemberKey)) {
+            return Result.failure(vitalFailedResourcesOutputData(resources))
+        }
         setProgress(
             Data.Builder()
                 .putStringArray(
@@ -122,7 +134,7 @@ internal class MurphVitalResourceSyncStarter(
             !VitalHealthWorkerLease.isLaunchAuthorizedFor(expectedMemberKey)
         ) {
             VitalHealthWorkerLease.rejectUnpromotedFor(expectedMemberKey)
-            return Result.failure()
+            return Result.failure(vitalFailedResourcesOutputData(resources))
         }
         try {
             setForeground(
@@ -136,22 +148,31 @@ internal class MurphVitalResourceSyncStarter(
             throw error
         } catch (_: Exception) {
             VitalHealthWorkerLease.rejectUnpromotedFor(expectedMemberKey)
-            return Result.failure()
+            return Result.failure(vitalFailedResourcesOutputData(resources))
         }
         if (!VitalHealthWorkerLease.markPromotedFor(expectedMemberKey)) {
-            return Result.failure()
+            return Result.failure(vitalFailedResourcesOutputData(resources))
         }
 
         val tags = inputData.getIntArray(tagsInputKey) ?: intArrayOf()
         val workerClass = runCatching {
             Class.forName(vitalResourceSyncWorkerClass)
                 .asSubclass(ListenableWorker::class.java)
-        }.getOrElse { return Result.failure() }
+        }.getOrElse {
+            return Result.failure(vitalFailedResourcesOutputData(resources))
+        }
         val workManager = WorkManager.getInstance(applicationContext)
 
+        val orderedResources = resources.sortedBy(VitalResource::priority)
         val failedResources = linkedSetOf<VitalResource>()
-        for (resource in resources.sortedBy(VitalResource::priority)) {
-            if (!VitalHealthWorkerLease.isOpenFor(expectedMemberKey)) return Result.failure()
+        for ((resourceIndex, resource) in orderedResources.withIndex()) {
+            if (!VitalHealthWorkerLease.isOpenFor(expectedMemberKey)) {
+                failedResources += vitalResourcesFailedByHardStop(
+                    orderedResources,
+                    resourceIndex,
+                )
+                return Result.failure(vitalFailedResourcesOutputData(failedResources))
+            }
             val workName = vitalResourceSyncWorkerName(resource)
             val request = OneTimeWorkRequest.Builder(workerClass)
                 .setInputData(vitalResourceWorkerInputData(resource, tags))
@@ -172,13 +193,25 @@ internal class MurphVitalResourceSyncStarter(
                     VitalResourceTerminalDecision.ContinueAfterFailure -> {
                         failedResources += resource
                     }
-                    VitalResourceTerminalDecision.Stop -> return Result.failure()
+                    VitalResourceTerminalDecision.Stop -> {
+                        failedResources += vitalResourcesFailedByHardStop(
+                            orderedResources,
+                            resourceIndex,
+                        )
+                        return Result.failure(vitalFailedResourcesOutputData(failedResources))
+                    }
                 }
             } catch (error: CancellationException) {
                 withContext(NonCancellable) {
                     workManager.cancelUniqueWork(workName).result.await()
                 }
                 throw error
+            } catch (_: Exception) {
+                failedResources += vitalResourcesFailedByHardStop(
+                    orderedResources,
+                    resourceIndex,
+                )
+                return Result.failure(vitalFailedResourcesOutputData(failedResources))
             }
         }
         return if (failedResources.isEmpty()) {

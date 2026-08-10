@@ -3280,7 +3280,9 @@ class AppSession(
                 if (!health.isSignedIn()) return true
                 if (
                     !recordPendingHealthSyncFailure(
-                        resourceKeys = setOf(UNKNOWN_HEALTH_RESOURCE_KEY),
+                        resourceKeys = health.grantedResourceKeys().ifEmpty {
+                            setOf(UNKNOWN_HEALTH_RESOURCE_KEY)
+                        },
                         receiptFloorAt = preSyncStatus.observedAt,
                     )
                 ) return false

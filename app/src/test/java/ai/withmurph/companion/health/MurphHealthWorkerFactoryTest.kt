@@ -160,6 +160,24 @@ class MurphHealthWorkerFactoryTest {
             VitalResourceTerminalDecision.Stop,
             vitalResourceTerminalDecision(null),
         )
+
+        val orderedResources = listOf(
+            VitalResource.Activity,
+            VitalResource.Sleep,
+            VitalResource.Steps,
+        )
+        assertEquals(
+            setOf(VitalResource.Sleep, VitalResource.Steps),
+            vitalResourcesFailedByHardStop(orderedResources, stoppedAtIndex = 1),
+        )
+        assertEquals(
+            setOf(VitalResource.Sleep, VitalResource.Steps),
+            vitalFailedResources(
+                vitalFailedResourcesOutputData(
+                    vitalResourcesFailedByHardStop(orderedResources, stoppedAtIndex = 1),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -174,16 +192,13 @@ class MurphHealthWorkerFactoryTest {
             failed,
             vitalFailedResources(vitalFailedResourcesOutputData(failed)),
         )
-        assertEquals(setOf("activity"), backendResourceKeysFor(VitalResource.Activity))
-        assertEquals(setOf("sleep"), backendResourceKeysFor(VitalResource.Sleep))
-        assertEquals(
-            setOf("body_temperature", "basal_body_temperature"),
-            backendResourceKeysFor(VitalResource.Temperature),
-        )
+        assertEquals("activity", backendFailureOwnerKeyFor(VitalResource.Activity))
+        assertEquals("sleep", backendFailureOwnerKeyFor(VitalResource.Sleep))
+        assertEquals("temperature", backendFailureOwnerKeyFor(VitalResource.Temperature))
         assertEquals(
             healthConnectReadResources,
             healthConnectReadResources.filterTo(linkedSetOf()) {
-                backendResourceKeysFor(it).isNotEmpty()
+                backendFailureOwnerKeyFor(it).isNotEmpty()
             },
         )
     }

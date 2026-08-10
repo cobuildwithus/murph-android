@@ -61,7 +61,7 @@ class HealthSyncStateTest {
     }
 
     @Test
-    fun unknownFailureRequiresANewerSourceWideReceipt() {
+    fun unknownFailureCannotBeConfirmedByAnUnrelatedSourceWideReceipt() {
         val floor = Instant.parse("2026-07-25T18:00:00Z")
         val pending = PendingHealthSyncFailure(
             resourceKeys = setOf(UNKNOWN_HEALTH_RESOURCE_KEY),
@@ -73,7 +73,7 @@ class HealthSyncStateTest {
                 CompanionSyncStatus(null, floor.plusSeconds(60), emptyMap()),
             ),
         )
-        assertTrue(
+        assertFalse(
             pending.isConfirmedBy(
                 CompanionSyncStatus(
                     floor.plusSeconds(1),
@@ -81,6 +81,54 @@ class HealthSyncStateTest {
                     emptyMap(),
                 ),
             ),
+        )
+    }
+
+    @Test
+    fun temperatureOwnerIsConfirmedByEitherBackendSubtypeButNotAnotherResource() {
+        val floor = Instant.parse("2026-07-25T18:00:00Z")
+        val pending = PendingHealthSyncFailure(
+            resourceKeys = setOf(TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY),
+            receiptFloorAt = InstantValue(floor.toEpochMilli()),
+        )
+
+        assertFalse(
+            pending.isConfirmedBy(
+                CompanionSyncStatus(
+                    floor.plusSeconds(60),
+                    floor.plusSeconds(120),
+                    mapOf(
+                        "activity" to CompanionSyncStatus.ResourceStatus(floor.plusSeconds(60)),
+                    ),
+                ),
+            ),
+        )
+        listOf("body_temperature", "basal_body_temperature").forEach { receiptKey ->
+            assertTrue(
+                pending.isConfirmedBy(
+                    CompanionSyncStatus(
+                        floor.plusSeconds(60),
+                        floor.plusSeconds(120),
+                        mapOf(
+                            receiptKey to
+                                CompanionSyncStatus.ResourceStatus(floor.plusSeconds(60)),
+                        ),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun revokingTemperatureRetainsOtherPendingOwners() {
+        val pending = PendingHealthSyncFailure(
+            resourceKeys = setOf(TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY, "sleep"),
+            receiptFloorAt = InstantValue(100),
+        )
+
+        assertEquals(
+            setOf("sleep"),
+            pending.retainingGranted(setOf("sleep"))?.resourceKeys,
         )
     }
 

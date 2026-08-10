@@ -167,10 +167,15 @@ data class PendingHealthSyncFailure(
     fun isConfirmedBy(status: CompanionSyncStatus): Boolean {
         val floor = Instant.ofEpochMilli(receiptFloorAt.epochMilliseconds)
         return resourceKeys.all { resourceKey ->
-            if (resourceKey == UNKNOWN_HEALTH_RESOURCE_KEY) {
-                status.lastDataReceivedAt?.isAfter(floor) == true
-            } else {
-                status.resources[resourceKey]?.lastReceivedAt?.isAfter(floor) == true
+            when (resourceKey) {
+                UNKNOWN_HEALTH_RESOURCE_KEY -> false
+                TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY ->
+                    TEMPERATURE_BACKEND_RECEIPT_KEYS.any { receiptKey ->
+                        status.resources[receiptKey]?.lastReceivedAt?.isAfter(floor) == true
+                    }
+                else -> status.resources[resourceKey]
+                    ?.lastReceivedAt
+                    ?.isAfter(floor) == true
             }
         }
     }
@@ -202,6 +207,10 @@ data class PendingHealthSyncFailure(
 }
 
 const val UNKNOWN_HEALTH_RESOURCE_KEY = "unknown"
+const val TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY = "temperature"
+
+private val TEMPERATURE_BACKEND_RECEIPT_KEYS =
+    setOf("body_temperature", "basal_body_temperature")
 
 sealed interface HealthSyncAttemptResult {
     data object Complete : HealthSyncAttemptResult

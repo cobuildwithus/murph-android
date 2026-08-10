@@ -49,6 +49,7 @@ import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.PendingHealthSyncFailure
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
+import ai.withmurph.companion.core.TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -7495,6 +7496,7 @@ class AppSessionTest {
         val fixture = fixture(now = now)
         fixture.api.status = CompanionSyncStatus(oldReceipt, now, emptyMap())
         fixture.session.start()
+        fixture.health.grantedKeys = setOf("activity")
         fixture.api.statusHandler = { call ->
             if (call == 2) {
                 CompanionSyncStatus(oldReceipt, now, emptyMap())
@@ -7530,7 +7532,9 @@ class AppSessionTest {
         fixture.api.status = CompanionSyncStatus(
             advancedReceipt,
             finalPreConnectObservation.plusSeconds(60),
-            emptyMap(),
+            mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(advancedReceipt),
+            ),
         )
         fixture.health.syncError = null
         fixture.session.syncNow()
@@ -7559,6 +7563,7 @@ class AppSessionTest {
         val setupBoundary = initialObservation.plusSeconds(60)
         val fixture = fixture(now = initialObservation)
         fixture.session.start()
+        fixture.health.grantedKeys = setOf("activity")
         fixture.api.statusHandler = { call ->
             when (call) {
                 2 -> CompanionSyncStatus(null, initialObservation, emptyMap())
@@ -7598,13 +7603,15 @@ class AppSessionTest {
 
         fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
         fixture.api.statusHandler = null
-        // The generic vendor failure is source-wide, so its receipt must also
-        // advance past the pre-sync status observation used as the failure floor.
+        // The generic vendor failure falls back to the current granted owner,
+        // whose receipt must advance past the pre-sync status observation.
         val qualifyingReceipt = setupBoundary.plusSeconds(61)
         fixture.api.status = CompanionSyncStatus(
             qualifyingReceipt,
             setupBoundary.plusSeconds(120),
-            emptyMap(),
+            mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(qualifyingReceipt),
+            ),
         )
         fixture.health.syncError = null
         replacement.retry()
@@ -7762,6 +7769,51 @@ class AppSessionTest {
     }
 
     @Test
+    fun cancelledResourceAndUnattemptedTailRemainActionableAfterEarlierReceipt() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val activityReceipt = now.plusSeconds(60)
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = 3
+        fixture.health.grantedKeys = setOf("activity", "sleep", "steps")
+        fixture.health.syncResult =
+            HealthSyncAttemptResult.PartialFailure(setOf("sleep", "steps"))
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = activityReceipt,
+            observedAt = now.plusSeconds(120),
+            resources = mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(activityReceipt),
+            ),
+        )
+
+        fixture.session.start()
+
+        assertEquals(
+            setOf("sleep", "steps"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+        assertEquals(
+            HealthSyncState.NeedsAttention(activityReceipt),
+            fixture.session.state.value.healthSync,
+        )
+
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(
+            setOf("sleep", "steps"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+        assertEquals(
+            HealthSyncState.NeedsAttention(activityReceipt),
+            replacement.state.value.healthSync,
+        )
+    }
+
+    @Test
     fun permissionReconciliationDropsOnlyFailuresForRevokedResources() = runTest {
         val now = Instant.parse("2026-07-25T18:00:00Z")
         val fixture = fixture(now = now)
@@ -7771,7 +7823,7 @@ class AppSessionTest {
         assertTrue(
             fixture.localState.recordPendingHealthSyncFailure(
                 PendingHealthSyncFailure(
-                    resourceKeys = setOf("activity", "sleep"),
+                    resourceKeys = setOf(TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY, "sleep"),
                     receiptFloorAt = InstantValue(now.toEpochMilli()),
                 ),
             ),
