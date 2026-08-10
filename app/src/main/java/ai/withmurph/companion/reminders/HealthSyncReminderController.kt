@@ -26,6 +26,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
 
 /**
  * Owns one optional, inexact Android reminder. It never starts health work.
@@ -184,7 +185,7 @@ class HealthSyncReminderController internal constructor(
             .setContentTitle(context.getString(R.string.health_sync_reminder_notification_title))
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(settingsPendingIntent())
+            .setContentIntent(settingsPendingIntent(UUID.randomUUID().toString()))
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -252,11 +253,12 @@ class HealthSyncReminderController internal constructor(
         }
     }
 
-    private fun settingsPendingIntent(): PendingIntent = PendingIntent.getActivity(
+    private fun settingsPendingIntent(deliveryId: String): PendingIntent = PendingIntent.getActivity(
         context,
         SETTINGS_REQUEST_CODE,
         Intent(context, MainActivity::class.java)
             .setAction(ACTION_OPEN_SETTINGS)
+            .putExtra(EXTRA_SETTINGS_DELIVERY_ID, deliveryId)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
@@ -268,6 +270,8 @@ class HealthSyncReminderController internal constructor(
             "ai.withmurph.companion.action.DELIVER_HEALTH_SYNC_REMINDER"
         internal const val EXTRA_BASIS_TOKEN =
             "ai.withmurph.companion.extra.HEALTH_REMINDER_BASIS"
+        internal const val EXTRA_SETTINGS_DELIVERY_ID =
+            "ai.withmurph.companion.extra.HEALTH_REMINDER_SETTINGS_DELIVERY"
         private const val CHANNEL_ID = "health_sync_reminders"
         private const val NOTIFICATION_ID = 4_201
         private const val DELIVERY_REQUEST_CODE = 4_201

@@ -36,12 +36,16 @@ class MainActivity : ComponentActivity() {
     private var healthSyncNotificationsAllowed by mutableStateOf(false)
     private var healthSyncNotificationRecoveryNeeded by mutableStateOf(false)
     private var openSettingsRequestId by mutableIntStateOf(0)
+    private var lastHandledReminderDeliveryId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openSettingsRequestId = savedInstanceState?.getInt(
             STATE_OPEN_SETTINGS_REQUEST_ID,
         ) ?: 0
+        lastHandledReminderDeliveryId = savedInstanceState?.getString(
+            STATE_LAST_HANDLED_REMINDER_DELIVERY_ID,
+        )
         graph = (application as MurphApplication).graph
         graph.healthSyncReminder.didEnterForeground()
         healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
@@ -314,6 +318,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt(STATE_OPEN_SETTINGS_REQUEST_ID, openSettingsRequestId)
+        lastHandledReminderDeliveryId?.let { deliveryId ->
+            outState.putString(STATE_LAST_HANDLED_REMINDER_DELIVERY_ID, deliveryId)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -411,9 +418,13 @@ class MainActivity : ComponentActivity() {
         intent: Intent?,
         isRestoring: Boolean = false,
     ) {
-        if (consumeHealthSyncReminderSettingsIntent(intent, isRestoring)) {
-            openSettingsRequestId += 1
-        }
+        val deliveryId = healthSyncReminderSettingsDeliveryToConsume(
+            intent = intent,
+            lastHandledDeliveryId = lastHandledReminderDeliveryId,
+            isRestoringLegacyIntent = isRestoring,
+        ) ?: return
+        lastHandledReminderDeliveryId = deliveryId
+        openSettingsRequestId += 1
     }
 
     private fun saveHealthSyncReminderSetting(enabled: Boolean) {
@@ -444,15 +455,26 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val STATE_OPEN_SETTINGS_REQUEST_ID = "open_settings_request_id"
+        const val STATE_LAST_HANDLED_REMINDER_DELIVERY_ID =
+            "last_handled_reminder_delivery_id"
     }
 }
 
-internal fun consumeHealthSyncReminderSettingsIntent(
+internal fun healthSyncReminderSettingsDeliveryToConsume(
     intent: Intent?,
-    isRestoring: Boolean = false,
-): Boolean {
-    if (isRestoring) return false
-    if (intent?.action != HealthSyncReminderController.ACTION_OPEN_SETTINGS) return false
-    intent.action = null
-    return true
+    lastHandledDeliveryId: String?,
+    isRestoringLegacyIntent: Boolean = false,
+): String? {
+    if (intent?.action != HealthSyncReminderController.ACTION_OPEN_SETTINGS) return null
+    val deliveryId = intent.getStringExtra(
+        HealthSyncReminderController.EXTRA_SETTINGS_DELIVERY_ID,
+    )
+    if (deliveryId == null) {
+        return LEGACY_REMINDER_DELIVERY_ID.takeUnless {
+            isRestoringLegacyIntent || lastHandledDeliveryId == it
+        }
+    }
+    return deliveryId.takeUnless { it == lastHandledDeliveryId }
 }
+
+private const val LEGACY_REMINDER_DELIVERY_ID = "legacy-reminder-delivery"

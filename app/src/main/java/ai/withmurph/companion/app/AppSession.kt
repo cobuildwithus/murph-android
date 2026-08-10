@@ -1021,10 +1021,22 @@ class AppSession(
                     if (!ownsReplacementWork()) {
                         return@withLock false
                     }
+                    val replacementRequest = AddressBookReplacementRequest(
+                        mutation,
+                        projections,
+                    )
+                    if (
+                        !markAddressBookReplacementRequestStarted(
+                            claimedForegroundOperation,
+                            replacementRequest,
+                        )
+                    ) {
+                        return@withLock false
+                    }
                     val status = try {
                         api.replaceAddressBook(
                             memberKey = pending.memberKey,
-                            request = AddressBookReplacementRequest(mutation, projections),
+                            request = replacementRequest,
                         )
                     } catch (error: CancellationException) {
                         throw error
@@ -2647,6 +2659,7 @@ class AppSession(
             !localState.beginSignOut(
                 expectedMemberKey = expectedMemberKey,
                 privySignOutMemberKey = privySignOutMemberKey,
+                preserveMemberState = true,
             )
         ) {
             _state.update {
@@ -2662,10 +2675,14 @@ class AppSession(
         }
         cancelForegroundHealthOperation(cancelWorkersWhenIdle = true)
         healthSyncReminder.cancel()
+        closeProductAuthorityForBoundary()
+        val startedAddressBookReplacement = cancelAndDrainForegroundAddressBookOperation()
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         startMutex.withLock {
-            if (localState.signOutPending) finishPendingSignOut()
+            if (localState.signOutPending) {
+                finishPendingSignOut(startedAddressBookReplacement)
+            }
         }
     }
 
@@ -3558,7 +3575,9 @@ class AppSession(
             allowsLaunchConsentWork(acceptedConsentOwner)
 
     /** Called only while [startMutex] is held. */
-    private suspend fun finishPendingSignOut() {
+    private suspend fun finishPendingSignOut(
+        startedReplacement: AddressBookReplacementRequest? = null,
+    ) {
         if (!localState.signOutPending) return
         val expectedMemberKey = localState.memberKey
         val privySignOutMemberKey =
@@ -3566,6 +3585,19 @@ class AppSession(
         healthSyncReminder.cancel()
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
+        cancelAndDrainForegroundAddressBookOperation()
+        if (
+            !settleAddressBookStateBeforeSignOut(
+                expectedMemberKey = expectedMemberKey,
+                settleAllPending = true,
+                startedReplacement = startedReplacement,
+            )
+        ) {
+            publishPendingSignOutFailure(
+                "We couldn't safely settle the address-book update. Check your connection and try again.",
+            )
+            return
+        }
         try {
             signOutHealthSdkAfterDrainingWork()
         } catch (error: CancellationException) {
@@ -4569,10 +4601,23 @@ class AppSession(
                 preserveMemberState = true,
             )
         ) {
+            cancelAndDrainForegroundAddressBookOperation()
             publishHealthResetFailure()
             return false
         }
         healthSyncReminder.cancel()
+        val startedAddressBookReplacement = cancelAndDrainForegroundAddressBookOperation()
+        if (
+            startedAddressBookReplacement != null &&
+            !settleAddressBookStateBeforeSignOut(
+                expectedMemberKey = expectedMemberKey,
+                settleAllPending = false,
+                startedReplacement = startedAddressBookReplacement,
+            )
+        ) {
+            publishHealthResetFailure()
+            return false
+        }
         val sdkResetSucceeded = if (healthAlreadySignedOut) {
             true
         } else {
@@ -6190,6 +6235,86 @@ class AppSession(
         operation?.job?.cancel(ForegroundHealthSyncCancellation())
     }
 
+    private suspend fun cancelAndDrainForegroundAddressBookOperation(): AddressBookReplacementRequest? {
+        val operation = synchronized(foregroundAddressBookOperationLock) {
+            foregroundAddressBookOperation
+        }
+        val startedReplacement = synchronized(foregroundAddressBookOperationLock) {
+            operation?.takeIf { foregroundAddressBookOperation === it }?.startedReplacement
+        }
+        operation?.job?.cancel(ForegroundAddressBookCancellation())
+        operation?.job?.join()
+        addressBookMutex.withLock { }
+        return startedReplacement
+    }
+
+    private suspend fun settleAddressBookStateBeforeSignOut(
+        expectedMemberKey: String?,
+        settleAllPending: Boolean,
+        startedReplacement: AddressBookReplacementRequest? = null,
+    ): Boolean {
+        val memberKey = expectedMemberKey ?: return true
+        val replacement = if (settleAllPending) {
+            localState.pendingAddressBookReplacement
+        } else {
+            startedReplacement?.mutation
+                ?.takeIf { localState.pendingAddressBookReplacement == it }
+        }
+        val deletion = localState.pendingAddressBookDeletion.takeIf { settleAllPending }
+        if (replacement == null && deletion == null) return true
+
+        if (replacement != null && startedReplacement?.mutation == replacement) {
+            val replayed = try {
+                api.replaceAddressBook(memberKey, startedReplacement)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: CompanionApiException.Conflict) {
+                null
+            } catch (_: CompanionApiException.ConsentRequired) {
+                null
+            } catch (_: Exception) {
+                return false
+            }
+            if (replayed != null) {
+                if (replayed.revision <= replacement.baseRevision) return false
+                return localState.completeAddressBookReplacement(
+                    mutationId = replacement.mutationId,
+                    revision = replayed.revision,
+                    completesInitialSetup = false,
+                )
+            }
+        }
+
+        val status = try {
+            api.fetchAddressBookStatus(memberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return false
+        }
+        replacement?.let { mutation ->
+            if (status.revision < mutation.baseRevision) return false
+            return if (status.revision == mutation.baseRevision) {
+                localState.abandonAddressBookReplacement(mutation.mutationId)
+            } else {
+                localState.completeAddressBookReplacement(
+                    mutationId = mutation.mutationId,
+                    revision = status.revision,
+                    completesInitialSetup = false,
+                )
+            }
+        }
+        deletion?.let { mutation ->
+            if (status.revision < mutation.baseRevision) return false
+            return if (status.revision == mutation.baseRevision) {
+                localState.abandonAddressBookDeletion(mutation.mutationId)
+            } else {
+                localState.completeAddressBookDeletion(mutation.mutationId, status.revision)
+            }
+        }
+        return true
+    }
+
     private fun CancellationException.isForegroundHealthSyncCancellation(): Boolean =
         this is ForegroundHealthSyncCancellation ||
             cause is ForegroundHealthSyncCancellation
@@ -6210,6 +6335,15 @@ class AppSession(
                 job = job,
             ).also { foregroundAddressBookOperation = it }
         }
+    }
+
+    private fun markAddressBookReplacementRequestStarted(
+        operation: ForegroundAddressBookOperation,
+        request: AddressBookReplacementRequest,
+    ): Boolean = synchronized(foregroundAddressBookOperationLock) {
+        if (foregroundAddressBookOperation !== operation) return@synchronized false
+        operation.startedReplacement = request
+        true
     }
 
     private fun ownsForegroundAddressBookWork(
@@ -6567,6 +6701,7 @@ class AppSession(
     private data class ForegroundAddressBookOperation(
         val foregroundClaim: ForegroundRefreshClaim,
         val job: Job,
+        var startedReplacement: AddressBookReplacementRequest? = null,
     )
 
     private data class ForegroundHealthOperation(

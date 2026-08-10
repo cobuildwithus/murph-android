@@ -57,7 +57,7 @@ Android also recommends WorkManager, rather than exact alarms, for ordinary
 scheduled background work
 ([exact-alarm guidance](https://developer.android.com/about/versions/14/changes/schedule-exact-alarms#use-cases)).
 
-## Why an app-owned wrapper is insufficient
+## Why a wrapper around `syncData()` is insufficient
 
 An app-owned worker could validate the member once and then call the public
 `syncData()` API. That API still hands execution to the internal starter and
@@ -66,31 +66,42 @@ member owner, consent, and setup generation at those worker boundaries. Server
 member or consent authority can therefore change after the wrapper's single
 preflight while a later resource worker is still eligible to begin.
 
-This is the same missing seam behind both the vendor exact-alarm path and a
-custom WorkManager wrapper. Changing the scheduler does not change the
-authorization boundary.
+This is the same missing seam behind the vendor exact-alarm path and any app
+worker that merely preflights `syncData()`. Changing the scheduler does not
+change the authorization boundary. The current release instead interposes at
+WorkManager's construction boundary for Vital's exact starter and resource
+worker classes: without the live in-process foreground lease, those workers
+fail closed before their vendor implementation starts.
 
 ## Current enforcement
 
 The application manifest removes Vital's `SyncBroadcastReceiver`,
-`SyncOnExactAlarmService`, and inherited `RECEIVE_BOOT_COMPLETED` permission.
-It does not request `READ_HEALTH_DATA_IN_BACKGROUND`. `scripts/verify.sh`
-builds both variants, inspects each merged manifest, and fails if those entry
-points or permissions reappear.
+`SyncOnExactAlarmService`, its eager AndroidX Startup initializer, WorkManager's
+default initializer, and the inherited `RECEIVE_BOOT_COMPLETED` permission.
+WorkManager instead initializes on demand from `MurphApplication`'s app-owned
+configuration, while the foreground Activity remains the only owner that
+constructs Junction through the lazy `AppGraph`. The app does not request
+`READ_HEALTH_DATA_IN_BACKGROUND`. `scripts/verify.sh` builds both variants,
+inspects each merged manifest, and fails if prohibited entry points or
+permissions reappear.
 
 Foreground app entry, foreground return, and **Sync now** remain the only sync
 owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
 and sign-out checks before calling the Junction adapter. The adapter keeps
 Vital synchronization paused across permission and connect flows and unpauses
-only inside an explicit foreground call. Foreground loss cancels the registered
-app operation and the exact Vital 5.0.2 umbrella/resource WorkManager names.
-Cancellation acceptance is not execution proof, so the adapter also waits
-until every matching work item is absent or terminal before it releases the
-session's health mutex. Sign-out requests that cancellation immediately after
-the durable tombstone commits, and Junction teardown repeats the same terminal
-check before changing SDK identity. Teardown therefore closes the current
-foreground chain before crossing the Junction identity, member, or consent
-boundary, including after process reconstruction.
+only inside an explicit foreground call. A process-local WorkManager admission
+lease defaults closed in every fresh process and intercepts Vital's exact
+starter and resource-worker classes before construction; only the app-owned
+foreground call opens it. Foreground loss revokes the lease, cancels the
+registered app operation, stops the starter to terminality, then issues a fresh
+cancellation wave for every Vital 5.0.2 resource-worker name. Cancellation
+acceptance is not execution proof, so each wave also waits until every matching
+work item is absent or terminal before it releases the session's health mutex.
+Sign-out requests that cancellation immediately after the durable tombstone
+commits, and Junction teardown repeats the same terminal check before changing
+SDK identity. Teardown therefore closes the current foreground chain before
+crossing the Junction identity, member, or consent boundary, including after
+process reconstruction.
 
 ## Smallest future unlock
 

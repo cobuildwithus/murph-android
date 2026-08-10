@@ -38,6 +38,24 @@
         android:theme="@style/Theme.Murph"
         tools:targetApi="36">
 
+        <!--
+          WorkManager initializes on demand through MurphApplication's
+          Configuration.Provider so every Vital worker crosses the app-owned
+          foreground admission factory. Junction itself remains AppGraph-lazy.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="io.tryvital.vitalhealthconnect.VitalHealthConnectInitializer"
+                tools:node="remove" />
+        </provider>
+
         <receiver
             android:name=".reminders.HealthSyncReminderReceiver"
             android:exported="false" />

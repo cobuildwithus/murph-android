@@ -58,6 +58,7 @@ class JunctionHealthSyncService(
     }
 
     override fun cancelActiveSync() {
+        ForegroundVitalSyncAdmission.revoke()
         manager.pauseSynchronization = true
         cancelSyncWorkers()
     }
@@ -98,15 +99,17 @@ class JunctionHealthSyncService(
     }
 
     override suspend fun syncAllGrantedResources() {
-        withContext(Dispatchers.Main.immediate) {
-            manager.pauseSynchronization = false
-        }
+        val admission = ForegroundVitalSyncAdmission.open()
         try {
+            withContext(Dispatchers.Main.immediate) {
+                manager.pauseSynchronization = false
+            }
             manager.syncData(
                 resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
             )
         } finally {
             withContext(NonCancellable) {
+                ForegroundVitalSyncAdmission.close(admission)
                 withContext(Dispatchers.Main.immediate) {
                     manager.pauseSynchronization = true
                 }
@@ -127,6 +130,7 @@ class JunctionHealthSyncService(
     }
 
     private suspend fun pauseAndAwaitSyncWorkers() {
+        ForegroundVitalSyncAdmission.revoke()
         withContext(Dispatchers.Main.immediate) {
             manager.pauseSynchronization = true
         }
@@ -134,8 +138,14 @@ class JunctionHealthSyncService(
     }
 
     private suspend fun cancelAndAwaitSyncWorkers() {
-        val workNames = syncWorkNames(requestedReadResources)
-        cancelSyncWorkers().forEach { operation ->
+        cancelSyncWorkerHandoff(
+            resourceWorkNames = resourceSyncWorkNames(requestedReadResources),
+            cancelAndAwait = ::cancelAndAwaitWorkNames,
+        )
+    }
+
+    private suspend fun cancelAndAwaitWorkNames(workNames: Set<String>) {
+        workNames.map(workManager::cancelUniqueWork).forEach { operation ->
             val state = operation.state.asFlow().first {
                 it is Operation.State.SUCCESS || it is Operation.State.FAILURE
             }
@@ -190,11 +200,27 @@ class JunctionHealthSyncService(
          * unique WorkManager names for the umbrella worker and every app-owned
          * resource worker. Keep this mapping pinned to the reviewed SDK source.
          */
-        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> = buildSet {
-            add("HC.ResourceSyncStarter")
-            resources.forEach { resource ->
-                add("HC.ResourceSyncWorker.$resource")
+        internal const val RESOURCE_SYNC_STARTER_WORK_NAME = "HC.ResourceSyncStarter"
+
+        internal fun resourceSyncWorkNames(resources: Set<VitalResource>): Set<String> =
+            resources.mapTo(mutableSetOf()) { resource ->
+                "HC.ResourceSyncWorker.$resource"
             }
+
+        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> =
+            resourceSyncWorkNames(resources) + RESOURCE_SYNC_STARTER_WORK_NAME
+
+        /**
+         * Stop the only producer before issuing the definitive resource-worker
+         * cancellation wave. Once the starter is terminal, the second pass
+         * cannot miss a resource worker enqueued after an earlier empty lookup.
+         */
+        internal suspend fun cancelSyncWorkerHandoff(
+            resourceWorkNames: Set<String>,
+            cancelAndAwait: suspend (Set<String>) -> Unit,
+        ) {
+            cancelAndAwait(setOf(RESOURCE_SYNC_STARTER_WORK_NAME))
+            cancelAndAwait(resourceWorkNames)
         }
 
         internal suspend fun awaitSyncWorkersTerminal(

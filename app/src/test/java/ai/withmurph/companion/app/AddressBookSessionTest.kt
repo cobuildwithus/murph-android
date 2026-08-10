@@ -1120,19 +1120,46 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun signOutFencesLateReplacementAndClearsAllContactMetadata() = runTest {
+    fun signOutCancelsAndConvergesACommittedReplacementBeforeAuthLogout() = runTest {
         val fixture = fixture()
         fixture.session.start()
         fixture.contacts.permissionGranted = true
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        fixture.api.replaceHandler = { _, request ->
-            entered.complete(Unit)
-            release.await()
-            enabledStatus(request.mutation.baseRevision + 1, request.contacts.size)
+        val cancellationObserved = CompletableDeferred<Unit>()
+        var authWasStillOwnedAtCancellation = false
+        var authWasStillOwnedAtSettlement = false
+        var replacementAttempt = 0
+        fixture.api.replaceHandler = { memberKey, request ->
+            replacementAttempt += 1
+            if (replacementAttempt > 1) {
+                authWasStillOwnedAtSettlement =
+                    fixture.auth.state == AuthSessionState.SignedIn(
+                        MEMBER_ONE,
+                        verifiedOnline = true,
+                    )
+                fixture.api.statuses.getValue(memberKey)
+            } else {
+                entered.complete(Unit)
+                try {
+                    release.await()
+                } catch (error: CancellationException) {
+                    authWasStillOwnedAtCancellation =
+                        fixture.auth.state == AuthSessionState.SignedIn(
+                            MEMBER_ONE,
+                            verifiedOnline = true,
+                        )
+                    fixture.api.statuses[memberKey] = enabledStatus(
+                        request.mutation.baseRevision + 1,
+                        request.contacts.size,
+                    )
+                    cancellationObserved.complete(Unit)
+                    throw error
+                }
+                error("The replacement should be cancelled by sign-out")
+            }
         }
-
         assertTrue(fixture.session.prepareAddressBookSharing())
         val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
         entered.await()
@@ -1140,16 +1167,68 @@ class AddressBookSessionTest {
 
         fixture.session.signOut()
 
+        cancellationObserved.await()
+        assertTrue(completion.isCompleted)
+        assertTrue(authWasStillOwnedAtCancellation)
+        assertTrue(authWasStillOwnedAtSettlement)
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(
+            fixture.api.replacements[0].second,
+            fixture.api.replacements[1].second,
+        )
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertEquals(AuthSessionState.SignedOut, fixture.auth.state)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertNull(fixture.localState.pendingAddressBookDeletion)
 
-        release.complete(Unit)
         assertFalse(completion.await())
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertNull(fixture.localState.addressBookRevision)
+    }
+
+    @Test
+    fun signOutKeepsTheTombstoneAndMutationWhenReplacementSettlementIsUncertain() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val cancellationObserved = CompletableDeferred<Unit>()
+        var replacementAttempt = 0
+        fixture.api.replaceHandler = { _, _ ->
+            replacementAttempt += 1
+            if (replacementAttempt == 1) {
+                entered.complete(Unit)
+                try {
+                    release.await()
+                } catch (error: CancellationException) {
+                    cancellationObserved.complete(Unit)
+                    throw error
+                }
+            }
+            throw CompanionApiException.Network
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        entered.await()
+        val pendingMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
+
+        fixture.session.signOut()
+
+        cancellationObserved.await()
+        assertFalse(completion.await())
+        assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_ONE, fixture.localState.memberKey)
+        assertEquals(pendingMutation, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(
+            AuthSessionState.SignedIn(MEMBER_ONE, verifiedOnline = true),
+            fixture.auth.state,
+        )
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
     }
 
     @Test
@@ -1161,10 +1240,17 @@ class AddressBookSessionTest {
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        fixture.api.replaceHandler = { _, request ->
-            entered.complete(Unit)
-            release.await()
-            enabledStatus(request.mutation.baseRevision + 1, request.contacts.size)
+        var replacementAttempt = 0
+        fixture.api.replaceHandler = { memberKey, request ->
+            replacementAttempt += 1
+            if (replacementAttempt == 1) {
+                entered.complete(Unit)
+                release.await()
+            }
+            enabledStatus(
+                request.mutation.baseRevision + 1,
+                request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
         }
 
         assertTrue(fixture.session.prepareAddressBookSharing())
@@ -1678,9 +1764,13 @@ class AddressBookSessionTest {
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
+        var replacementAttempt = 0
         fixture.api.replaceHandler = { _, _ ->
-            entered.complete(Unit)
-            release.await()
+            replacementAttempt += 1
+            if (replacementAttempt == 1) {
+                entered.complete(Unit)
+                release.await()
+            }
             throw CompanionApiException.ConsentRequired
         }
 

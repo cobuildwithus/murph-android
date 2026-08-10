@@ -7,6 +7,7 @@ import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -97,6 +98,69 @@ class JunctionHealthSyncServiceTest {
         assertFalse(terminality.isCompleted)
         workInfos.value = listOf(workInfo(WorkInfo.State.CANCELLED))
         terminality.await()
+    }
+
+    @Test
+    fun starterIsTerminalBeforeTheDefinitiveResourceCancellationWave() = runTest {
+        val resourceWorkName = "HC.ResourceSyncWorker.sleep"
+        val cancellationWaves = mutableListOf<Set<String>>()
+        var lateResourceWasEnqueued = false
+
+        JunctionHealthSyncService.cancelSyncWorkerHandoff(
+            resourceWorkNames = setOf(resourceWorkName),
+        ) { workNames ->
+            cancellationWaves += workNames
+            if (workNames == setOf(JunctionHealthSyncService.RESOURCE_SYNC_STARTER_WORK_NAME)) {
+                lateResourceWasEnqueued = true
+            } else {
+                assertTrue(lateResourceWasEnqueued)
+                assertEquals(setOf(resourceWorkName), workNames)
+            }
+        }
+
+        assertEquals(
+            listOf(
+                setOf(JunctionHealthSyncService.RESOURCE_SYNC_STARTER_WORK_NAME),
+                setOf(resourceWorkName),
+            ),
+            cancellationWaves,
+        )
+    }
+
+    @Test
+    fun vitalWorkersDefaultClosedAndAnOldLeaseCannotCloseANewerAdmission() {
+        ForegroundVitalSyncAdmission.revoke()
+        assertFalse(ForegroundVitalSyncAdmission.allowsWorker())
+
+        val first = ForegroundVitalSyncAdmission.open()
+        assertTrue(ForegroundVitalSyncAdmission.allowsWorker())
+        ForegroundVitalSyncAdmission.revoke()
+        assertFalse(ForegroundVitalSyncAdmission.allowsWorker())
+
+        val second = ForegroundVitalSyncAdmission.open()
+        ForegroundVitalSyncAdmission.close(first)
+        assertTrue(ForegroundVitalSyncAdmission.allowsWorker())
+        ForegroundVitalSyncAdmission.close(second)
+        assertFalse(ForegroundVitalSyncAdmission.allowsWorker())
+    }
+
+    @Test
+    fun workerFactoryInterposesOnlyThePinnedVitalWorkerClasses() {
+        assertTrue(
+            ForegroundVitalSyncWorkerFactory.isVitalSyncWorkerClassName(
+                ForegroundVitalSyncWorkerFactory.STARTER_CLASS_NAME,
+            ),
+        )
+        assertTrue(
+            ForegroundVitalSyncWorkerFactory.isVitalSyncWorkerClassName(
+                ForegroundVitalSyncWorkerFactory.RESOURCE_CLASS_NAME,
+            ),
+        )
+        assertFalse(
+            ForegroundVitalSyncWorkerFactory.isVitalSyncWorkerClassName(
+                "ai.withmurph.companion.SomeOtherWorker",
+            ),
+        )
     }
 
     @Test
