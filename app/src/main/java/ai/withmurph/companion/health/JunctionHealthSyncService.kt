@@ -178,7 +178,7 @@ class JunctionHealthSyncService(
         manager.reloadPermissions()
     }
 
-    override suspend fun syncAllGrantedResources() {
+    override suspend fun syncAllGrantedResources(expectedMemberKey: String) {
         // An upgrade can inherit durable all-granted work enqueued by Vital's public
         // unpause setter. Retire every pinned chain before evaluating the exact set,
         // including when the new configured-and-granted intersection is empty.
@@ -187,12 +187,17 @@ class JunctionHealthSyncService(
             manager.resourcesWithReadPermission(),
         )
         if (resources.isEmpty()) return
-        setManualSyncPaused(false)
+        VitalHealthWorkerLease.openFor(expectedMemberKey)
         try {
+            setManualSyncPaused(false)
             manager.syncData(resources = resources)
         } finally {
             withContext(NonCancellable) {
-                setManualSyncPaused(true)
+                try {
+                    cancelAndAwaitVitalWork()
+                } finally {
+                    VitalHealthWorkerLease.closeFor(expectedMemberKey)
+                }
             }
         }
     }

@@ -2078,6 +2078,7 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(1, fixture.health.syncCalls)
+        assertEquals(listOf(MEMBER_KEY), fixture.health.syncMemberKeys)
     }
 
     @Test
@@ -8060,6 +8061,7 @@ class AppSessionTest {
         var automaticConnectSyncAttempts = 0
         var automaticConnectResourceStarts = 0
         var syncCalls = 0
+        val syncMemberKeys = mutableListOf<String>()
         var syncResourceCount = 1
         var syncResourceStarts = 0
         var refreshCalls = 0
@@ -8165,7 +8167,8 @@ class AppSessionTest {
             actualGrantedCount?.let { grantedCount = it }
         }
 
-        override suspend fun syncAllGrantedResources() {
+        override suspend fun syncAllGrantedResources(expectedMemberKey: String) {
+            syncMemberKeys += expectedMemberKey
             if (requireCurrentProcessSetupBeforeSync) {
                 check(signedIn) {
                     "Junction sync started while the live session was signed out."

@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Optional, foreground-only friendly-name projection. No contact writes or background sync. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
@@ -72,6 +73,13 @@
         <service
             android:name="io.tryvital.vitalhealthconnect.workers.SyncOnExactAlarmService"
             tools:node="remove" />
+
+        <!-- Explicit member-requested health transfer can outlive shortService's 3-minute cap. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge"
+            tools:replace="android:foregroundServiceType" />
 
         <activity
             android:name=".MainActivity"

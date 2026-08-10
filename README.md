@@ -12,7 +12,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
 - The complete pinned Vital 5.0.2 Health Connect read surface: 21 centralized resources backed by 29 data-type read permissions.
 - Thirty-day foreground backfill within ordinary Health Connect read access.
-- Foreground sync on app entry, foreground return, and explicit **Sync now**.
+- Visible `dataSync` foreground transfer on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
 - Provider-neutral Health Connect setup and recovery guidance.
@@ -187,6 +187,13 @@ SDK synchronization before permission and through `connect()`. Before each
 explicit foreground sync, it retires any pinned durable starter/resource work,
 opens Vital's manual gate without invoking the SDK setter that schedules an
 all-granted worker, and sends only the configured-and-granted intersection.
+The process-local member lease starts closed, opens only after the existing
+current-member/backend preflight, and remains open until every exact worker is
+terminal; a headless restarted process therefore cannot infer permission to
+upload from durable preferences. WorkManager 2.11.2 substitutes a Murph-owned
+`dataSync` umbrella for Vital 5.0.2's three-minute `shortService` starter while
+retaining Vital's real per-resource readers, uploaders, input contract,
+notification, and unique work names.
 An empty intersection is a no-op. Shared permissions can activate multiple SDK
 resources, so the app declares the relevant aggregate owners explicitly. If a
 member selects a workout or reproductive detail without its required aggregate
@@ -243,8 +250,9 @@ message.
   observation time, and reconnect clearance commit as one restart snapshot.
   SDK automatic synchronization stays paused across permission and connect,
   and the adapter opens its manual gate only for that explicit configured-resource
-  call. A durable WorkManager factory rejects new or restarted Vital workers
-  without a member, completed setup, or while sign-out is pending. A failed
+  call. An on-demand WorkManager factory rejects new or restarted Vital workers
+  without a member, completed setup, clear sign-out state, and a process-local
+  lease for the exact backend-validated member. A failed
   commit rolls back the live Junction identity. The SDK's reachable
   backfill is already limited to 30 days, so setup does not request an
   extended-history grant.
@@ -330,7 +338,7 @@ Before a Play release:
    Contacts permission disclosure for optional familiar-name projection.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
 4. Inspect the exact signed AAB and prove Junction's boot receiver and exact-alarm service remain removed.
-5. Verify foreground sync and its notification behavior on Android 13–16.
+5. Verify the `dataSync` foreground transfer and notification on Android 13–16, including a real run beyond three minutes without a `shortService` timeout or ANR.
 6. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
 7. Verify Contacts grant, denial, permanent denial, app-settings recovery,
    permission revocation cleanup, compare-and-swap conflict handling, and Stop

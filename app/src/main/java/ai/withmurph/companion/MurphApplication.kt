@@ -9,8 +9,8 @@ class MurphApplication : Application(), Configuration.Provider {
     lateinit var graph: AppGraph
         private set
 
-    override fun getWorkManagerConfiguration(): Configuration =
-        Configuration.Builder()
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
             .setWorkerFactory(MurphHealthWorkerFactory())
             .build()
 

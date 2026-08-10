@@ -129,7 +129,7 @@ interface HealthSyncing {
 
     suspend fun connectAfterPermissionRequest()
     suspend fun refreshPermissionState()
-    suspend fun syncAllGrantedResources()
+    suspend fun syncAllGrantedResources(expectedMemberKey: String)
     suspend fun signOutSdk()
 }
 

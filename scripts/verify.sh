@@ -84,6 +84,12 @@ do
         echo "Merged manifest dropped a shipped activity permission: $merged_manifest" >&2
         exit 1
     fi
+    if ! grep -Fq 'android.permission.FOREGROUND_SERVICE_DATA_SYNC' "$merged_manifest" ||
+        ! grep -Fq 'android:name="androidx.work.impl.foreground.SystemForegroundService"' "$merged_manifest" ||
+        ! grep -Fq 'android:foregroundServiceType="dataSync"' "$merged_manifest"; then
+        echo "Merged manifest does not bind explicit health transfer to dataSync: $merged_manifest" >&2
+        exit 1
+    fi
     actual_health_read_permissions=$(grep -o 'android.permission.health.READ_[A-Z0-9_]*' "$merged_manifest" | sort -u)
     if [ "$actual_health_read_permissions" != "$expected_health_read_permissions" ]; then
         echo "Merged manifest Health Connect read permissions differ from the reviewed 29-name allowlist: $merged_manifest" >&2

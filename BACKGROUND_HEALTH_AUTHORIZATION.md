@@ -2,7 +2,7 @@
 
 Status: **blocked for Junction/Vital Android 5.0.2**
 
-Reviewed: 2026-08-05
+Reviewed: 2026-08-10
 
 Scope: unattended Health Connect reads and uploads only
 
@@ -21,9 +21,12 @@ worker can read or upload, that:
 3. the backend still recognizes that member and current launch consent; and
 4. the worker belongs to the current health-setup generation.
 
-Vital 5.0.2 does not expose a callback or worker factory where those checks can
-be inserted for its unattended worker chain. Local Vital sign-in state is not
-a substitute for Murph member and consent authorization.
+Vital 5.0.2 does not expose a callback where Murph can revalidate backend
+authority for unattended work. Murph's WorkManager factory can intercept the
+pinned worker classes, but it deliberately requires a process-local lease that
+starts closed and opens only after a live foreground preflight. Local Vital
+sign-in state and durable preferences are not substitutes for Murph member and
+consent authorization.
 
 ## Evidence
 
@@ -57,18 +60,19 @@ Android also recommends WorkManager, rather than exact alarms, for ordinary
 scheduled background work
 ([exact-alarm guidance](https://developer.android.com/about/versions/14/changes/schedule-exact-alarms#use-cases)).
 
-## Why an app-owned wrapper is insufficient
+## Why the foreground wrapper does not unlock unattended sync
 
-An app-owned worker could validate the member once and then call the public
-`syncData()` API. That API still hands execution to the internal starter and
-its later per-resource workers. Murph cannot recheck its durable tombstone,
-member owner, consent, and setup generation at those worker boundaries. Server
-member or consent authority can therefore change after the wrapper's single
-preflight while a later resource worker is still eligible to begin.
+For explicit foreground transfer, Murph replaces Vital's umbrella starter,
+requires the exact member's process-local lease before each resource enqueue,
+and keeps teardown behind the same session mutex until every exact worker is
+terminal. The factory requires that lease again when constructing Vital's real
+per-resource worker. Process death resets the lease closed, so WorkManager
+reconstruction rejects the durable request.
 
-This is the same missing seam behind both the vendor exact-alarm path and a
-custom WorkManager wrapper. Changing the scheduler does not change the
-authorization boundary.
+That design intentionally cannot authorize an alarm, boot, or other unattended
+entry point: no live foreground member/backend preflight exists to open the
+lease. Making the lease durable would recreate the stale-authority gap this
+boundary is designed to close.
 
 ## Current enforcement
 
@@ -80,11 +84,15 @@ points or permissions reappear.
 
 Foreground app entry, foreground return, and **Sync now** remain the only sync
 owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
-and sign-out checks before calling the Junction adapter. The adapter keeps
+and sign-out checks before calling the Junction adapter with the validated
+member key. The adapter keeps
 Vital synchronization paused across permission and connect flows and unpauses
-only inside an explicit foreground call. Teardown fences new app-owned health
-work, drains the current foreground chain under the session's health mutex, and
-only then crosses the Junction identity, member, or consent boundary.
+only inside an explicit foreground call. Its default-closed process lease and
+authorization-aware factory reject reconstructed work, while its `dataSync`
+starter preserves Vital's real per-resource readers and uploaders. Teardown
+fences new app-owned health work, drains the current foreground chain under the
+session's health mutex, and only then crosses the Junction identity, member, or
+consent boundary.
 
 ## Smallest future unlock
 

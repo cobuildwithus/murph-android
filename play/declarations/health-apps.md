@@ -9,6 +9,8 @@ The current candidate is a wellness companion, not a medical device, diagnosis t
 
 Every permission is read-only, requested only after the signed-in member taps **Connect Health Connect**, and individually selectable in the system permission sheet. Murph receives only categories the member grants and the source app actually writes.
 
+The manifest also declares `android.permission.FOREGROUND_SERVICE_DATA_SYNC` for the visible, explicit device-to-cloud transfer after those grants. It is a foreground-service classification, not a Health Connect record permission, extended-history permission, or background-read permission.
+
 ## Exact permission inventory
 
 The release verifier binds this document to the exact manifest permission names. Keep this inventory synchronized with `app/src/main/AndroidManifest.xml` and `play/release-facts.json`.
@@ -90,9 +92,9 @@ The centralized Android scope explicitly lists every resource exposed by the pin
 - The member may select any subset. Vital 5.0.2 activates only complete resource groups: Exercise is required for workout elevation, power, and speed, and Menstruation is required for cervical mucus, intermenstrual bleeding, ovulation tests, and sexual activity. The app requires at least one active configured resource and reports only backend-confirmed data receipt as connected.
 - App-owned permission counts and manual syncs intersect SDK-discovered grants with the reviewed resource set; an unrelated or future SDK grant cannot silently become Murph-owned behavior.
 - The app's Health Connect rationale route points to the same in-app legal/privacy surface used by Settings.
-- `syncOnAppStart` is false. Background Health Connect permission is absent. Vital's boot receiver and exact-alarm service are removed. SDK synchronization remains paused before permission, through `connect()`, and outside explicit app-owned foreground sync calls. The app rejects new or restarted Vital workers without durable member/setup authority or while sign-out is pending, and cancels every pinned unique Vital work name before identity teardown.
+- `syncOnAppStart` is false. Background Health Connect permission is absent. Vital's boot receiver and exact-alarm service are removed. SDK synchronization remains paused before permission, through `connect()`, and outside explicit app-owned foreground sync calls. WorkManager 2.11.2 initializes on demand; its factory requires durable member/setup authority, a clear sign-out tombstone, and a default-closed process-local lease for the backend-validated member. A restarted headless process therefore rejects old work. Murph replaces only Vital 5.0.2's `shortService` umbrella worker with a `dataSync` starter while retaining the SDK's real per-resource readers/uploaders, exact unique names, input contract, notification, and configured-and-granted scope. The identity boundary cancels every pinned unique work name before teardown.
 - Junction's current backfill is the ordinary 30-day foreground window. Extended-history and background permissions are absent.
 - Listing and reviewer notes must explain how to install/configure Health Connect and connect a compatible source without implying every device, membership, region, or source app exposes every category.
-- Before submission, verify the expanded permission sheet and at least one real export for activity, sleep, body/weight, and blood pressure on a physical Android device.
+- Before submission, verify the expanded permission sheet and at least one real export for activity, sleep, body/weight, and blood pressure on a physical Android device. On Android 14–16, also prove a transfer lasting beyond three minutes remains a visible `dataSync` foreground service without a `shortService` timeout or ANR.
 
 Before submission, compare this document to `play/release-facts.json`, the merged manifest, and `JunctionHealthSyncService`. Add, remove, and rejustify every changed type in the Play Console. Google requires a renewed declaration when accessed data types change.

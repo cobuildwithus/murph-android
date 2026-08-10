@@ -3075,11 +3075,13 @@ class AppSession(
                 return false
             }
             if (!health.isSignedIn()) return true
+            val syncMemberKey = currentMemberKey ?: return false
+            if (localState.memberKey != syncMemberKey) return false
             lastStartedHealthSyncSequence += 1
             val syncSequence = lastStartedHealthSyncSequence
             var syncSucceeded = false
             try {
-                health.syncAllGrantedResources()
+                health.syncAllGrantedResources(syncMemberKey)
                 syncSucceeded = true
             } catch (error: CancellationException) {
                 throw error

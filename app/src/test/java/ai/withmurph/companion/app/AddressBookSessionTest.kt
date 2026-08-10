@@ -1849,7 +1849,7 @@ class AddressBookSessionTest {
             grantedCount = totalResourceCount
         }
         override suspend fun refreshPermissionState() = Unit
-        override suspend fun syncAllGrantedResources() {
+        override suspend fun syncAllGrantedResources(expectedMemberKey: String) {
             syncCalls += 1
             syncEntered.complete(Unit)
             syncGate?.await()

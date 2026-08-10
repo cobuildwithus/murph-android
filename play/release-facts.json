@@ -15,6 +15,10 @@
       "declarationCategory": "network state only; no user-data type"
     },
     {
+      "name": "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+      "declarationCategory": "foreground service for explicit device-to-cloud health transfer"
+    },
+    {
       "name": "android.permission.INTERNET",
       "declarationCategory": "transport for declared off-device data paths"
     },
@@ -151,6 +155,9 @@
     },
     {
       "android:name": "android.permission.FOREGROUND_SERVICE"
+    },
+    {
+      "android:name": "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
     },
     {
       "android:name": "android.permission.INTERNET"
@@ -313,11 +320,6 @@
       },
       {
         "componentType": "services",
-        "component": "androidx.work.impl.background.systemalarm.SystemAlarmService",
-        "value": "false"
-      },
-      {
-        "componentType": "services",
         "component": "androidx.work.impl.background.systemjob.SystemJobService",
         "value": "false"
       },
@@ -329,31 +331,6 @@
       {
         "componentType": "receivers",
         "component": "androidx.profileinstaller.ProfileInstallReceiver",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver",
         "value": "false"
       },
       {

@@ -6,23 +6,58 @@ import androidx.work.Worker
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import ai.withmurph.companion.storage.SharedPreferencesLocalState
+import java.util.concurrent.atomic.AtomicReference
 
+internal const val vitalResourceSyncStarterClass =
+    "io.tryvital.vitalhealthconnect.workers.ResourceSyncStarter"
+internal const val vitalResourceSyncWorkerClass =
+    "io.tryvital.vitalhealthconnect.workers.ResourceSyncWorker"
 internal val vitalHealthWorkerClasses = setOf(
-    "io.tryvital.vitalhealthconnect.workers.ResourceSyncStarter",
-    "io.tryvital.vitalhealthconnect.workers.ResourceSyncWorker",
+    vitalResourceSyncStarterClass,
+    vitalResourceSyncWorkerClass,
 )
+
+/**
+ * Process-local proof that the current authenticated member explicitly started a
+ * foreground sync. A restarted process begins closed even when WorkManager still
+ * has durable Vital requests, so headless reconstruction cannot infer authority
+ * from stale preferences alone.
+ */
+internal object VitalHealthWorkerLease {
+    private val memberKey = AtomicReference<String?>(null)
+
+    fun openFor(expectedMemberKey: String) {
+        require(expectedMemberKey.isNotBlank())
+        check(memberKey.compareAndSet(null, expectedMemberKey)) {
+            "A Vital health worker lease is already open"
+        }
+    }
+
+    fun isOpenFor(expectedMemberKey: String?): Boolean =
+        expectedMemberKey != null && memberKey.get() == expectedMemberKey
+
+    fun closeFor(expectedMemberKey: String) {
+        memberKey.compareAndSet(expectedMemberKey, null)
+    }
+}
 
 internal fun vitalHealthWorkerIsAuthorized(
     hasMemberOwner: Boolean,
     hasCommittedHealthSetup: Boolean,
     signOutPending: Boolean,
-): Boolean = hasMemberOwner && hasCommittedHealthSetup && !signOutPending
+    hasForegroundSyncLease: Boolean,
+): Boolean =
+    hasMemberOwner &&
+        hasCommittedHealthSetup &&
+        !signOutPending &&
+        hasForegroundSyncLease
 
 /**
  * WorkManager's default initializer is removed, so its first on-demand startup
  * installs this factory before any worker is constructed. Gate Vital's durable
- * workers from persisted Murph authority so a killed sign-out process cannot
- * resume the old identity.
+ * workers from both persisted Murph authority and a process-local member lease.
+ * A headless restarted process therefore rejects old work until the authenticated
+ * app session performs its normal backend preflight and opens a new lease.
  */
 class MurphHealthWorkerFactory : WorkerFactory() {
     override fun createWorker(
@@ -32,15 +67,25 @@ class MurphHealthWorkerFactory : WorkerFactory() {
     ): ListenableWorker? {
         if (workerClassName !in vitalHealthWorkerClasses) return null
         val localState = SharedPreferencesLocalState(appContext)
+        val memberKey = localState.memberKey
         return if (
             vitalHealthWorkerIsAuthorized(
-                hasMemberOwner = localState.memberKey != null,
+                hasMemberOwner = memberKey != null,
                 hasCommittedHealthSetup = localState.healthAccessRequestedAt != null,
                 signOutPending = localState.signOutPending,
+                hasForegroundSyncLease = VitalHealthWorkerLease.isOpenFor(memberKey),
             )
         ) {
-            // WorkManager's default reflection factory creates the pinned Vital worker.
-            null
+            if (workerClassName == vitalResourceSyncStarterClass) {
+                MurphVitalResourceSyncStarter(
+                    appContext = appContext,
+                    workerParameters = workerParameters,
+                    expectedMemberKey = requireNotNull(memberKey),
+                )
+            } else {
+                // Preserve Vital's pinned per-resource reader and uploader.
+                null
+            }
         } else {
             RejectedVitalHealthWorker(appContext, workerParameters)
         }

@@ -29,7 +29,7 @@ The source manifest declares 29 Health Connect record-type read permissions cove
 - App backup and device transfer exclude all app storage.
 - The app does not persist health values, contacts, phone numbers, names, provider payloads, or identity tokens in its own storage.
 - Contact reads are foreground, explicit, bounded, and replace a server-side projection; Stop requests server-side deletion.
-- Health access is read-only and starts only after the member launches the system permission flow. SDK app-start sync and the Vital boot/exact-alarm components are removed from this release. Vital synchronization stays paused before permission, through `connect()`, and outside app-owned foreground sync calls; those calls use only the configured-and-granted intersection.
+- Health access is read-only and starts only after the member launches the system permission flow. SDK app-start sync and the Vital boot/exact-alarm components are removed from this release. Vital synchronization stays paused before permission, through `connect()`, and outside app-owned foreground sync calls; those calls use only the configured-and-granted intersection. Their visible WorkManager notification runs under `android.permission.FOREGROUND_SERVICE_DATA_SYNC`, a platform service type for the explicit device-to-cloud transfer, not background Health Connect read authority.
 - The complete resource list is authored explicitly and checked against `VitalResource.values()`. A future SDK resource addition therefore fails review-time tests rather than silently broadening permissions.
 - Sign-out and member switching revoke durable local health authorization and tear down Junction before Privy logout.
 - Initial-onboarding drafts stay in memory. The server receives only the selected avatar ID for contact-card preparation and the saved persona, supporting-persona, voice, and tone IDs; skip sends no preferences.
@@ -37,7 +37,7 @@ The source manifest declares 29 Health Connect record-type read permissions cove
 
 These facts do not prove the backend's encryption at rest, retention schedule, deletion completion, or each SDK's diagnostic/analytics collection.
 
-The final merged manifest also contains SDK/runtime permissions that are not themselves Play user-data types: `android.permission.FOREGROUND_SERVICE`, `android.permission.WAKE_LOCK`, `android.permission.USE_BIOMETRIC`, `android.permission.USE_FINGERPRINT`, and the app-scoped `ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. `android.permission.INTERNET` carries the declared off-device paths, while `android.permission.ACCESS_NETWORK_STATE` reads connectivity state. Re-evaluate these whenever the resolved SDK graph changes.
+The final merged manifest also contains SDK/runtime permissions that are not themselves Play user-data types: `android.permission.FOREGROUND_SERVICE`, `android.permission.FOREGROUND_SERVICE_DATA_SYNC`, `android.permission.WAKE_LOCK`, `android.permission.USE_BIOMETRIC`, `android.permission.USE_FINGERPRINT`, and the app-scoped `ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. `FOREGROUND_SERVICE_DATA_SYNC` classifies the visible explicit health transfer; it grants no Health Connect records. `android.permission.INTERNET` carries the declared off-device paths, while `android.permission.ACCESS_NETWORK_STATE` reads connectivity state. Re-evaluate these whenever the resolved SDK graph changes.
 
 ## Submission blockers requiring operator evidence
 
