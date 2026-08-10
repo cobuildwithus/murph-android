@@ -62,9 +62,9 @@ scheduled background work
 An app-owned worker could validate the member once and then call the public
 `syncData()` API. That API still hands execution to the internal starter and
 its later per-resource workers. Murph cannot recheck its durable tombstone,
-member owner, consent, and setup generation at those worker boundaries. A
-sign-out or member change can therefore become durable after the wrapper's
-single preflight and before a later resource worker begins.
+member owner, consent, and setup generation at those worker boundaries. Server
+member or consent authority can therefore change after the wrapper's single
+preflight while a later resource worker is still eligible to begin.
 
 This is the same missing seam behind both the vendor exact-alarm path and a
 custom WorkManager wrapper. Changing the scheduler does not change the
@@ -80,7 +80,11 @@ points or permissions reappear.
 
 Foreground app entry, foreground return, and **Sync now** remain the only sync
 owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
-and sign-out checks before calling the Junction adapter.
+and sign-out checks before calling the Junction adapter. The adapter keeps
+Vital synchronization paused across permission and connect flows and unpauses
+only inside an explicit foreground call. Teardown fences new app-owned health
+work, drains the current foreground chain under the session's health mutex, and
+only then crosses the Junction identity, member, or consent boundary.
 
 ## Smallest future unlock
 

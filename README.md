@@ -167,17 +167,17 @@ setOf(
 )
 ```
 
-This reviewed set covers the Murph ingestion paths, but Vital 5.0.2 does not
-treat it as a boundary for automatic permission/connect sync. The SDK scans all
-resources and its `remapped()` operation is an identity operation in this
-version. The shipped `READ_STEPS` and `READ_ACTIVE_CALORIES_BURNED` grants can
-therefore activate the separate `Steps` and `ActiveEnergyBurned` paths while
-shared grants may also activate `Activity`. All three remain explicit in the
-configured set so foreground sync and resource counts match the SDK's global
-discovery behavior. Murph currently ingests daily steps and active calories
-through the `activity` summary; its default intake normalizes the standalone
-`steps` and `calories_active` uploads away. Those two client paths remain
-configured to preserve shipped behavior, not to claim standalone end-to-end
+Vital 5.0.2 scans all resources during permission reconciliation and its
+`remapped()` operation is an identity operation in this version. Murph pauses
+SDK synchronization before permission and through `connect()`, then unpauses
+only around an explicit foreground call with the configured-and-granted
+intersection. The shipped `READ_STEPS` and `READ_ACTIVE_CALORIES_BURNED` grants
+can activate the separate `Steps` and `ActiveEnergyBurned` paths while shared
+grants may also activate `Activity`, so all three remain explicit. Murph
+currently ingests daily steps and active calories through the `activity`
+summary; its default intake normalizes the standalone `steps` and
+`calories_active` uploads away. Those two client paths remain configured to
+preserve shipped behavior, not to claim standalone end-to-end
 ingestion. See `ARCHITECTURE.md` for provider-specific limitations.
 
 The manifest declares only the corresponding Health Connect read permissions.
@@ -230,10 +230,11 @@ message.
 - The application session records completed setup, then starts exactly one
   app-owned foreground sync attempt after the setup marker, receipt baseline,
   observation time, and reconnect clearance commit as one restart snapshot.
-  Vital 5.0.2 may separately launch its unfiltered asynchronous connect-time
-  sync before `connect()` returns. A failed commit rolls back the live Junction
-  identity. The SDK's reachable backfill is already limited to 30 days, so
-  setup does not request an extended-history grant.
+  SDK automatic synchronization stays paused across permission and connect,
+  and the adapter unpauses only for that explicit configured-resource call. A
+  failed commit rolls back the live Junction identity. The SDK's reachable
+  backfill is already limited to 30 days, so setup does not request an
+  extended-history grant.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - If omitted or passive `resume` receives
   `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and

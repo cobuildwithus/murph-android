@@ -32,15 +32,15 @@ sources rather than inferred from the iOS enum names:
   [timeseries scope](https://github.com/cobuildwithus/murph/blob/05f28303e2008324f7ed6a03dbab82bf322acfcf/packages/contracts/src/junction-resources.ts)
   and [summary/ingestion scope](https://github.com/cobuildwithus/murph/blob/05f28303e2008324f7ed6a03dbab82bf322acfcf/packages/importers/src/device-providers/junction-resources.ts).
 
-That source review showed that Vital 5.0.2's app-requested resource set does not
-bound its automatic paths: the SDK discovers grants across every resource,
-syncs discovered grants after permission/connect flows, and does not remap the
-standalone activity resources. Android therefore keeps the already-shipped
-step and active-calorie permissions and makes `Activity`, `Steps`, and
-`ActiveEnergyBurned` explicit configured owners. All three may run; the
-configured set filters Murph's manual sync call but is not represented as a
-boundary around Vital's automatic permission/connect paths. Murph's current
-default intake admits the `activity` summary, while `steps` and
-`calories_active` are known but not allowed default timeseries and are
-normalized away. Their explicit Android owners preserve shipped client upload
-behavior without claiming standalone end-to-end ingestion.
+That source review showed that Vital 5.0.2 discovers grants across every
+resource after permission/connect flows and does not remap the standalone
+activity resources. Android therefore pauses SDK synchronization before the
+permission flow and through `connect()`, then unpauses only for an explicit
+foreground call with the configured-and-granted intersection. It keeps the
+already-shipped step and active-calorie permissions and makes `Activity`,
+`Steps`, and `ActiveEnergyBurned` explicit configured owners. All three may run
+during that call. Murph's current default intake admits the `activity` summary,
+while `steps` and `calories_active` are known but not allowed default
+timeseries and are normalized away. Their explicit Android owners preserve
+shipped client upload behavior without claiming standalone end-to-end
+ingestion.

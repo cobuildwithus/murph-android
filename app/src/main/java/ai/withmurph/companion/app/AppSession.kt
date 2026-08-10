@@ -3037,7 +3037,7 @@ class AppSession(
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
         try {
-            signOutHealthSdkAfterFencingNewWork()
+            signOutHealthSdkAfterDrainingWork()
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -3999,7 +3999,7 @@ class AppSession(
         }
         invalidateSessionEpoch(acceptedConsentOwner)
         return try {
-            signOutHealthSdkAfterFencingNewWork()
+            signOutHealthSdkAfterDrainingWork()
             true
         } catch (error: CancellationException) {
             throw error
@@ -4033,7 +4033,7 @@ class AppSession(
                 if (healthMutexHeld) {
                     health.signOutSdk()
                 } else {
-                    signOutHealthSdkAfterFencingNewWork()
+                    signOutHealthSdkAfterDrainingWork()
                 }
                 true
             } catch (error: CancellationException) {
@@ -4055,17 +4055,12 @@ class AppSession(
 
     /**
      * Called only after epoch and phase state have fenced new health work.
-     * Vital sign-out cancels its unique WorkManager sync chain, so an active
-     * sync must receive that cancellation before this mutex becomes a drain
-     * barrier. Other SDK operations retain the ordinary serialized teardown.
+     * Vital 5.0.2 cancels its starter before a separately scheduled child is
+     * guaranteed terminal, so drain the app-owned chain before changing SDK
+     * identity instead of treating cancellation state as execution proof.
      */
-    private suspend fun signOutHealthSdkAfterFencingNewWork() {
-        if (_state.value.isSyncingHealth) {
-            health.signOutSdk()
-            healthMutex.withLock { }
-        } else {
-            healthMutex.withLock { health.signOutSdk() }
-        }
+    private suspend fun signOutHealthSdkAfterDrainingWork() {
+        healthMutex.withLock { health.signOutSdk() }
     }
 
     private fun publishHealthResetFailure() {
@@ -4281,7 +4276,7 @@ class AppSession(
             )
         }
         val teardownSucceeded = try {
-            signOutHealthSdkAfterFencingNewWork()
+            signOutHealthSdkAfterDrainingWork()
             true
         } catch (error: CancellationException) {
             throw error
