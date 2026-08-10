@@ -7,8 +7,6 @@ import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.app.LaunchConsentRecoveryUiState
 import ai.withmurph.companion.app.InitialOnboardingDraft
-import ai.withmurph.companion.app.InitialOnboardingNotice
-import ai.withmurph.companion.app.InitialOnboardingRecoveryActions
 import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.auth.CountryDialCode
 import ai.withmurph.companion.auth.LoginUiState
@@ -243,16 +241,12 @@ internal enum class ScreenshotScenario {
         OnboardingVoice -> onboardingState(InitialOnboardingStage.Voice)
         OnboardingTone -> onboardingState(InitialOnboardingStage.Tone)
         OnboardingContactError -> onboardingState(InitialOnboardingStage.Contact).copy(
-            initialOnboardingNotice = InitialOnboardingNotice(
-                message = "We couldn't open the contact card. Check your connection and try again.",
-                recoveryActions = InitialOnboardingRecoveryActions.None,
-            ),
+            initialOnboardingMessage =
+                "We couldn't open the contact card. Check your connection and try again.",
         )
         OnboardingError -> onboardingState(InitialOnboardingStage.Tone).copy(
-            initialOnboardingNotice = InitialOnboardingNotice(
-                message = "We couldn't save your setup yet. Your choices are still here. Try again.",
-                recoveryActions = InitialOnboardingRecoveryActions.Account,
-            ),
+            initialOnboardingMessage =
+                "Couldn't save. Your choices are still here.",
         )
         OnboardingSaving -> onboardingState(InitialOnboardingStage.Tone).copy(
             isInitialOnboardingSaving = true,

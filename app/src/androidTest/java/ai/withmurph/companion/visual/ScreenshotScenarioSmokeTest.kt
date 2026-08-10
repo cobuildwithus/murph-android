@@ -45,15 +45,15 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
-    fun onboardingErrorFixtureRendersDirectAccountRecovery() = withScenario("onboardingError") {
-        onNodeWithText("Contact support").performScrollTo().assertIsDisplayed().assertHasClickAction()
-        onNodeWithText("Delete account").performScrollTo().assertIsDisplayed().assertHasClickAction()
-        onNodeWithText("Sign out and stop syncing")
-            .performScrollTo()
-            .assertIsDisplayed()
-            .assertHasClickAction()
+    fun onboardingErrorFixtureKeepsRecoveryOutOfTheForm() = withScenario("onboardingError") {
+        onNodeWithText("Couldn't save. Your choices are still here.").assertIsDisplayed()
+        onNodeWithText("Help").assertIsDisplayed().assertHasClickAction()
+        onNodeWithText("Formal").assertIsDisplayed().assertHasClickAction()
         onNodeWithText("Continue").assertIsDisplayed().assertHasClickAction()
         onNodeWithText("Back").assertIsDisplayed().assertHasClickAction()
+        onAllNodesWithText("Contact support").assertCountEquals(0)
+        onAllNodesWithText("Delete account").assertCountEquals(0)
+        onAllNodesWithText("Sign out and stop syncing").assertCountEquals(0)
         onAllNodesWithText("Settings").assertCountEquals(0)
     }
 
@@ -62,6 +62,7 @@ class ScreenshotScenarioSmokeTest {
         withScenario("onboardingContactError") {
             onNodeWithText("We couldn't open the contact card. Check your connection and try again.")
                 .assertIsDisplayed()
+            onNodeWithText("Help").assertIsDisplayed().assertHasClickAction()
             onNodeWithText("Add Murph to Contacts").assertIsDisplayed().assertHasClickAction()
             onNodeWithText("Skip").assertIsDisplayed().assertHasClickAction()
             onAllNodesWithText("Contact support").assertCountEquals(0)

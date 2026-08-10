@@ -3,7 +3,6 @@ package ai.withmurph.companion.visual
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.app.FailureSupplementalActions
 import ai.withmurph.companion.app.InitialOnboardingStage
-import ai.withmurph.companion.app.InitialOnboardingRecoveryActions
 import ai.withmurph.companion.app.LaunchConsentRecoveryPhase
 import ai.withmurph.companion.core.AddressBookSharingState
 import ai.withmurph.companion.core.HealthConnectAvailability
@@ -97,18 +96,14 @@ class ScreenshotFixtureTest {
         assertFalse(error.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingError.isInitialOnboarding())
         assertEquals(
-            "We couldn't save your setup yet. Your choices are still here. Try again.",
-            error.initialOnboardingNotice?.message,
-        )
-        assertEquals(
-            InitialOnboardingRecoveryActions.Account,
-            error.initialOnboardingNotice?.recoveryActions,
+            "Couldn't save. Your choices are still here.",
+            error.initialOnboardingMessage,
         )
 
         assertEquals(InitialOnboardingStage.Contact, contactError.initialOnboardingStage)
         assertEquals(
-            InitialOnboardingRecoveryActions.None,
-            contactError.initialOnboardingNotice?.recoveryActions,
+            "We couldn't open the contact card. Check your connection and try again.",
+            contactError.initialOnboardingMessage,
         )
 
         assertEquals(AppPhase.Ready, saving.phase)
@@ -116,7 +111,7 @@ class ScreenshotFixtureTest {
         assertNotNull(saving.initialOnboarding)
         assertTrue(saving.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingSaving.isInitialOnboarding())
-        assertNull(saving.initialOnboardingNotice)
+        assertNull(saving.initialOnboardingMessage)
     }
 
     @Test

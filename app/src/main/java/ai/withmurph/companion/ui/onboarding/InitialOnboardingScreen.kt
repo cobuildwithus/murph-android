@@ -2,7 +2,6 @@ package ai.withmurph.companion.ui.onboarding
 
 import ai.withmurph.companion.app.AppUiState
 import ai.withmurph.companion.app.InitialOnboardingDraft
-import ai.withmurph.companion.app.InitialOnboardingRecoveryActions
 import ai.withmurph.companion.app.InitialOnboardingStage
 import ai.withmurph.companion.core.InitialOnboardingContactAvatar
 import ai.withmurph.companion.core.InitialOnboardingPersona
@@ -11,7 +10,6 @@ import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.components.MurphGhostButton
 import ai.withmurph.companion.ui.components.MurphIcon
 import ai.withmurph.companion.ui.components.MurphIconKind
-import ai.withmurph.companion.ui.components.MurphLinkButton
 import ai.withmurph.companion.ui.components.MurphMark
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.theme.MurphColors
@@ -48,6 +46,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -182,13 +185,23 @@ fun InitialOnboardingScreen(
 
     val stageScrollState = key(stage) { rememberScrollState() }
     val stageHeadingFocus = remember(stage) { FocusRequester() }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val stackSnackbarAction = LocalDensity.current.fontScale >= 1.3f
     LaunchedEffect(stage) {
         stageHeadingFocus.requestFocus()
         stageScrollState.scrollTo(0)
     }
-    LaunchedEffect(state.initialOnboardingNotice) {
-        if (state.initialOnboardingNotice != null) {
-            stageScrollState.animateScrollTo(0)
+    LaunchedEffect(state.initialOnboardingMessage) {
+        snackbarHostState.currentSnackbarData?.dismiss()
+        state.initialOnboardingMessage?.let { message ->
+            val result = snackbarHostState.showSnackbar(
+                message = message,
+                actionLabel = "Help",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                actions.onOpenSupport()
+            }
         }
     }
 
@@ -211,40 +224,6 @@ fun InitialOnboardingScreen(
             verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
-            state.initialOnboardingNotice?.let { notice ->
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        text = notice.message,
-                        modifier = Modifier.semantics {
-                            liveRegion = LiveRegionMode.Assertive
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MurphColors.Sienna,
-                        textAlign = TextAlign.Center,
-                    )
-                    if (notice.recoveryActions == InitialOnboardingRecoveryActions.Account) {
-                        MurphLinkButton(
-                            text = "Contact support",
-                            onClick = actions.onOpenSupport,
-                            enabled = !state.isInitialOnboardingSaving,
-                        )
-                        MurphLinkButton(
-                            text = "Delete account",
-                            onClick = actions.onDeleteAccount,
-                            enabled = !state.isInitialOnboardingSaving,
-                        )
-                        MurphLinkButton(
-                            text = "Sign out and stop syncing",
-                            onClick = actions.onSignOut,
-                            enabled = !state.isInitialOnboardingSaving,
-                        )
-                    }
-                }
-            }
             when (stage) {
                 InitialOnboardingStage.Contact -> ContactChoices(
                     avatars = onboarding.contactCard?.avatars.orEmpty(),
@@ -286,6 +265,25 @@ fun InitialOnboardingScreen(
                 }
                 InitialOnboardingStage.Welcome -> Unit
             }
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .widthIn(max = 680.dp)
+                .fillMaxWidth()
+                .align(Alignment.CenterHorizontally),
+        ) { snackbarData ->
+            Snackbar(
+                snackbarData = snackbarData,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                actionOnNewLine = stackSnackbarAction,
+                shape = RoundedCornerShape(14.dp),
+                containerColor = MurphColors.Slate,
+                contentColor = MurphColors.Cream,
+                actionColor = MurphColors.Sand,
+                dismissActionContentColor = MurphColors.Sand,
+            )
         }
 
         Column(
