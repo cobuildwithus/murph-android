@@ -41,6 +41,49 @@ class HealthSyncStateTest {
         )
     }
 
+    @Test
+    fun partialFailuresMergeWithTheNewestFloorAndRetainOnlyGrantedResources() {
+        val first = PendingHealthSyncFailure(
+            resourceKeys = setOf("activity", "sleep"),
+            receiptFloorAt = InstantValue(100),
+        )
+        val merged = first.mergedWith(
+            PendingHealthSyncFailure(
+                resourceKeys = setOf("body"),
+                receiptFloorAt = InstantValue(200),
+            ),
+        )
+
+        assertEquals(setOf("activity", "sleep", "body"), merged.resourceKeys)
+        assertEquals(InstantValue(200), merged.receiptFloorAt)
+        assertEquals(setOf("sleep"), merged.retainingGranted(setOf("sleep"))?.resourceKeys)
+        assertEquals(null, merged.retainingGranted(emptySet()))
+    }
+
+    @Test
+    fun unknownFailureRequiresANewerSourceWideReceipt() {
+        val floor = Instant.parse("2026-07-25T18:00:00Z")
+        val pending = PendingHealthSyncFailure(
+            resourceKeys = setOf(UNKNOWN_HEALTH_RESOURCE_KEY),
+            receiptFloorAt = InstantValue(floor.toEpochMilli()),
+        )
+
+        assertFalse(
+            pending.isConfirmedBy(
+                CompanionSyncStatus(null, floor.plusSeconds(60), emptyMap()),
+            ),
+        )
+        assertTrue(
+            pending.isConfirmedBy(
+                CompanionSyncStatus(
+                    floor.plusSeconds(1),
+                    floor.plusSeconds(60),
+                    emptyMap(),
+                ),
+            ),
+        )
+    }
+
     private val now = Instant.parse("2026-07-25T12:00:00Z")
 
     @Test

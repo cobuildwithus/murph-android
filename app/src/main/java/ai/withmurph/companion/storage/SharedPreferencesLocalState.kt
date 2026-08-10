@@ -285,7 +285,17 @@ class SharedPreferencesLocalState internal constructor(
     @SuppressLint("ApplySharedPref")
     override fun recordPendingHealthSyncFailure(failure: PendingHealthSyncFailure): Boolean {
         if (healthAccessRequestedAt == null || signOutPending) return false
+        val merged = pendingHealthSyncFailure?.mergedWith(failure) ?: failure
+        return replacePendingHealthSyncFailure(merged)
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun replacePendingHealthSyncFailure(
+        failure: PendingHealthSyncFailure?,
+    ): Boolean {
+        if (failure != null && (healthAccessRequestedAt == null || signOutPending)) return false
         val previous = pendingHealthSyncFailure
+        if (previous == failure) return true
         val committed = preferences.edit()
             .writePendingHealthSyncFailure(failure)
             .commit()
@@ -297,14 +307,7 @@ class SharedPreferencesLocalState internal constructor(
 
     @SuppressLint("ApplySharedPref")
     override fun clearPendingHealthSyncFailure(): Boolean {
-        val previous = pendingHealthSyncFailure ?: return true
-        val committed = preferences.edit()
-            .removePendingHealthSyncFailure()
-            .commit()
-        if (!committed) {
-            preferences.edit().writePendingHealthSyncFailure(previous).commit()
-        }
-        return committed
+        return replacePendingHealthSyncFailure(null)
     }
 
     @SuppressLint("ApplySharedPref")

@@ -121,6 +121,7 @@ interface HealthSyncing {
     fun pauseAutomaticSync()
     fun configure()
     fun grantedResourceCount(): Int
+    fun grantedResourceKeys(): Set<String>
     fun revokeUnpromotedSyncLaunch()
 
     suspend fun identify(
@@ -183,6 +184,7 @@ interface LocalState {
         deadline: HealthSyncReminderDeadline,
     ): Boolean = false
     fun recordPendingHealthSyncFailure(failure: PendingHealthSyncFailure): Boolean = false
+    fun replacePendingHealthSyncFailure(failure: PendingHealthSyncFailure?): Boolean = false
     fun clearPendingHealthSyncFailure(): Boolean = pendingHealthSyncFailure == null
 
     fun recordAddressBookRevision(revision: Int): Boolean = false

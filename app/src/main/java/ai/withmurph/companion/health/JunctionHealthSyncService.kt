@@ -271,6 +271,11 @@ class JunctionHealthSyncService(
             manager.resourcesWithReadPermission(),
         ).size
 
+    override fun grantedResourceKeys(): Set<String> =
+        configuredHealthConnectReadResources(
+            manager.resourcesWithReadPermission(),
+        ).flatMapTo(linkedSetOf(), ::backendResourceKeysFor)
+
     override fun revokeUnpromotedSyncLaunch() {
         VitalHealthWorkerLease.rejectUnpromoted()
     }

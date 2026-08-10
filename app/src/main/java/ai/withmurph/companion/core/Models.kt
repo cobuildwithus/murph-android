@@ -167,7 +167,32 @@ data class PendingHealthSyncFailure(
     fun isConfirmedBy(status: CompanionSyncStatus): Boolean {
         val floor = Instant.ofEpochMilli(receiptFloorAt.epochMilliseconds)
         return resourceKeys.all { resourceKey ->
-            status.resources[resourceKey]?.lastReceivedAt?.isAfter(floor) == true
+            if (resourceKey == UNKNOWN_HEALTH_RESOURCE_KEY) {
+                status.lastDataReceivedAt?.isAfter(floor) == true
+            } else {
+                status.resources[resourceKey]?.lastReceivedAt?.isAfter(floor) == true
+            }
+        }
+    }
+
+    fun mergedWith(other: PendingHealthSyncFailure): PendingHealthSyncFailure =
+        PendingHealthSyncFailure(
+            resourceKeys = resourceKeys + other.resourceKeys,
+            receiptFloorAt = if (
+                receiptFloorAt.epochMilliseconds >= other.receiptFloorAt.epochMilliseconds
+            ) {
+                receiptFloorAt
+            } else {
+                other.receiptFloorAt
+            },
+        )
+
+    fun retainingGranted(resourceKeys: Set<String>): PendingHealthSyncFailure? {
+        val retained = this.resourceKeys.filterTo(linkedSetOf()) {
+            it == UNKNOWN_HEALTH_RESOURCE_KEY || it in resourceKeys
+        }
+        return retained.takeIf { it.isNotEmpty() }?.let {
+            copy(resourceKeys = it)
         }
     }
 
@@ -175,6 +200,8 @@ data class PendingHealthSyncFailure(
         val HEALTH_RESOURCE_KEY = Regex("[a-z0-9_]{1,64}")
     }
 }
+
+const val UNKNOWN_HEALTH_RESOURCE_KEY = "unknown"
 
 sealed interface HealthSyncAttemptResult {
     data object Complete : HealthSyncAttemptResult

@@ -1841,6 +1841,7 @@ class AddressBookSessionTest {
         override fun pauseAutomaticSync() = Unit
         override fun configure() = Unit
         override fun grantedResourceCount(): Int = grantedCount
+        override fun grantedResourceKeys(): Set<String> = emptySet()
         override fun revokeUnpromotedSyncLaunch() = Unit
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             authenticate()

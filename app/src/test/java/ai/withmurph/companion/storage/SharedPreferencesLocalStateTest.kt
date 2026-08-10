@@ -37,6 +37,33 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
+    fun partialHealthSyncFailuresPersistTheirUnionAndNewestReceiptFloor() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "member-key"
+        state.healthAccessRequestedAt = InstantValue(100)
+
+        assertTrue(
+            state.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(setOf("activity"), InstantValue(200)),
+            ),
+        )
+        assertTrue(
+            state.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(setOf("sleep"), InstantValue(300)),
+            ),
+        )
+
+        assertEquals(
+            PendingHealthSyncFailure(
+                resourceKeys = setOf("activity", "sleep"),
+                receiptFloorAt = InstantValue(300),
+            ),
+            SharedPreferencesLocalState(preferences.recreated()).pendingHealthSyncFailure,
+        )
+    }
+
+    @Test
     fun initialSetupStepUsesStableValuesAndSurvivesReconstruction() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)
