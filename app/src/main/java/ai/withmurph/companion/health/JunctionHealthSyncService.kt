@@ -248,7 +248,10 @@ class JunctionHealthSyncService(
         check(committed) { "Could not durably update the Vital manual-sync gate" }
     }
 
-    /** Cancel every pinned Vital foreground worker and prove terminal state. */
+    /**
+     * Cancel every pinned Vital foreground worker and drain the actual delegated
+     * resource bodies. WorkInfo cancellation alone is not execution quiescence.
+     */
     private suspend fun cancelAndAwaitVitalWork() {
         setManualSyncPaused(true)
         val workManager = WorkManager.getInstance(appContext)
@@ -267,6 +270,7 @@ class JunctionHealthSyncService(
         check(remaining.all { it.state.isFinished }) {
             "Vital health workers were not terminal before identity teardown"
         }
+        VitalHealthWorkerLease.awaitNoActiveExecutions()
     }
 }
 

@@ -1,12 +1,14 @@
 package ai.withmurph.companion.health
 
 import android.content.Context
+import androidx.work.CoroutineWorker
 import androidx.work.ListenableWorker
 import androidx.work.Worker
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import ai.withmurph.companion.storage.SharedPreferencesLocalState
-import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 
 internal const val vitalResourceSyncStarterClass =
     "io.tryvital.vitalhealthconnect.workers.ResourceSyncStarter"
@@ -35,73 +37,114 @@ internal object VitalHealthWorkerLease {
         val stage: Stage,
     )
 
-    private val lease = AtomicReference<Lease?>(null)
+    private val lock = Any()
+    private var lease: Lease? = null
+    private var activeExecutionMemberKey: String? = null
+    private val activeExecutionCount = MutableStateFlow(0)
 
     fun openFor(expectedMemberKey: String) {
         require(expectedMemberKey.isNotBlank())
-        check(
-            lease.compareAndSet(
-                null,
-                Lease(expectedMemberKey, Stage.LaunchAuthorized),
-            ),
+        synchronized(lock) {
+            check(lease == null) { "A Vital health worker lease is already open" }
+            check(activeExecutionCount.value == 0) {
+                "A Vital health worker execution is still active"
+            }
+            lease = Lease(expectedMemberKey, Stage.LaunchAuthorized)
+        }
+    }
+
+    fun isOpenFor(expectedMemberKey: String?): Boolean = synchronized(lock) {
+        expectedMemberKey != null &&
+            lease?.memberKey == expectedMemberKey &&
+            lease?.stage != Stage.LaunchRejected
+    }
+
+    fun isLaunchAuthorizedFor(expectedMemberKey: String): Boolean = synchronized(lock) {
+        lease == Lease(expectedMemberKey, Stage.LaunchAuthorized)
+    }
+
+    fun markPromotedFor(expectedMemberKey: String): Boolean = synchronized(lock) {
+        val current = lease
+        if (
+            current?.memberKey != expectedMemberKey ||
+            current.stage != Stage.LaunchAuthorized
         ) {
-            "A Vital health worker lease is already open"
+            false
+        } else {
+            lease = current.copy(stage = Stage.Promoted)
+            true
         }
     }
 
-    fun isOpenFor(expectedMemberKey: String?): Boolean {
-        val current = lease.get()
-        return expectedMemberKey != null &&
+    fun rejectUnpromotedFor(expectedMemberKey: String) = synchronized(lock) {
+        val current = lease
+        if (
             current?.memberKey == expectedMemberKey &&
-            current.stage != Stage.LaunchRejected
-    }
-
-    fun isLaunchAuthorizedFor(expectedMemberKey: String): Boolean =
-        lease.get() == Lease(expectedMemberKey, Stage.LaunchAuthorized)
-
-    fun markPromotedFor(expectedMemberKey: String): Boolean {
-        while (true) {
-            val current = lease.get() ?: return false
-            if (
-                current.memberKey != expectedMemberKey ||
-                current.stage != Stage.LaunchAuthorized
-            ) return false
-            if (lease.compareAndSet(current, current.copy(stage = Stage.Promoted))) return true
+            current.stage == Stage.LaunchAuthorized
+        ) {
+            lease = current.copy(stage = Stage.LaunchRejected)
         }
     }
 
-    fun rejectUnpromotedFor(expectedMemberKey: String) {
-        while (true) {
-            val current = lease.get() ?: return
-            if (
-                current.memberKey != expectedMemberKey ||
-                current.stage != Stage.LaunchAuthorized
-            ) return
-            if (lease.compareAndSet(current, current.copy(stage = Stage.LaunchRejected))) return
+    fun rejectUnpromoted() = synchronized(lock) {
+        val current = lease
+        if (current?.stage == Stage.LaunchAuthorized) {
+            lease = current.copy(stage = Stage.LaunchRejected)
         }
     }
 
-    fun rejectUnpromoted() {
-        while (true) {
-            val current = lease.get() ?: return
-            if (current.stage != Stage.LaunchAuthorized) return
-            if (lease.compareAndSet(current, current.copy(stage = Stage.LaunchRejected))) return
+    fun wasLaunchRejectedFor(expectedMemberKey: String): Boolean = synchronized(lock) {
+        lease == Lease(expectedMemberKey, Stage.LaunchRejected)
+    }
+
+    fun closeFor(expectedMemberKey: String) = synchronized(lock) {
+        if (lease?.memberKey == expectedMemberKey) {
+            lease = null
         }
     }
 
-    fun wasLaunchRejectedFor(expectedMemberKey: String): Boolean =
-        lease.get() == Lease(expectedMemberKey, Stage.LaunchRejected)
+    fun close() = synchronized(lock) {
+        lease = null
+    }
 
-    fun closeFor(expectedMemberKey: String) {
-        while (true) {
-            val current = lease.get() ?: return
-            if (current.memberKey != expectedMemberKey) return
-            if (lease.compareAndSet(current, null)) return
+    /**
+     * Called by the app-owned wrapper immediately before the pinned Vital child
+     * worker body begins. Sharing [lock] with close makes a constructed-but-not-
+     * started worker either join the drain or fail before reading health data.
+     */
+    fun beginExecutionFor(expectedMemberKey: String): Boolean = synchronized(lock) {
+        val current = lease
+        if (
+            current?.memberKey != expectedMemberKey ||
+            current.stage == Stage.LaunchRejected
+        ) {
+            false
+        } else {
+            check(
+                activeExecutionMemberKey == null ||
+                    activeExecutionMemberKey == expectedMemberKey,
+            ) {
+                "Vital health workers cannot span member leases"
+            }
+            activeExecutionMemberKey = expectedMemberKey
+            activeExecutionCount.value += 1
+            true
         }
     }
 
-    fun close() {
-        lease.set(null)
+    fun finishExecutionFor(expectedMemberKey: String) = synchronized(lock) {
+        check(
+            activeExecutionCount.value > 0 &&
+                activeExecutionMemberKey == expectedMemberKey,
+        ) {
+            "No Vital health worker execution is active"
+        }
+        activeExecutionCount.value -= 1
+        if (activeExecutionCount.value == 0) activeExecutionMemberKey = null
+    }
+
+    suspend fun awaitNoActiveExecutions() {
+        activeExecutionCount.first { it == 0 }
     }
 }
 
@@ -147,14 +190,56 @@ class MurphHealthWorkerFactory : WorkerFactory() {
                     expectedMemberKey = requireNotNull(memberKey),
                 )
             } else {
-                // Preserve Vital's pinned per-resource reader and uploader.
-                null
+                val delegate = createPinnedVitalResourceSyncWorker(
+                    appContext,
+                    workerParameters,
+                ) ?: return RejectedVitalHealthWorker(appContext, workerParameters)
+                QuiescenceTrackingVitalResourceSyncWorker(
+                    appContext = appContext,
+                    workerParameters = workerParameters,
+                    expectedMemberKey = requireNotNull(memberKey),
+                    delegate = delegate,
+                )
             }
         } else {
             RejectedVitalHealthWorker(appContext, workerParameters)
         }
     }
 }
+
+/**
+ * Runs the pinned Vital reader/uploader in this WorkManager coroutine while
+ * tracking the actual delegated body. WorkInfo may become CANCELLED before that
+ * body unwinds, so identity teardown waits on this finally rather than database
+ * state alone.
+ */
+private class QuiescenceTrackingVitalResourceSyncWorker(
+    appContext: Context,
+    workerParameters: WorkerParameters,
+    private val expectedMemberKey: String,
+    private val delegate: CoroutineWorker,
+) : CoroutineWorker(appContext, workerParameters) {
+    override suspend fun doWork(): Result {
+        if (!VitalHealthWorkerLease.beginExecutionFor(expectedMemberKey)) {
+            return Result.failure()
+        }
+        return try {
+            delegate.doWork()
+        } finally {
+            VitalHealthWorkerLease.finishExecutionFor(expectedMemberKey)
+        }
+    }
+}
+
+private fun createPinnedVitalResourceSyncWorker(
+    appContext: Context,
+    workerParameters: WorkerParameters,
+): CoroutineWorker? = runCatching {
+    Class.forName(vitalResourceSyncWorkerClass)
+        .asSubclass(CoroutineWorker::class.java)
+        .getConstructor(Context::class.java, WorkerParameters::class.java)
+        .newInstance(appContext, workerParameters)
+}.getOrNull()
 
 private class RejectedVitalHealthWorker(
     appContext: Context,

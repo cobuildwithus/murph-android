@@ -191,15 +191,19 @@ The process-local member lease starts closed, opens only after the existing
 current-member/backend preflight, and starts as launch-only authority. Leaving
 the foreground before WorkManager promotion rejects that launch and shows a
 specific **Sync now** retry; once promotion succeeds, the visible transfer may
-finish after the Activity backgrounds. The lease remains open until every exact
-worker is terminal, so a headless restarted process cannot infer permission to
-upload from durable preferences. Both WorkManager's default Startup metadata and
+finish after the Activity backgrounds. The factory wraps the pinned resource
+worker body with a process-local execution count. Cancellation of its WorkInfo
+does not authorize teardown until the delegated `doWork()` actually exits, so a
+headless restarted process cannot infer permission to upload from durable
+preferences. Both WorkManager's default Startup metadata and
 Vital's dependent initializer are removed; the Junction adapter initializes
 WorkManager through `MurphApplication`'s guarded configuration before creating
 the Vital manager. WorkManager 2.11.2 then substitutes a Murph-owned `dataSync`
 umbrella for Vital 5.0.2's three-minute `shortService` starter while retaining
 Vital's real per-resource readers, uploaders, input contract, notification, and
-unique work names.
+unique work names. A failed child is remembered while later authorized resources
+are still attempted; the umbrella reports aggregate failure after the loop.
+Cancellation, lease revocation, or a missing child stops the chain immediately.
 An empty intersection is a no-op. Shared permissions can activate multiple SDK
 resources, so the app declares the relevant aggregate owners explicitly. When
 no usable resource is active, a workout or reproductive detail without its
@@ -303,10 +307,11 @@ message.
 - Returning from a consent document or account-control page reloads consent and
   rechecks the Privy member/account boundary before any paused action resumes.
 - **Delete Account** first records a durable local stop boundary, revokes the
-  active process lease, cancels and awaits every exact Vital work chain, signs
-  out Junction, and clears local member/setup authority before opening the HTTPS
-  deletion resource. If the web flow is abandoned, foreground return must pass
-  fresh backend admission and setup before any health sync can resume.
+  active process lease, cancels every exact Vital work chain, waits for the
+  actual delegated resource-worker bodies to exit, signs out Junction, and
+  clears local member/setup authority before opening the HTTPS deletion resource.
+  If the web flow is abandoned, foreground return must pass fresh backend
+  admission and setup before any health sync can resume.
 - “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
@@ -315,9 +320,10 @@ message.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
 - Signing out atomically records a durable pending-sign-out tombstone, revokes
-  the active process lease, and cancels the exact health work before crossing
-  Junction and Privy identity boundaries. Startup finishes Junction-first,
-  Privy-second teardown before any session restore.
+  the active process lease, cancels the exact health work, and awaits zero actual
+  delegated resource executions before crossing Junction and Privy identity
+  boundaries. Startup finishes Junction-first, Privy-second teardown before any
+  session restore.
 - A failed preferences commit restores the pre-call live authorization snapshot,
   so an undurable tombstone or marker removal cannot drive SDK work.
 - Address-book Settings state comes from

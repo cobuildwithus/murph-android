@@ -64,10 +64,13 @@ scheduled background work
 
 For explicit foreground transfer, Murph replaces Vital's umbrella starter,
 requires the exact member's process-local lease before each resource enqueue,
-and keeps teardown behind the same session mutex until every exact worker is
-terminal. The factory requires that lease again when constructing Vital's real
-per-resource worker. Process death resets the lease closed, so WorkManager
-reconstruction rejects the durable request.
+and keeps teardown behind the same session mutex until every exact delegated
+worker body has exited. The factory requires that lease again when constructing
+Vital's real per-resource worker, wraps its `doWork()` in a process-local active
+execution count, and decrements only from the actual delegated `finally`.
+WorkInfo cancellation can therefore stop scheduling but cannot authorize an
+identity change by itself. Process death resets both the lease and count closed,
+so WorkManager reconstruction rejects the durable request.
 
 Vital's discoverable Startup initializer is also excluded: it declares
 `WorkManagerInitializer` as a dependency and would otherwise initialize the
@@ -99,9 +102,12 @@ member key. The adapter keeps
 Vital synchronization paused across permission and connect flows and unpauses
 only inside an explicit foreground call. Its default-closed process lease and
 authorization-aware factory reject reconstructed work, while its `dataSync`
-starter preserves Vital's real per-resource readers and uploaders. Teardown
-fences new app-owned health work, cancels and proves the current foreground chain
-terminal, and only then crosses the Junction identity, member, or consent
+starter preserves Vital's real per-resource readers and uploaders. An ordinary
+failed child does not starve later authorized resources; the starter attempts
+them in order and reports aggregate failure after the loop, while cancellation
+or lease revocation stops immediately. Teardown fences new app-owned health
+work, cancels the current foreground chain, waits for zero actual delegated
+executions, and only then crosses the Junction identity, member, or consent
 boundary. Backgrounding before foreground-service promotion rejects the launch
 and leaves an explicit foreground retry; backgrounding after promotion does not
 interrupt the visible transfer.

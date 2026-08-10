@@ -48,6 +48,20 @@ internal fun vitalDataSyncForegroundServiceType(): Int =
         0
     }
 
+internal enum class VitalResourceTerminalDecision {
+    Continue,
+    ContinueAfterFailure,
+    Stop,
+}
+
+internal fun vitalResourceTerminalDecision(
+    state: WorkInfo.State?,
+): VitalResourceTerminalDecision = when (state) {
+    WorkInfo.State.SUCCEEDED -> VitalResourceTerminalDecision.Continue
+    WorkInfo.State.FAILED -> VitalResourceTerminalDecision.ContinueAfterFailure
+    else -> VitalResourceTerminalDecision.Stop
+}
+
 /**
  * Vital 5.0.2's umbrella worker declares shortService, which Android limits to
  * roughly three minutes. This replacement preserves the SDK's input contract,
@@ -109,6 +123,7 @@ internal class MurphVitalResourceSyncStarter(
         }.getOrElse { return Result.failure() }
         val workManager = WorkManager.getInstance(applicationContext)
 
+        var hadResourceFailure = false
         for (resource in resources.sortedBy(VitalResource::priority)) {
             if (!VitalHealthWorkerLease.isOpenFor(expectedMemberKey)) return Result.failure()
             val workName = vitalResourceSyncWorkerName(resource)
@@ -122,9 +137,16 @@ internal class MurphVitalResourceSyncStarter(
                     ExistingWorkPolicy.REPLACE,
                     request,
                 ).enqueue().result.await()
-                when (workManager.awaitTerminalWorkInfo(request.id)?.state) {
-                    WorkInfo.State.SUCCEEDED -> Unit
-                    else -> return Result.failure()
+                when (
+                    vitalResourceTerminalDecision(
+                        workManager.awaitTerminalWorkInfo(request.id)?.state,
+                    )
+                ) {
+                    VitalResourceTerminalDecision.Continue -> Unit
+                    VitalResourceTerminalDecision.ContinueAfterFailure -> {
+                        hadResourceFailure = true
+                    }
+                    VitalResourceTerminalDecision.Stop -> return Result.failure()
                 }
             } catch (error: CancellationException) {
                 withContext(NonCancellable) {
@@ -133,7 +155,7 @@ internal class MurphVitalResourceSyncStarter(
                 throw error
             }
         }
-        return Result.success()
+        return if (hadResourceFailure) Result.failure() else Result.success()
     }
 }
 

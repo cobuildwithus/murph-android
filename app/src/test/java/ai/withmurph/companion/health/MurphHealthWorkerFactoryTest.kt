@@ -1,7 +1,11 @@
 package ai.withmurph.companion.health
 
 import androidx.work.Data
+import androidx.work.WorkInfo
 import io.tryvital.vitalhealthcore.model.VitalResource
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,6 +121,44 @@ class MurphHealthWorkerFactoryTest {
                 signOutPending = false,
                 hasForegroundSyncLease = false,
             ),
+        )
+    }
+
+    @Test
+    fun workInfoCancellationCannotCompleteTeardownUntilTheDelegatedBodyExits() = runTest {
+        VitalHealthWorkerLease.openFor(testMemberKey)
+        assertTrue(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
+        assertTrue(VitalHealthWorkerLease.beginExecutionFor(testMemberKey))
+        VitalHealthWorkerLease.close()
+
+        val drain = async { VitalHealthWorkerLease.awaitNoActiveExecutions() }
+        yield()
+
+        assertFalse(drain.isCompleted)
+        assertFalse(VitalHealthWorkerLease.beginExecutionFor(testMemberKey))
+
+        VitalHealthWorkerLease.finishExecutionFor(testMemberKey)
+        drain.await()
+        assertTrue(drain.isCompleted)
+    }
+
+    @Test
+    fun failedResourceDoesNotStarveLaterResourcesButCancellationStopsTheChain() {
+        assertEquals(
+            VitalResourceTerminalDecision.ContinueAfterFailure,
+            vitalResourceTerminalDecision(WorkInfo.State.FAILED),
+        )
+        assertEquals(
+            VitalResourceTerminalDecision.Continue,
+            vitalResourceTerminalDecision(WorkInfo.State.SUCCEEDED),
+        )
+        assertEquals(
+            VitalResourceTerminalDecision.Stop,
+            vitalResourceTerminalDecision(WorkInfo.State.CANCELLED),
+        )
+        assertEquals(
+            VitalResourceTerminalDecision.Stop,
+            vitalResourceTerminalDecision(null),
         )
     }
 
