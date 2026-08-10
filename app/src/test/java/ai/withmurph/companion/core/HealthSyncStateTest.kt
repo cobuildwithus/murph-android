@@ -42,7 +42,7 @@ class HealthSyncStateTest {
     }
 
     @Test
-    fun partialFailuresMergeWithTheNewestFloorAndRetainOnlyGrantedResources() {
+    fun partialFailuresMergeOnlyEachOwnersNewestFloorAndRetainGrantedResources() {
         val first = PendingHealthSyncFailure(
             resourceKeys = setOf("activity", "sleep"),
             receiptFloorAt = InstantValue(100),
@@ -55,9 +55,58 @@ class HealthSyncStateTest {
         )
 
         assertEquals(setOf("activity", "sleep", "body"), merged.resourceKeys)
-        assertEquals(InstantValue(200), merged.receiptFloorAt)
+        assertEquals(
+            mapOf(
+                "activity" to InstantValue(100),
+                "sleep" to InstantValue(100),
+                "body" to InstantValue(200),
+            ),
+            merged.receiptFloorsByResource,
+        )
         assertEquals(setOf("sleep"), merged.retainingGranted(setOf("sleep"))?.resourceKeys)
         assertEquals(null, merged.retainingGranted(emptySet()))
+    }
+
+    @Test
+    fun laterFailureDoesNotResurrectAnOwnerAlreadyConfirmedByBackendEvidence() {
+        val firstFloor = Instant.parse("2026-07-25T18:00:00Z")
+        val bodyReceipt = firstFloor.plusSeconds(60)
+        val secondFloor = firstFloor.plusSeconds(120)
+        val sleepReceipt = secondFloor.plusSeconds(60)
+        val firstFailure = PendingHealthSyncFailure(
+            setOf("body", "sleep"),
+            InstantValue(firstFloor.toEpochMilli()),
+        )
+
+        val afterBodyConfirmation = firstFailure.retainingUnconfirmed(
+            CompanionSyncStatus(
+                bodyReceipt,
+                secondFloor,
+                mapOf("body" to CompanionSyncStatus.ResourceStatus(bodyReceipt)),
+            ),
+        )
+
+        assertEquals(setOf("sleep"), afterBodyConfirmation?.resourceKeys)
+        val afterLaterSleepFailure = requireNotNull(afterBodyConfirmation).mergedWith(
+            PendingHealthSyncFailure(
+                setOf("sleep"),
+                InstantValue(secondFloor.toEpochMilli()),
+            ),
+        )
+        assertEquals(
+            mapOf("sleep" to InstantValue(secondFloor.toEpochMilli())),
+            afterLaterSleepFailure.receiptFloorsByResource,
+        )
+        assertEquals(
+            null,
+            afterLaterSleepFailure.retainingUnconfirmed(
+                CompanionSyncStatus(
+                    sleepReceipt,
+                    sleepReceipt.plusSeconds(60),
+                    mapOf("sleep" to CompanionSyncStatus.ResourceStatus(sleepReceipt)),
+                ),
+            ),
+        )
     }
 
     @Test

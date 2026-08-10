@@ -120,8 +120,7 @@ interface HealthSyncing {
     fun isSignedIn(): Boolean
     fun pauseAutomaticSync()
     fun configure()
-    fun grantedResourceCount(): Int
-    fun grantedResourceKeys(): Set<String>
+    fun grantSnapshot(): HealthGrantSnapshot
     fun revokeUnpromotedSyncLaunch()
 
     suspend fun identify(
@@ -161,6 +160,8 @@ interface LocalState {
         get() = null
     val signOutPending: Boolean
     val pendingPrivySignOutMemberKey: String?
+    val pendingExternalHandoff: PendingExternalHandoff?
+        get() = null
     val addressBookRevision: Int?
         get() = null
     val pendingAddressBookReplacement: AddressBookMutation?
@@ -213,8 +214,10 @@ interface LocalState {
         expectedMemberKey: String?,
         privySignOutMemberKey: String? = null,
         preserveMemberState: Boolean = false,
+        pendingExternalHandoff: PendingExternalHandoff? = this.pendingExternalHandoff,
     ): Boolean
     fun completeSignOut(expectedMemberKey: String?): Boolean
+    fun completeExternalHandoff(expected: PendingExternalHandoff): Boolean = false
     fun clearMemberScopedState()
 }
 

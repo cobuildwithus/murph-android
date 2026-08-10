@@ -135,6 +135,12 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            LaunchedEffect(appState.accountDeletionHandoffPending) {
+                if (!appState.accountDeletionHandoffPending) return@LaunchedEffect
+                lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    graph.session.launchAccountDeletionHandoff(::openUri)
+                }
+            }
             MurphTheme {
                 MurphApp(
                     appState = appState,
@@ -291,11 +297,7 @@ class MainActivity : ComponentActivity() {
                         onOpenSupport = { openUri(AppLinks.Support) },
                         onDeleteAccount = {
                             graph.applicationScope.launch {
-                                if (graph.session.prepareAccountDeletionHandoff()) {
-                                    if (!openUri(AppLinks.AccountDeletion)) {
-                                        graph.session.retry()
-                                    }
-                                }
+                                graph.session.prepareAccountDeletionHandoff()
                             }
                         },
                         onRetry = {

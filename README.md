@@ -316,13 +316,15 @@ message.
   permission launch before the Activity is resumed.
 - Returning from a consent document or account-control page reloads consent and
   rechecks the Privy member/account boundary before any paused action resumes.
-- **Delete Account** first records a durable local stop boundary, revokes the
-  active process lease, cancels every exact Vital work chain, waits for the
-  actual delegated resource-worker bodies to exit, signs out Junction, and
-  clears local member/setup authority before opening the HTTPS deletion resource.
-  If the web flow is abandoned, foreground return must pass fresh backend
-  admission and setup before any health sync can resume.
-- “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`. Unresolved per-resource foreground failures accumulate across retries and cannot be hidden by a later local complete pass or another category's newer source-wide receipt. A hard-stopped serial transfer records the current and every unattempted owner. Each known owner clears only after its backend evidence advances past the conservative failure floor, or after current permission truth proves that category was revoked. Temperature remains one worker/permission owner and either ordinary or basal body-temperature evidence confirms it; it never requires a source to produce both subtypes. Infrastructure failure before a new starter exists is a transient retry and records no owner; post-enqueue failure without exact starter evidence durably requires reconnect. Neither path guesses from the current grant list. If a real partial-failure marker cannot be committed, setup is likewise forced through reconnect instead of projecting success after reconstruction.
+- **Delete Account** first records a durable local stop boundary and static
+  account-deletion handoff reason, revokes the active process lease, cancels
+  every exact Vital work chain, waits for the actual delegated resource-worker
+  bodies to exit, signs out Junction, and clears local member/setup authority.
+  Only the current `RESUMED` Activity may consume the retained handoff and open
+  the fixed HTTPS deletion resource. Stop, rotation, process recreation, or an
+  external-launch failure retains a visible retry and prevents automatic
+  admission or health work until a launch succeeds.
+- “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`. Each unresolved resource owner retains its own server-observed failure floor across retries and process recreation. A confirmed or revoked owner is removed before a later unrelated failure can merge, so another category cannot resurrect it or advance its floor. A hard-stopped serial transfer records the current and every unattempted owner. Temperature remains one worker/permission owner and either ordinary or basal body-temperature evidence confirms it; it never requires a source to produce both subtypes. Infrastructure failure before a new starter exists is a transient retry and records no owner; post-enqueue failure without exact starter evidence durably requires reconnect. Neither path guesses from the grant list. Permission discovery returns one total typed count-and-owner snapshot; an unavailable snapshot preserves the cached classification as stale, starts no SDK work, and is never translated to zero. If a failure marker or confirmed-owner removal cannot be committed, setup is likewise forced through reconnect instead of projecting success after reconstruction.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online

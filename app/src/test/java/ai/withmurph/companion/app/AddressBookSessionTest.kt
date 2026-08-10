@@ -16,6 +16,7 @@ import ai.withmurph.companion.core.CompanionApi
 import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthGrantSnapshot
 import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.HealthSyncAttemptResult
@@ -30,6 +31,7 @@ import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
+import ai.withmurph.companion.core.PendingExternalHandoff
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
@@ -1840,8 +1842,8 @@ class AddressBookSessionTest {
         override fun isSignedIn(): Boolean = signedIn
         override fun pauseAutomaticSync() = Unit
         override fun configure() = Unit
-        override fun grantedResourceCount(): Int = grantedCount
-        override fun grantedResourceKeys(): Set<String> = emptySet()
+        override fun grantSnapshot(): HealthGrantSnapshot =
+            HealthGrantSnapshot.Available(grantedCount, emptySet())
         override fun revokeUnpromotedSyncLaunch() = Unit
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             authenticate()
@@ -2011,6 +2013,7 @@ class AddressBookSessionTest {
             expectedMemberKey: String?,
             privySignOutMemberKey: String?,
             preserveMemberState: Boolean,
+            pendingExternalHandoff: PendingExternalHandoff?,
         ): Boolean {
             if (memberKey != expectedMemberKey) return false
             signOutPending = true

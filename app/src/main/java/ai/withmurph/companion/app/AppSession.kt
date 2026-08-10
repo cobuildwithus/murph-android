@@ -15,6 +15,7 @@ import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthGrantSnapshot
 import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
@@ -35,6 +36,7 @@ import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.NoopHealthSyncReminderLifecycle
 import ai.withmurph.companion.core.PendingHealthSyncFailure
+import ai.withmurph.companion.core.PendingExternalHandoff
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CancellationException
@@ -1327,6 +1329,14 @@ class AppSession(
                     healthMessage = null,
                 )
             }
+            if (
+                !localState.signOutPending &&
+                localState.pendingExternalHandoff == PendingExternalHandoff.AccountDeletion
+            ) {
+                publishPendingAccountDeletionHandoff()
+                hasCompletedStartup = true
+                return@withLock
+            }
             if (localState.signOutPending) {
                 finishPendingSignOut()
                 hasCompletedStartup = _state.value.phase != AppPhase.Launching
@@ -1504,6 +1514,7 @@ class AppSession(
                         healthSyncReminder.refreshSchedule()
                         publishPermissionAwareHealthState(
                             status = cachedHealthStatus(),
+                            grantSnapshot = health.grantSnapshot(),
                             message = _state.value.healthMessage,
                         )
                         if (validatedEpoch == sessionEpoch) {
@@ -1671,11 +1682,30 @@ class AppSession(
             try {
                 if (permissionResult != HealthPermissionRequestResult.Ready) {
                     pendingHealthConnection = null
+                    val grantSnapshot = health.grantSnapshot()
                     _state.update { current ->
                         current.copy(
                             isConnectingHealth = false,
-                            grantedResourceCount = health.grantedResourceCount(),
-                            healthMessage = permissionResult.recoveryMessage(),
+                            healthStatusIsStale = if (
+                                grantSnapshot == HealthGrantSnapshot.Unavailable &&
+                                healthWasRequested()
+                            ) {
+                                true
+                            } else {
+                                current.healthStatusIsStale
+                            },
+                            grantedResourceCount =
+                                (grantSnapshot as? HealthGrantSnapshot.Available)
+                                    ?.resourceCount
+                                    ?: current.grantedResourceCount,
+                            healthMessage = if (
+                                grantSnapshot == HealthGrantSnapshot.Unavailable &&
+                                healthWasRequested()
+                            ) {
+                                HEALTH_PERMISSION_VERIFICATION_MESSAGE
+                            } else {
+                                permissionResult.recoveryMessage()
+                            },
                         )
                     }
                     return false
@@ -1801,15 +1831,26 @@ class AppSession(
                     )
                 }
                 pendingHealthConnection = null
+                val setupGrantSnapshot = health.grantSnapshot()
                 _state.update { current ->
                     current.copy(
                         isConnectingHealth = false,
                         healthSync = HealthSyncState.AwaitingFirstData,
                         healthStatusObservedAt = refreshedPending.requestedAt,
-                        healthStatusIsStale = false,
+                        healthStatusIsStale =
+                            setupGrantSnapshot == HealthGrantSnapshot.Unavailable,
                         healthReconnectRequired = false,
-                        grantedResourceCount = health.grantedResourceCount(),
-                        healthMessage = null,
+                        grantedResourceCount =
+                            (setupGrantSnapshot as? HealthGrantSnapshot.Available)
+                                ?.resourceCount
+                                ?: current.grantedResourceCount,
+                        healthMessage = if (
+                            setupGrantSnapshot == HealthGrantSnapshot.Unavailable
+                        ) {
+                            HEALTH_PERMISSION_VERIFICATION_MESSAGE
+                        } else {
+                            null
+                        },
                     )
                 }
                 true
@@ -1907,7 +1948,7 @@ class AppSession(
     private suspend fun syncNow(
         foregroundClaim: ForegroundRefreshClaim?,
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
-        permissionStateVerified: Boolean = false,
+        verifiedGrantSnapshot: HealthGrantSnapshot.Available? = null,
         onAuthoritativeLocalAuth: ((AuthSessionState) -> Unit)? = null,
     ) {
         if (!allowsLaunchConsentWork(acceptedConsentOwner)) return
@@ -1915,9 +1956,21 @@ class AppSession(
             _state.value.phase != AppPhase.Ready ||
             !healthWasRequested()
         ) return
-        if (health.grantedResourceCount() == 0) {
+        var grantSnapshot: HealthGrantSnapshot =
+            verifiedGrantSnapshot ?: health.grantSnapshot()
+        if (grantSnapshot !is HealthGrantSnapshot.Available) {
             publishPermissionAwareHealthState(
                 status = cachedHealthStatus(),
+                grantSnapshot = grantSnapshot,
+                message = _state.value.healthMessage,
+                healthStatusIsStale = true,
+            )
+            return
+        }
+        if (grantSnapshot.resourceCount == 0) {
+            publishPermissionAwareHealthState(
+                status = cachedHealthStatus(),
+                grantSnapshot = grantSnapshot,
                 message = _state.value.healthMessage,
                 healthStatusIsStale = false,
             )
@@ -1927,17 +1980,18 @@ class AppSession(
             reconcile(force = true, foregroundClaim, acceptedConsentOwner)
             return
         }
-        if (
-            !permissionStateVerified &&
-            _state.value.healthStatusIsStale &&
-            !refreshHealthPermissionState()
-        ) {
-            publishHealthPermissionVerificationFailure()
-            return
+        if (verifiedGrantSnapshot == null && _state.value.healthStatusIsStale) {
+            val refreshedSnapshot = refreshHealthPermissionState()
+            if (refreshedSnapshot !is HealthGrantSnapshot.Available) {
+                publishHealthPermissionVerificationFailure()
+                return
+            }
+            grantSnapshot = refreshedSnapshot
         }
-        if (health.grantedResourceCount() == 0) {
+        if (grantSnapshot.resourceCount == 0) {
             publishPermissionAwareHealthState(
                 status = cachedHealthStatus(),
+                grantSnapshot = grantSnapshot,
                 message = _state.value.healthMessage,
                 healthStatusIsStale = false,
             )
@@ -2052,14 +2106,14 @@ class AppSession(
                 if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             }
             if (_state.value.phase != AppPhase.Ready) return@withLock
-            val permissionStateVerified = refreshHealthPermissionState()
+            val grantSnapshot = refreshHealthPermissionState()
             if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             val availability = health.availability()
-            if (!permissionStateVerified) {
+            if (grantSnapshot !is HealthGrantSnapshot.Available) {
                 publishHealthPermissionVerificationFailure(availability)
                 return@withLock
             }
-            val grantedResourceCount = health.grantedResourceCount()
+            val grantedResourceCount = grantSnapshot.resourceCount
             val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
             _state.update { current ->
                 current.copy(
@@ -2096,7 +2150,7 @@ class AppSession(
             ) {
                 syncNow(
                     foregroundClaim,
-                    permissionStateVerified = true,
+                    verifiedGrantSnapshot = grantSnapshot,
                     onAuthoritativeLocalAuth = {
                         deferredBoundary = deferredBoundary
                             ?: DeferredSessionBoundary.LocalAuth(it)
@@ -2387,10 +2441,45 @@ class AppSession(
     suspend fun prepareAccountDeletionHandoff(): Boolean = withContext(NonCancellable) {
         startMutex.withLock {
             val expectedMemberKey = localState.memberKey
-            val resetSucceeded = resetMemberAtTrustBoundary(expectedMemberKey)
-            if (resetSucceeded) clearInitialOnboardingState()
+            val resetSucceeded = resetMemberAtTrustBoundary(
+                expectedMemberKey = expectedMemberKey,
+                pendingExternalHandoff = PendingExternalHandoff.AccountDeletion,
+            )
+            if (resetSucceeded) {
+                clearInitialOnboardingState()
+                publishPendingAccountDeletionHandoff()
+            }
             resetSucceeded
         }
+    }
+
+    fun launchAccountDeletionHandoff(launch: (String) -> Boolean): Boolean {
+        if (
+            localState.pendingExternalHandoff != PendingExternalHandoff.AccountDeletion ||
+            localState.signOutPending ||
+            !_state.value.accountDeletionHandoffPending
+        ) {
+            return false
+        }
+        val launched = try {
+            launch(AppLinks.AccountDeletion)
+        } catch (_: Exception) {
+            false
+        }
+        if (!launched) {
+            publishPendingAccountDeletionHandoff(
+                "The account deletion page didn't open. Tap Try again.",
+            )
+            return false
+        }
+        if (!localState.completeExternalHandoff(PendingExternalHandoff.AccountDeletion)) {
+            publishPendingAccountDeletionHandoff(
+                "The account deletion page opened, but Murph couldn't save the handoff. Tap Try again if you return.",
+            )
+            return false
+        }
+        _state.update { it.copy(accountDeletionHandoffPending = false) }
+        return true
     }
 
     suspend fun signOut() = withContext(NonCancellable) {
@@ -2640,11 +2729,17 @@ class AppSession(
             }
             if (!fetchInitialOnboardingProjection(authState.memberKey, epoch)) return
         }
-        val permissionStateVerified = when {
-            !requested -> true
-            !authState.verifiedOnline -> false
-            else -> refreshHealthPermissionState()
+        val grantSnapshot = if (requested && authState.verifiedOnline) {
+            refreshHealthPermissionState()
+        } else {
+            health.grantSnapshot()
         }
+        val permissionStateVerified =
+            !requested ||
+                (
+                    authState.verifiedOnline &&
+                        grantSnapshot is HealthGrantSnapshot.Available
+                    )
         if (requested && authState.verifiedOnline) {
             if (
                 epoch != sessionEpoch ||
@@ -2652,9 +2747,11 @@ class AppSession(
                 authState.memberKey != localState.memberKey
             ) return
         }
-        val grantedResourceCount = health.grantedResourceCount()
+        val availableGrantSnapshot = grantSnapshot as? HealthGrantSnapshot.Available
         val needsPermissionRecovery =
-            permissionStateVerified && healthWasRequested() && grantedResourceCount == 0
+            permissionStateVerified &&
+                healthWasRequested() &&
+                availableGrantSnapshot?.resourceCount == 0
         val reconnectRequired = localState.healthReconnectRequired
         _state.update { current ->
             current.copy(
@@ -2671,7 +2768,8 @@ class AppSession(
                     healthWasRequested() &&
                         (!authState.verifiedOnline || !permissionStateVerified),
                 healthReconnectRequired = reconnectRequired,
-                grantedResourceCount = grantedResourceCount,
+                grantedResourceCount =
+                    availableGrantSnapshot?.resourceCount ?: current.grantedResourceCount,
                 healthMessage = when {
                     reconnectRequired -> HEALTH_RECONNECT_REQUIRED_MESSAGE
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
@@ -2718,7 +2816,7 @@ class AppSession(
             healthWasRequested() &&
             authState.verifiedOnline &&
             permissionStateVerified &&
-            grantedResourceCount > 0
+            (availableGrantSnapshot?.resourceCount ?: 0) > 0
         ) {
             var authoritativeLocalAuth: AuthSessionState? = null
             var deferredConsentRecovery: DeferredLaunchConsentRecovery? = null
@@ -2991,8 +3089,12 @@ class AppSession(
             return
         }
         currentMemberKey = memberKey
-        val grantedResourceCount = health.grantedResourceCount()
-        val needsPermissionRecovery = healthWasRequested() && grantedResourceCount == 0
+        val grantSnapshot = health.grantSnapshot()
+        val availableGrantSnapshot = grantSnapshot as? HealthGrantSnapshot.Available
+        val grantSnapshotUnavailable =
+            grantSnapshot == HealthGrantSnapshot.Unavailable && healthWasRequested()
+        val needsPermissionRecovery =
+            healthWasRequested() && availableGrantSnapshot?.resourceCount == 0
         val initialSetupStep = resolveInitialSetupStep()
         _state.update { current ->
             current.copy(
@@ -3006,10 +3108,12 @@ class AppSession(
                 },
                 healthStatusIsStale = healthWasRequested(),
                 healthReconnectRequired = localState.healthReconnectRequired,
-                grantedResourceCount = grantedResourceCount,
+                grantedResourceCount =
+                    availableGrantSnapshot?.resourceCount ?: current.grantedResourceCount,
                 healthMessage = when {
                     localState.healthReconnectRequired ->
                         "$HEALTH_RECONNECT_REQUIRED_MESSAGE Connect when you're back online."
+                    grantSnapshotUnavailable -> HEALTH_PERMISSION_VERIFICATION_MESSAGE
                     needsPermissionRecovery -> HEALTH_PERMISSION_RECOVERY_MESSAGE
                     localState.pendingHealthSyncFailure != null ->
                         HEALTH_PARTIAL_SYNC_MESSAGE
@@ -3241,9 +3345,20 @@ class AppSession(
                 onConsentRequired,
             ) ?: return false
             if (!ownsVerifiedHealthWork(epoch, foregroundClaim)) return false
-            if (health.grantedResourceCount() == 0) {
+            val grantSnapshot = health.grantSnapshot()
+            if (grantSnapshot !is HealthGrantSnapshot.Available) {
                 publishPermissionAwareHealthState(
                     status = cachedHealthStatus(),
+                    grantSnapshot = grantSnapshot,
+                    message = _state.value.healthMessage,
+                    healthStatusIsStale = true,
+                )
+                return false
+            }
+            if (grantSnapshot.resourceCount == 0) {
+                publishPermissionAwareHealthState(
+                    status = cachedHealthStatus(),
+                    grantSnapshot = grantSnapshot,
                     message = _state.value.healthMessage,
                 )
                 return false
@@ -3361,6 +3476,7 @@ class AppSession(
     private suspend fun finishPendingSignOut() {
         if (!localState.signOutPending) return
         val expectedMemberKey = localState.memberKey
+        val pendingExternalHandoff = localState.pendingExternalHandoff
         val privySignOutMemberKey =
             localState.pendingPrivySignOutMemberKey ?: expectedMemberKey
         healthSyncReminder.cancel()
@@ -3374,6 +3490,18 @@ class AppSession(
             publishPendingSignOutFailure(
                 "We couldn't safely reset health sync. Keep Murph open and try again.",
             )
+            return
+        }
+        if (pendingExternalHandoff == PendingExternalHandoff.AccountDeletion) {
+            if (!localState.completeSignOut(expectedMemberKey)) {
+                publishPendingSignOutFailure(
+                    "We couldn't safely finish preparing account deletion. Keep Murph open and try again.",
+                )
+                return
+            }
+            currentMemberKey = null
+            clearInitialOnboardingState()
+            publishPendingAccountDeletionHandoff()
             return
         }
         val authState = try {
@@ -3490,6 +3618,7 @@ class AppSession(
             } else {
                 publishPermissionAwareHealthState(
                     status = cachedHealthStatus(),
+                    grantSnapshot = health.grantSnapshot(),
                     message = "Murph couldn't verify your account. Saved status is still shown.",
                     healthStatusIsStale = true,
                     clearSyncing = true,
@@ -3499,6 +3628,7 @@ class AppSession(
         } catch (_: Exception) {
             publishPermissionAwareHealthState(
                 status = cachedHealthStatus(),
+                grantSnapshot = health.grantSnapshot(),
                 message = "Murph couldn't verify your account. Saved status is still shown.",
                 healthStatusIsStale = true,
                 clearSyncing = true,
@@ -3511,10 +3641,11 @@ class AppSession(
         localState.lastKnownDataReceivedAt = projectedStatus.lastDataReceivedAt?.let {
             InstantValue(it.toEpochMilli())
         }
-        clearPendingHealthSyncFailureWhenReceiptsConfirm(status)
+        if (!clearPendingHealthSyncFailureWhenReceiptsConfirm(status)) return null
         healthSyncReminder.refreshSchedule(freshBackendStatus = true)
         publishPermissionAwareHealthState(
             status = projectedStatus,
+            grantSnapshot = health.grantSnapshot(),
             message = null,
             healthStatusIsStale = false,
         )
@@ -3586,6 +3717,7 @@ class AppSession(
     private fun publishReadOnlyHealthState(message: String) {
         publishPermissionAwareHealthState(
             status = cachedHealthStatus(),
+            grantSnapshot = health.grantSnapshot(),
             message = message,
             authVerifiedOnline = false,
             healthStatusIsStale = true,
@@ -3593,14 +3725,21 @@ class AppSession(
         )
     }
 
-    private suspend fun refreshHealthPermissionState(): Boolean = try {
+    private suspend fun refreshHealthPermissionState(): HealthGrantSnapshot = try {
         health.refreshPermissionState()
-        reconcilePendingHealthSyncFailureWithCurrentGrants()
-        true
+        val snapshot = health.grantSnapshot()
+        if (
+            snapshot is HealthGrantSnapshot.Available &&
+            !reconcilePendingHealthSyncFailureWithCurrentGrants(snapshot)
+        ) {
+            HealthGrantSnapshot.Unavailable
+        } else {
+            snapshot
+        }
     } catch (error: CancellationException) {
         throw error
     } catch (_: Exception) {
-        false
+        HealthGrantSnapshot.Unavailable
     }
 
     private fun publishHealthPermissionVerificationFailure(
@@ -3622,13 +3761,36 @@ class AppSession(
 
     private fun publishPermissionAwareHealthState(
         status: CompanionSyncStatus?,
+        grantSnapshot: HealthGrantSnapshot,
         message: String?,
         authVerifiedOnline: Boolean? = null,
         healthStatusIsStale: Boolean? = null,
         clearSyncing: Boolean = false,
     ) {
         val requestedAt = healthRequestedAt()
-        val grantedResourceCount = health.grantedResourceCount()
+        if (grantSnapshot == HealthGrantSnapshot.Unavailable) {
+            _state.update { current ->
+                current.copy(
+                    authVerifiedOnline = authVerifiedOnline ?: current.authVerifiedOnline,
+                    isSyncingHealth = if (clearSyncing) false else current.isSyncingHealth,
+                    healthStatusObservedAt = status?.observedAt
+                        ?: current.healthStatusObservedAt,
+                    healthStatusIsStale = if (requestedAt != null) {
+                        true
+                    } else {
+                        healthStatusIsStale ?: current.healthStatusIsStale
+                    },
+                    healthMessage = if (requestedAt != null) {
+                        HEALTH_PERMISSION_VERIFICATION_MESSAGE
+                    } else {
+                        message
+                    },
+                )
+            }
+            return
+        }
+        val grantedResourceCount =
+            (grantSnapshot as HealthGrantSnapshot.Available).resourceCount
         val needsPermissionRecovery = requestedAt != null && grantedResourceCount == 0
         val hasPendingSyncFailure = localState.pendingHealthSyncFailure != null
         _state.update { current ->
@@ -3700,10 +3862,12 @@ class AppSession(
         return false
     }
 
-    private fun reconcilePendingHealthSyncFailureWithCurrentGrants() {
-        val pending = localState.pendingHealthSyncFailure ?: return
-        val retained = pending.retainingGranted(health.grantedResourceKeys())
-        if (retained != pending) localState.replacePendingHealthSyncFailure(retained)
+    private fun reconcilePendingHealthSyncFailureWithCurrentGrants(
+        grantSnapshot: HealthGrantSnapshot.Available,
+    ): Boolean {
+        val pending = localState.pendingHealthSyncFailure ?: return true
+        val retained = pending.retainingGranted(grantSnapshot.resourceKeys)
+        return retained == pending || localState.replacePendingHealthSyncFailure(retained)
     }
 
     /** Called only while [healthMutex] is held. */
@@ -3757,11 +3921,19 @@ class AppSession(
         return sdkReset
     }
 
-    private fun clearPendingHealthSyncFailureWhenReceiptsConfirm(
+    private suspend fun clearPendingHealthSyncFailureWhenReceiptsConfirm(
         status: CompanionSyncStatus,
-    ) {
-        val pending = localState.pendingHealthSyncFailure ?: return
-        if (pending.isConfirmedBy(status)) localState.clearPendingHealthSyncFailure()
+    ): Boolean {
+        val pending = localState.pendingHealthSyncFailure ?: return true
+        val retained = pending.retainingUnconfirmed(status)
+        if (
+            retained != pending &&
+            !localState.replacePendingHealthSyncFailure(retained)
+        ) {
+            requireHealthReconnectAfterUnclassifiedSyncFailure()
+            return false
+        }
+        return true
     }
 
     private fun qualifyingHealthStatus(status: CompanionSyncStatus): CompanionSyncStatus {
@@ -4477,6 +4649,7 @@ class AppSession(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
         healthAlreadySignedOut: Boolean = false,
         healthMutexHeld: Boolean = false,
+        pendingExternalHandoff: PendingExternalHandoff? = null,
     ): Boolean {
         closeProductAuthorityForBoundary()
         invalidateSessionEpoch(acceptedConsentOwner)
@@ -4484,6 +4657,7 @@ class AppSession(
             !localState.beginSignOut(
                 expectedMemberKey = expectedMemberKey,
                 preserveMemberState = true,
+                pendingExternalHandoff = pendingExternalHandoff,
             )
         ) {
             publishHealthResetFailure()
@@ -4539,6 +4713,31 @@ class AppSession(
                     canRetry = true,
                     canSignOut = true,
                 ),
+            )
+        }
+    }
+
+    private fun publishPendingAccountDeletionHandoff(
+        message: String =
+            "Finish deleting your account in the browser. If it doesn't open, tap Try again.",
+    ) {
+        _state.update { current ->
+            current.copy(
+                phase = AppPhase.Failed(
+                    message = message,
+                    canRetry = true,
+                    canSignOut = false,
+                    supplementalActions = FailureSupplementalActions.Support,
+                ),
+                authVerifiedOnline = false,
+                healthSync = HealthSyncState.NotConnected,
+                healthStatusIsStale = false,
+                healthReconnectRequired = false,
+                isConnectingHealth = false,
+                isSyncingHealth = false,
+                healthMessage = null,
+                grantedResourceCount = 0,
+                accountDeletionHandoffPending = true,
             )
         }
     }
@@ -4630,6 +4829,7 @@ class AppSession(
         } else {
             resolveInitialSetupStep()
         }
+        val grantSnapshot = health.grantSnapshot()
         _state.update { current ->
             current.copy(
                 phase = AppPhase.Ready,
@@ -4638,8 +4838,26 @@ class AppSession(
                 healthAvailability = health.availability(),
                 healthSync = deriveCachedHealthState(),
                 isConnectingHealth = false,
-                healthMessage = "Murph paused health sync while you review the latest launch consent.",
-                grantedResourceCount = health.grantedResourceCount(),
+                healthStatusIsStale = if (
+                    grantSnapshot == HealthGrantSnapshot.Unavailable &&
+                    healthWasRequested()
+                ) {
+                    true
+                } else {
+                    current.healthStatusIsStale
+                },
+                healthMessage = if (
+                    grantSnapshot == HealthGrantSnapshot.Unavailable &&
+                    healthWasRequested()
+                ) {
+                    HEALTH_PERMISSION_VERIFICATION_MESSAGE
+                } else {
+                    "Murph paused health sync while you review the latest launch consent."
+                },
+                grantedResourceCount =
+                    (grantSnapshot as? HealthGrantSnapshot.Available)
+                        ?.resourceCount
+                        ?: current.grantedResourceCount,
                 addressBookSharing = if (contacts.isSupported) {
                     current.addressBookSharing
                 } else {
@@ -5470,7 +5688,30 @@ class AppSession(
                 return@withLock false
             }
             if (!ownsPendingHealthConnection(memberKey)) return@withLock false
-            if (health.grantedResourceCount() == 0) {
+            val grantSnapshot = health.grantSnapshot()
+            if (grantSnapshot !is HealthGrantSnapshot.Available) {
+                pendingHealthConnection = null
+                _state.update {
+                    it.copy(
+                        isConnectingHealth = false,
+                        healthStatusIsStale = true,
+                        healthMessage = HEALTH_PERMISSION_VERIFICATION_MESSAGE,
+                    )
+                }
+                return@withLock false
+            }
+            if (!reconcilePendingHealthSyncFailureWithCurrentGrants(grantSnapshot)) {
+                pendingHealthConnection = null
+                _state.update {
+                    it.copy(
+                        isConnectingHealth = false,
+                        healthStatusIsStale = true,
+                        healthMessage = HEALTH_PERMISSION_VERIFICATION_MESSAGE,
+                    )
+                }
+                return@withLock false
+            }
+            if (grantSnapshot.resourceCount == 0) {
                 pendingHealthConnection = null
                 _state.update {
                     it.copy(

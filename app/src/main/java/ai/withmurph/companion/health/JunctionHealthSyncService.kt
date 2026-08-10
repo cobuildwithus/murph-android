@@ -7,6 +7,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthGrantSnapshot
 import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
@@ -350,15 +351,17 @@ class JunctionHealthSyncService(
         return outcome
     }
 
-    override fun grantedResourceCount(): Int =
-        configuredHealthConnectReadResources(
+    override fun grantSnapshot(): HealthGrantSnapshot = try {
+        val resources = configuredHealthConnectReadResources(
             manager.resourcesWithReadPermission(),
-        ).size
-
-    override fun grantedResourceKeys(): Set<String> =
-        configuredHealthConnectReadResources(
-            manager.resourcesWithReadPermission(),
-        ).mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor)
+        )
+        HealthGrantSnapshot.Available(
+            resourceCount = resources.size,
+            resourceKeys = resources.mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor),
+        )
+    } catch (_: Exception) {
+        HealthGrantSnapshot.Unavailable
+    }
 
     override fun revokeUnpromotedSyncLaunch() {
         VitalHealthWorkerLease.rejectUnpromoted()

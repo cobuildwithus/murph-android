@@ -4,6 +4,7 @@ import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.LocalState
+import ai.withmurph.companion.core.PendingExternalHandoff
 import android.app.NotificationManager
 import java.time.Duration
 import java.time.Instant
@@ -485,6 +486,7 @@ class HealthSyncReminderScheduleTest {
             expectedMemberKey: String?,
             privySignOutMemberKey: String?,
             preserveMemberState: Boolean,
+            pendingExternalHandoff: PendingExternalHandoff?,
         ): Boolean {
             if (memberKey != expectedMemberKey) return false
             pendingSignOut = true
