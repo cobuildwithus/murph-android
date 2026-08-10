@@ -34,9 +34,12 @@ import ai.withmurph.companion.core.NoopHealthSyncReminderLifecycle
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -803,6 +806,31 @@ class AppSession(
         )
 
     private suspend fun completeAddressBookPermissionFlow(
+        permissionGranted: Boolean,
+        acceptedConsentDispatch: AcceptedLaunchConsentDispatch?,
+        foregroundClaim: ForegroundRefreshClaim?,
+    ): Boolean = coroutineScope {
+        val replacement = async(start = CoroutineStart.UNDISPATCHED) {
+            completeAddressBookPermissionFlowChild(
+                permissionGranted = permissionGranted,
+                acceptedConsentDispatch = acceptedConsentDispatch,
+                foregroundClaim = foregroundClaim,
+            )
+        }
+        try {
+            replacement.await()
+        } catch (error: CancellationException) {
+            if (!error.isForegroundAddressBookCancellation()) throw error
+            acceptedConsentDispatch?.let { dispatch ->
+                if (ownsAcceptedConsentDispatch(dispatch)) {
+                    failAcceptedConsentContinuation(dispatch.continuation)
+                }
+            }
+            false
+        }
+    }
+
+    private suspend fun completeAddressBookPermissionFlowChild(
         permissionGranted: Boolean,
         acceptedConsentDispatch: AcceptedLaunchConsentDispatch?,
         foregroundClaim: ForegroundRefreshClaim?,
@@ -2295,7 +2323,7 @@ class AppSession(
         synchronized(foregroundAddressBookOperationLock) {
             foregroundAddressBookOperation
         }?.job?.cancel(
-            CancellationException("Address-book projection left the foreground"),
+            ForegroundAddressBookCancellation(),
         )
     }
 
@@ -6080,6 +6108,10 @@ class AppSession(
         }
     }
 
+    private fun CancellationException.isForegroundAddressBookCancellation(): Boolean =
+        this is ForegroundAddressBookCancellation ||
+            cause is ForegroundAddressBookCancellation
+
     private fun createAddressBookMutation(baseRevision: Int): AddressBookMutation =
         AddressBookMutation(baseRevision, newMutationId())
 
@@ -6411,6 +6443,10 @@ class AppSession(
     private data class ForegroundAddressBookOperation(
         val foregroundClaim: ForegroundRefreshClaim,
         val job: Job,
+    )
+
+    private class ForegroundAddressBookCancellation : CancellationException(
+        "Address-book projection left the foreground",
     )
 
     private data class PendingAddressBookReconcile(
