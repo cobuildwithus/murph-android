@@ -1679,13 +1679,23 @@ class AppSession(
                     return@withLock abortPendingHealthConnection(epoch)
                 }
                 try {
-                    identifyJunction(
-                        memberKey = refreshedPending.memberKey,
-                        intent = ConnectionIntent.Connect,
-                        epoch = epoch,
-                    )?.let { authState ->
-                        authStateToReconcile = authState
-                        return@withLock abortPendingHealthConnection(epoch)
+                    when (
+                        val result = identifyJunction(
+                            memberKey = refreshedPending.memberKey,
+                            intent = ConnectionIntent.Connect,
+                            epoch = epoch,
+                            ownsIdentity = {
+                                ownsPendingHealthConnection(refreshedPending.memberKey)
+                            },
+                        )
+                    ) {
+                        JunctionIdentificationResult.Identified -> Unit
+                        JunctionIdentificationResult.OwnershipLost ->
+                            return@withLock abortPendingHealthConnection(epoch)
+                        is JunctionIdentificationResult.AuthLost -> {
+                            authStateToReconcile = result.state
+                            return@withLock abortPendingHealthConnection(epoch)
+                        }
                     }
                 } catch (error: CompanionApiException.LocalAuthUnavailable) {
                     if (isAuthoritativeLocalAuthObservation(error.observedState)) {
@@ -2348,21 +2358,13 @@ class AppSession(
             !verifyFreshBackendMemberStatus(epoch)
         ) return
         if (requested && authState.verifiedOnline) {
-            try {
-                identifyJunction(
+            val resumePreparation = try {
+                prepareJunctionResume(
                     memberKey = authState.memberKey,
-                    intent = ConnectionIntent.Resume,
                     epoch = epoch,
-                )?.let { observed ->
-                    reconcileObservedAuthState(authState.memberKey, observed)
-                    return
-                }
-                if (epoch != sessionEpoch) return
-                currentAuthOwnershipLoss(authState.memberKey)?.let { observed ->
-                    reconcileObservedAuthState(authState.memberKey, observed)
-                    return
-                }
-                health.configure()
+                    foregroundClaim = foregroundClaim,
+                    acceptedConsentOwner = acceptedConsentOwner,
+                )
             } catch (error: CompanionApiException.ReconnectRequired) {
                 if (epoch != sessionEpoch) return
                 if (!localState.requireHealthReconnect()) {
@@ -2379,6 +2381,7 @@ class AppSession(
                 }
                 if (!resetHealthSdkAtTrustBoundary(acceptedConsentOwner)) return
                 epoch = sessionEpoch
+                null
             } catch (error: CompanionApiException.LocalAuthUnavailable) {
                 if (epoch != sessionEpoch) return
                 reconcileObservedAuthState(authState.memberKey, error.observedState)
@@ -2430,6 +2433,34 @@ class AppSession(
                     )
                 }
                 return
+            }
+            when (resumePreparation) {
+                null,
+                JunctionIdentificationResult.Identified -> Unit
+                JunctionIdentificationResult.OwnershipLost -> {
+                    if (
+                        foregroundClaim != null &&
+                        !ownsForegroundRefresh(foregroundClaim) &&
+                        ownsHealthResumeBoundary(
+                            memberKey = authState.memberKey,
+                            epoch = epoch,
+                            acceptedConsentOwner = acceptedConsentOwner,
+                        )
+                    ) {
+                        _state.update { current ->
+                            current.copy(
+                                phase = AppPhase.Ready,
+                                authVerifiedOnline = false,
+                                healthStatusIsStale = true,
+                            )
+                        }
+                    }
+                    return
+                }
+                is JunctionIdentificationResult.AuthLost -> {
+                    reconcileObservedAuthState(authState.memberKey, resumePreparation.state)
+                    return
+                }
             }
         }
 
@@ -2932,13 +2963,16 @@ class AppSession(
         memberKey: String,
         intent: ConnectionIntent,
         epoch: Int,
-    ): AuthSessionState? {
+        ownsIdentity: () -> Boolean,
+    ): JunctionIdentificationResult {
         if (epoch != sessionEpoch) throw CancellationException()
+        if (!ownsIdentity()) return JunctionIdentificationResult.OwnershipLost
         val response = api.createJunctionSignInToken(
             memberKey = memberKey,
             request = signInTokenRequest(intent),
         )
         if (epoch != sessionEpoch) throw CancellationException()
+        if (!ownsIdentity()) return JunctionIdentificationResult.OwnershipLost
         if (response.environment != config.environment.wireValue) {
             throw CompanionApiException.InvalidResponse
         }
@@ -2947,11 +2981,55 @@ class AppSession(
                 backendEnvironment = response.environment,
             )
         }
-        currentAuthOwnershipLoss(memberKey)?.let { return it }
+        currentAuthOwnershipLoss(memberKey)?.let {
+            return JunctionIdentificationResult.AuthLost(it)
+        }
+        if (!ownsIdentity()) return JunctionIdentificationResult.OwnershipLost
         health.identify(memberKey = memberKey) {
+            if (!ownsIdentity()) throw CancellationException()
             response.signInToken
         }
-        return null
+        return if (ownsIdentity()) {
+            JunctionIdentificationResult.Identified
+        } else {
+            JunctionIdentificationResult.OwnershipLost
+        }
+    }
+
+    private suspend fun prepareJunctionResume(
+        memberKey: String,
+        epoch: Int,
+        foregroundClaim: ForegroundRefreshClaim?,
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): JunctionIdentificationResult = healthMutex.withLock {
+        val ownsIdentity = {
+            ownsHealthResumePreparation(
+                memberKey = memberKey,
+                epoch = epoch,
+                foregroundClaim = foregroundClaim,
+                acceptedConsentOwner = acceptedConsentOwner,
+            )
+        }
+        if (!ownsIdentity()) return@withLock JunctionIdentificationResult.OwnershipLost
+        currentAuthOwnershipLoss(memberKey)?.let {
+            return@withLock JunctionIdentificationResult.AuthLost(it)
+        }
+        if (!ownsIdentity()) return@withLock JunctionIdentificationResult.OwnershipLost
+        val identification = identifyJunction(
+            memberKey = memberKey,
+            intent = ConnectionIntent.Resume,
+            epoch = epoch,
+            ownsIdentity = ownsIdentity,
+        )
+        if (identification != JunctionIdentificationResult.Identified) {
+            return@withLock identification
+        }
+        currentAuthOwnershipLoss(memberKey)?.let {
+            return@withLock JunctionIdentificationResult.AuthLost(it)
+        }
+        if (!ownsIdentity()) return@withLock JunctionIdentificationResult.OwnershipLost
+        health.configure()
+        JunctionIdentificationResult.Identified
     }
 
     private suspend fun syncAndRefresh(
@@ -3027,6 +3105,31 @@ class AppSession(
             epoch == sessionEpoch &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.authVerifiedOnline
+
+    private fun ownsHealthResumePreparation(
+        memberKey: String,
+        epoch: Int,
+        foregroundClaim: ForegroundRefreshClaim?,
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): Boolean =
+        (foregroundClaim == null || ownsForegroundRefresh(foregroundClaim)) &&
+            ownsHealthResumeBoundary(memberKey, epoch, acceptedConsentOwner)
+
+    private fun ownsHealthResumeBoundary(
+        memberKey: String,
+        epoch: Int,
+        acceptedConsentOwner: PendingLaunchConsentRecovery?,
+    ): Boolean =
+        epoch == sessionEpoch &&
+            memberKey == currentMemberKey &&
+            memberKey == localState.memberKey &&
+            healthWasRequested() &&
+            pendingHealthConnection == null &&
+            _state.value.phase == AppPhase.Launching &&
+            !_state.value.isConnectingHealth &&
+            !_state.value.isSyncingHealth &&
+            !localState.signOutPending &&
+            allowsLaunchConsentWork(acceptedConsentOwner)
 
     /** Called only while [startMutex] is held. */
     private suspend fun finishPendingSignOut() {
@@ -5829,6 +5932,12 @@ class AppSession(
         val sessionEpoch: Int,
         val healthSyncSequenceAtEntry: Long,
     )
+
+    private sealed interface JunctionIdentificationResult {
+        data object Identified : JunctionIdentificationResult
+        data object OwnershipLost : JunctionIdentificationResult
+        data class AuthLost(val state: AuthSessionState) : JunctionIdentificationResult
+    }
 
     private data class PendingHealthConnection(
         val epoch: Int,

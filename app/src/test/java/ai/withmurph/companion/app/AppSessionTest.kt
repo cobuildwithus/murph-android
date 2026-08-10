@@ -6052,6 +6052,50 @@ class AppSessionTest {
     }
 
     @Test
+    fun sameMemberResumeWaitsForForegroundSyncBeforeSdkIdentityReset() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.resetOnSameMemberIdentify = true
+        fixture.health.syncResourceCount = fixture.health.totalResourceCount
+        fixture.health.syncResourceStarts = 0
+        val syncGate = CompletableDeferred<Unit>()
+        fixture.health.syncGate = syncGate
+        fixture.health.syncEntered = CompletableDeferred()
+
+        val sync = async { fixture.session.syncNow() }
+        fixture.health.syncEntered.await()
+
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+
+        val tokenCount = fixture.api.intents.size
+        val identifyCalls = fixture.health.identifyCalls
+        val configureCalls = fixture.health.configureCalls
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.didEnterBackground()
+        val foreground = async { fixture.session.didBecomeActive() }
+        runCurrent()
+
+        assertFalse(foreground.isCompleted)
+        assertEquals(tokenCount, fixture.api.intents.size)
+        assertEquals(identifyCalls, fixture.health.identifyCalls)
+        assertEquals(configureCalls, fixture.health.configureCalls)
+        assertEquals(0, fixture.health.sameMemberIdentifyResetCalls)
+
+        syncGate.complete(Unit)
+        sync.await()
+        foreground.await()
+
+        assertEquals(tokenCount + 1, fixture.api.intents.size)
+        assertEquals(ConnectionIntent.Resume, fixture.api.intents.last())
+        assertEquals(identifyCalls + 1, fixture.health.identifyCalls)
+        assertEquals(configureCalls + 1, fixture.health.configureCalls)
+        assertEquals(1, fixture.health.sameMemberIdentifyResetCalls)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
     fun unavailableRestoredAuthKeepsHealthOperationsReadOnly() = runTest {
         val fixture = fixture()
         val now = Instant.parse("2026-07-25T18:00:00Z")
@@ -8004,6 +8048,8 @@ class AppSessionTest {
         var refreshError: Throwable? = null
         var syncErrorOnCall: Int? = null
         var loseSessionOnSyncError = false
+        var resetOnSameMemberIdentify = false
+        var sameMemberIdentifyResetCalls = 0
         var connectGate: CompletableDeferred<Unit>? = null
         val connectEntered = CompletableDeferred<Unit>()
         var syncGate: CompletableDeferred<Unit>? = null
@@ -8017,6 +8063,7 @@ class AppSessionTest {
         private var identifiedInCurrentProcess = false
         private var configuredInCurrentProcess = false
         private var automaticSyncPaused = false
+        private var identifiedMemberKey: String? = null
 
         override fun availability(): HealthConnectAvailability {
             availabilityHook?.invoke()
@@ -8040,8 +8087,18 @@ class AppSessionTest {
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             assertTrue(memberKey.isNotBlank())
             assertEquals("junction-token", authenticate())
+            if (
+                resetOnSameMemberIdentify &&
+                signedIn &&
+                identifiedMemberKey == memberKey
+            ) {
+                sameMemberIdentifyResetCalls += 1
+                events += "same-member-identify-reset"
+                signedIn = false
+            }
             identifyCalls += 1
             identifiedMemberKeys += memberKey
+            identifiedMemberKey = memberKey
             identifiedInCurrentProcess = true
             events += "identify"
             identifyEntered.complete(Unit)
@@ -8110,6 +8167,7 @@ class AppSessionTest {
 
         fun loseLiveSession() {
             signedIn = false
+            identifiedMemberKey = null
             identifiedInCurrentProcess = false
             configuredInCurrentProcess = false
         }
@@ -8120,6 +8178,7 @@ class AppSessionTest {
             signOutGate?.await()
             signOutError?.let { throw it }
             signedIn = false
+            identifiedMemberKey = null
             identifiedInCurrentProcess = false
             configuredInCurrentProcess = false
             events += "sign-out"
