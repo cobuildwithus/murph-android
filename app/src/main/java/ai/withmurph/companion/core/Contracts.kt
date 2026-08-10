@@ -142,6 +142,8 @@ interface LocalState {
     var lastKnownDataReceivedAt: InstantValue?
     var lastKnownStatusObservedAt: InstantValue?
     var healthReconnectRequired: Boolean
+    val healthSyncReminderDeadline: HealthSyncReminderDeadline?
+        get() = null
     val signOutPending: Boolean
     val pendingPrivySignOutMemberKey: String?
     val addressBookRevision: Int?
@@ -156,6 +158,17 @@ interface LocalState {
         next: InitialSetupStep,
         abandonPendingAddressBookReplacement: Boolean = false,
     ): Boolean
+    fun isHealthSyncReminderEnabled(memberKey: String): Boolean = false
+    fun setHealthSyncReminderEnabled(
+        memberKey: String,
+        enabled: Boolean,
+        initialDeadline: HealthSyncReminderDeadline? = null,
+    ): Boolean = false
+    fun persistHealthSyncReminderDeadline(
+        memberKey: String,
+        deadline: HealthSyncReminderDeadline,
+    ): Boolean = false
+
     fun recordAddressBookRevision(revision: Int): Boolean = false
     fun recordDisabledAddressBookRevision(revision: Int): Boolean = false
     fun beginAddressBookReplacement(mutation: AddressBookMutation): Boolean = false
@@ -173,6 +186,7 @@ interface LocalState {
         requestedAt: InstantValue,
         receiptBaselineAt: InstantValue?,
         statusObservedAt: InstantValue,
+        reminderDeadline: HealthSyncReminderDeadline? = null,
         completesInitialSetup: Boolean = false,
     ): Boolean
     fun requireHealthReconnect(): Boolean
@@ -186,5 +200,47 @@ interface LocalState {
     fun clearMemberScopedState()
 }
 
+interface HealthSyncReminderLifecycle {
+    fun cancel()
+
+    fun didEnterForeground() = cancel()
+    fun didEnterBackground() = Unit
+
+    /** Builds a monotonic deadline from the latest member-scoped server evidence. */
+    fun initialDeadline(memberKey: String): HealthSyncReminderDeadline? = null
+
+    /** Builds the deadline that must commit atomically with a new setup authorization. */
+    fun deadlineForSetupAuthorization(
+        memberKey: String,
+        requestedAt: InstantValue,
+    ): HealthSyncReminderDeadline? = null
+
+    /**
+     * Persists fresh server evidence immediately, but reconciles delivery only when the
+     * lifecycle owner is currently backgrounded.
+     */
+    fun refreshSchedule(freshBackendStatus: Boolean = false) = Unit
+}
+
+object NoopHealthSyncReminderLifecycle : HealthSyncReminderLifecycle {
+    override fun cancel() = Unit
+}
+
 @JvmInline
 value class InstantValue(val epochMilliseconds: Long)
+
+data class HealthSyncReminderDeadline(
+    val basisToken: String,
+    val bootCount: Int,
+    val triggerElapsedRealtimeMillis: Long,
+) {
+    init {
+        require(REMINDER_BASIS_PATTERN.matches(basisToken))
+        require(bootCount >= 0)
+        require(triggerElapsedRealtimeMillis >= 0L)
+    }
+
+    private companion object {
+        val REMINDER_BASIS_PATTERN = Regex("[0-9a-f]{64}")
+    }
+}

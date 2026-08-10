@@ -4,11 +4,7 @@ import android.app.Application
 import ai.withmurph.companion.app.AppGraph
 
 class MurphApplication : Application() {
-    lateinit var graph: AppGraph
-        private set
-
-    override fun onCreate() {
-        super.onCreate()
-        graph = AppGraph.create(this)
+    val graph: AppGraph by lazy(LazyThreadSafetyMode.NONE) {
+        AppGraph.create(this)
     }
 }

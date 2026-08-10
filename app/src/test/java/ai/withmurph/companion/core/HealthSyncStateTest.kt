@@ -1,5 +1,6 @@
 package ai.withmurph.companion.core
 
+import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -101,6 +102,31 @@ class HealthSyncStateTest {
                 requestedAt = now.minusSeconds(3_600),
                 status = CompanionSyncStatus(received, serverObservedAt, emptyMap()),
             ),
+        )
+    }
+
+    @Test
+    fun reminderRemainingUsesServerObservationAndOnlyCurrentSetupEvidence() {
+        val requestedAt = Instant.parse("2026-07-24T12:00:00Z")
+        val staleReceipt = requestedAt.minusSeconds(1)
+        val currentReceipt = requestedAt.plusSeconds(2 * 3_600)
+        val observedAt = requestedAt.plusSeconds(24 * 3_600)
+
+        assertEquals(
+            Duration.ofHours(48),
+            HealthSyncState.attentionRemaining(requestedAt, staleReceipt, observedAt),
+        )
+        assertEquals(
+            Duration.ofHours(50),
+            HealthSyncState.attentionRemaining(requestedAt, currentReceipt, observedAt),
+        )
+        assertEquals(
+            null,
+            HealthSyncState.attentionRemaining(null, currentReceipt, observedAt),
+        )
+        assertEquals(
+            null,
+            HealthSyncState.attentionRemaining(requestedAt, currentReceipt, null),
         )
     }
 }

@@ -42,6 +42,7 @@ data class AppUiState(
     val isConnectingHealth: Boolean = false,
     val isSyncingHealth: Boolean = false,
     val healthMessage: String? = null,
+    val healthSyncReminderEnabled: Boolean = false,
     val grantedResourceCount: Int = 0,
     val totalResourceCount: Int = 0,
     val backendEnvironment: String? = null,

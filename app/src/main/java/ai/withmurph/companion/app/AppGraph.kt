@@ -8,6 +8,7 @@ import ai.withmurph.companion.auth.PrivyAuthService
 import ai.withmurph.companion.contacts.AndroidAddressBookContacts
 import ai.withmurph.companion.core.AddressBookContactSource
 import ai.withmurph.companion.health.JunctionHealthSyncService
+import ai.withmurph.companion.reminders.HealthSyncReminderController
 import ai.withmurph.companion.storage.SharedPreferencesLocalState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,7 @@ class AppGraph private constructor(
     val login: LoginCoordinator,
     val health: JunctionHealthSyncService,
     val contacts: AddressBookContactSource,
+    val healthSyncReminder: HealthSyncReminderController,
     val config: AppConfig,
     val applicationScope: CoroutineScope,
 ) {
@@ -41,6 +43,7 @@ class AppGraph private constructor(
                 identityTokenForMember = auth::identityTokenForMember,
             )
             val localState = SharedPreferencesLocalState(context)
+            val healthSyncReminder = HealthSyncReminderController(context, localState)
             val contacts = AndroidAddressBookContacts(context)
             val health = JunctionHealthSyncService(
                 context = context,
@@ -54,6 +57,7 @@ class AppGraph private constructor(
                 contacts = contacts,
                 localState = localState,
                 config = config,
+                healthSyncReminder = healthSyncReminder,
             )
             return AppGraph(
                 session = session,
@@ -66,6 +70,7 @@ class AppGraph private constructor(
                 ),
                 health = health,
                 contacts = contacts,
+                healthSyncReminder = healthSyncReminder,
                 config = config,
                 applicationScope = applicationScope,
             )

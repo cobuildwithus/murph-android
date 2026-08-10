@@ -1,5 +1,6 @@
 package ai.withmurph.companion
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -13,6 +14,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -20,6 +24,7 @@ import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
 import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.reminders.HealthSyncReminderController
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
 import ai.withmurph.companion.ui.theme.MurphTheme
@@ -28,10 +33,16 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var graph: AppGraph
+    private var healthSyncNotificationsAllowed by mutableStateOf(false)
+    private var healthSyncNotificationRecoveryNeeded by mutableStateOf(false)
+    private var openSettingsRequestId by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         graph = (application as MurphApplication).graph
+        graph.healthSyncReminder.didEnterForeground()
+        healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
+        handleHealthSyncReminderIntent(intent)
 
         if (isHealthPermissionRationaleIntent(intent)) {
             openUri(AppLinks.Privacy)
@@ -44,6 +55,19 @@ class MainActivity : ComponentActivity() {
         ) { granted ->
             graph.applicationScope.launch {
                 graph.session.completeAddressBookPermissionFlow(granted)
+            }
+        }
+
+        val notificationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            if (granted) graph.healthSyncReminder.prepareNotificationChannel()
+            healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
+            healthSyncNotificationRecoveryNeeded = !granted
+            if (granted && healthSyncNotificationsAllowed) {
+                saveHealthSyncReminderSetting(true)
+            } else {
+                showReminderMessage(R.string.health_sync_reminder_permission_denied)
             }
         }
 
@@ -114,6 +138,15 @@ class MainActivity : ComponentActivity() {
                 MurphApp(
                     appState = appState,
                     loginState = loginState,
+                    healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
+                    healthSyncNotificationRecoveryNeeded =
+                        healthSyncNotificationRecoveryNeeded,
+                    openSettingsRequestId = openSettingsRequestId,
+                    onOpenSettingsRequestConsumed = { requestId ->
+                        if (openSettingsRequestId == requestId) {
+                            openSettingsRequestId = 0
+                        }
+                    },
                     actions = MurphActions(
                         onLoginMethodChanged = graph.login::setMethod,
                         onPhoneCountryChanged = graph.login::setPhoneCountry,
@@ -150,6 +183,30 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onOpenHealthConnect = ::openHealthConnect,
+                        onSetHealthSyncReminderEnabled = { enabled ->
+                            when {
+                                !enabled -> {
+                                    saveHealthSyncReminderSetting(false)
+                                }
+                                else -> {
+                                    graph.healthSyncReminder.prepareNotificationChannel()
+                                    healthSyncNotificationsAllowed =
+                                        graph.healthSyncReminder.notificationsAllowed()
+                                    when {
+                                        healthSyncNotificationsAllowed -> {
+                                            saveHealthSyncReminderSetting(true)
+                                        }
+                                        healthSyncNotificationRecoveryNeeded -> openAppSettings()
+                                        graph.healthSyncReminder.needsNotificationPermission() -> {
+                                            notificationPermissionLauncher.launch(
+                                                Manifest.permission.POST_NOTIFICATIONS,
+                                            )
+                                        }
+                                        else -> openAppSettings()
+                                    }
+                                }
+                            }
+                        },
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
                         },
@@ -252,6 +309,8 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        graph.healthSyncReminder.didEnterForeground()
+        handleHealthSyncReminderIntent(intent)
         if (isHealthPermissionRationaleIntent(intent)) {
             openUri(AppLinks.Privacy)
         }
@@ -260,12 +319,18 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::graph.isInitialized) {
+            graph.healthSyncReminder.didEnterForeground()
+            healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
+            if (healthSyncNotificationsAllowed) {
+                healthSyncNotificationRecoveryNeeded = false
+            }
             graph.applicationScope.launch { graph.session.didBecomeActive() }
         }
     }
 
     override fun onStop() {
         if (::graph.isInitialized && !isChangingConfigurations) {
+            graph.healthSyncReminder.didEnterBackground()
             graph.session.didEnterBackground()
         }
         super.onStop()
@@ -331,6 +396,24 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
+    private fun handleHealthSyncReminderIntent(intent: Intent?) {
+        if (consumeHealthSyncReminderSettingsIntent(intent)) {
+            openSettingsRequestId += 1
+        }
+    }
+
+    private fun saveHealthSyncReminderSetting(enabled: Boolean) {
+        graph.applicationScope.launch {
+            if (!graph.session.setHealthSyncReminderEnabled(enabled)) {
+                showReminderMessage(R.string.health_sync_reminder_save_failed)
+            }
+        }
+    }
+
+    private fun showReminderMessage(messageId: Int) {
+        Toast.makeText(this, getString(messageId), Toast.LENGTH_LONG).show()
+    }
+
     private fun setLoginSnapshotProtection(enabled: Boolean) {
         if (enabled) {
             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -344,4 +427,10 @@ class MainActivity : ComponentActivity() {
         return action == "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" ||
             action == "android.intent.action.VIEW_PERMISSION_USAGE"
     }
+}
+
+internal fun consumeHealthSyncReminderSettingsIntent(intent: Intent?): Boolean {
+    if (intent?.action != HealthSyncReminderController.ACTION_OPEN_SETTINGS) return false
+    intent.action = null
+    return true
 }

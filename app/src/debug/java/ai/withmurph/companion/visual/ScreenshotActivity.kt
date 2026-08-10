@@ -26,40 +26,110 @@ import ai.withmurph.companion.core.InitialOnboardingStatus
 import ai.withmurph.companion.core.InitialOnboardingTone
 import ai.withmurph.companion.core.InitialOnboardingVoice
 import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.LaunchConsentDocument
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LoginMethod
+import ai.withmurph.companion.reminders.HealthSyncReminderController
+import ai.withmurph.companion.reminders.activeReminderAdmission
+import ai.withmurph.companion.storage.SharedPreferencesLocalState
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
 import ai.withmurph.companion.ui.theme.MurphTheme
+import android.app.NotificationManager
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import java.time.Duration
 import java.time.Instant
 
 class ScreenshotActivity : ComponentActivity() {
+    internal var openSettingsRequestId by mutableIntStateOf(0)
+        private set
+    internal var consumedOpenSettingsRequestCount = 0
+        private set
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scenario = ScreenshotScenario.from(intent.getStringExtra(SCENARIO_EXTRA))
+        if (savedInstanceState == null && scenario.showsReminderSettings) {
+            openSettingsRequestId += 1
+        }
         val now = Instant.now()
+        if (scenario == ScreenshotScenario.ReminderNotification) {
+            postSyntheticHealthSyncReminder()
+        } else {
+            getSystemService(NotificationManager::class.java).cancelAll()
+        }
 
         setContent {
             MurphTheme {
                 val appState = scenario.appState(now)
-                MurphApp(
-                    appState = appState,
-                    loginState = scenario.loginState(),
-                    actions = NoOpActions,
-                    initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
-                )
+                val fixtureModifier = if (scenario == ScreenshotScenario.AccountFailure) {
+                    Modifier.fillMaxWidth().height(320.dp)
+                } else {
+                    Modifier.fillMaxSize()
+                }
+                Box(modifier = fixtureModifier) {
+                    MurphApp(
+                        appState = appState,
+                        loginState = scenario.loginState(),
+                        healthSyncNotificationsAllowed =
+                            scenario != ScreenshotScenario.ReminderBlocked &&
+                                scenario != ScreenshotScenario.ReminderDenied,
+                        healthSyncNotificationRecoveryNeeded =
+                            scenario == ScreenshotScenario.ReminderDenied,
+                        openSettingsRequestId = openSettingsRequestId,
+                        onOpenSettingsRequestConsumed = { requestId ->
+                            if (openSettingsRequestId == requestId) {
+                                openSettingsRequestId = 0
+                                consumedOpenSettingsRequestCount += 1
+                            }
+                        },
+                        actions = NoOpActions,
+                        initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
+                    )
+                }
             }
         }
+    }
+
+    internal fun requestOpenSettings() {
+        openSettingsRequestId += 1
+    }
+
+    private fun postSyntheticHealthSyncReminder() {
+        val preferences = getSharedPreferences(
+            "visual_health_sync_reminder",
+            Context.MODE_PRIVATE,
+        )
+        check(preferences.edit().clear().commit())
+        val localState = SharedPreferencesLocalState(preferences)
+        val setupAt = Instant.parse("2026-08-01T00:00:00Z")
+        localState.memberKey = "synthetic-member"
+        localState.healthAccessRequestedAt = InstantValue(setupAt.toEpochMilli())
+        localState.lastKnownStatusObservedAt = InstantValue(
+            setupAt.plus(Duration.ofHours(72)).toEpochMilli(),
+        )
+        check(localState.setHealthSyncReminderEnabled("synthetic-member", true))
+        val admission = requireNotNull(activeReminderAdmission(localState))
+        HealthSyncReminderController(this, localState).postIfEligible(admission.basisToken)
+        check(preferences.edit().clear().commit())
     }
 
     companion object {
@@ -98,6 +168,12 @@ internal enum class ScreenshotScenario {
     OnboardingReconnectRequired,
     FriendlyNames,
     FriendlyNamesReconnectRequired,
+    ReminderOff,
+    ReminderOn,
+    ReminderBlocked,
+    ReminderDenied,
+    ReminderNotification,
+    AccountFailure,
     Failure;
 
     fun appState(now: Instant): AppUiState = when (this) {
@@ -204,6 +280,17 @@ internal enum class ScreenshotScenario {
                 ownedByInstallation = false,
             ),
         )
+        ReminderOff, ReminderDenied -> ready(HealthSyncState.Synced(now))
+        ReminderOn, ReminderBlocked, ReminderNotification ->
+            ready(HealthSyncState.Synced(now)).copy(healthSyncReminderEnabled = true)
+        AccountFailure -> AppUiState(
+            phase = AppPhase.Failed(
+                message = "This account cannot continue in the companion app.",
+                canRetry = false,
+                canSignOut = true,
+                supplementalActions = FailureSupplementalActions.AccountAndLegal,
+            ),
+        )
         Failure -> AppUiState(
             phase = AppPhase.Failed(
                 message = "This sign-in doesn't have access to the Murph companion app.",
@@ -257,8 +344,14 @@ internal enum class ScreenshotScenario {
         OnboardingConsentBanner,
         OnboardingReconnectRequired,
         FriendlyNames,
-        FriendlyNamesReconnectRequired,
-        Failure -> LoginUiState()
+    FriendlyNamesReconnectRequired,
+    ReminderOff,
+        ReminderOn,
+        ReminderBlocked,
+    ReminderDenied,
+    ReminderNotification,
+    AccountFailure,
+    Failure -> LoginUiState()
     }
 
     fun isInitialOnboarding(): Boolean = when (this) {
@@ -309,6 +402,14 @@ internal enum class ScreenshotScenario {
                 ?: throw IllegalArgumentException("Unknown screenshot scenario.")
         }
     }
+
+    val showsReminderSettings: Boolean
+        get() = this == SavedStatus ||
+            this == ReminderOff ||
+            this == ReminderOn ||
+            this == ReminderBlocked ||
+            this == ReminderDenied ||
+            this == ReminderNotification
 }
 
 @Composable

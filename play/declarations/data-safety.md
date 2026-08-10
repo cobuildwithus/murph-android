@@ -29,6 +29,7 @@ The exact source permission names are `android.permission.health.READ_SLEEP`, `a
 - Murph API URLs must be absolute HTTPS URLs.
 - App backup and device transfer exclude all app storage.
 - The app does not persist health values, contacts, phone numbers, names, provider payloads, or identity tokens in its own storage.
+- Cold reminder delivery uses only local preferences, alarm, and notification APIs; the application graph is initialized lazily by `MainActivity`, so receiver-only process startup does not initialize Privy or Junction.
 - Contact reads are foreground, explicit, bounded, and replace a server-side projection; Stop requests server-side deletion.
 - Health access is read-only and starts only after the member launches the system permission flow. SDK app-start sync and the Vital boot/exact-alarm components are removed from this release. Vital 5.0.2 still discovers granted resources globally and may launch its own unfiltered asynchronous sync after permission and `connect()` flows; the app separately starts one app-owned post-commit foreground sync using the configured-and-granted intersection.
 - Sign-out and member switching revoke durable local health authorization and tear down Junction before Privy logout.
@@ -37,7 +38,7 @@ The exact source permission names are `android.permission.health.READ_SLEEP`, `a
 
 These facts do not prove the backend's encryption at rest, retention schedule, deletion completion, or each SDK's diagnostic/analytics collection.
 
-The final merged manifest also contains SDK/runtime permissions that are not themselves Play user-data types: `android.permission.FOREGROUND_SERVICE`, `android.permission.WAKE_LOCK`, `android.permission.USE_BIOMETRIC`, `android.permission.USE_FINGERPRINT`, and the app-scoped `ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. `android.permission.INTERNET` carries the declared off-device paths, while `android.permission.ACCESS_NETWORK_STATE` reads connectivity state. Re-evaluate these whenever the resolved SDK graph changes.
+The final merged manifest also contains SDK/runtime permissions that are not themselves Play user-data types: `android.permission.FOREGROUND_SERVICE`, `android.permission.WAKE_LOCK`, `android.permission.USE_BIOMETRIC`, `android.permission.USE_FINGERPRINT`, `android.permission.POST_NOTIFICATIONS`, and the app-scoped `ai.withmurph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. The optional notification permission delivers a generic, locally derived Health Connect reminder and does not add an off-device data path. `android.permission.INTERNET` carries the declared off-device paths, while `android.permission.ACCESS_NETWORK_STATE` reads connectivity state. Re-evaluate these whenever the resolved SDK graph changes.
 
 ## Submission blockers requiring operator evidence
 
