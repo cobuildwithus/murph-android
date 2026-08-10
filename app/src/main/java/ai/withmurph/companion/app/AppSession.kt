@@ -71,6 +71,7 @@ class AppSession(
     private val launchConsentMutex = Mutex()
     private val initialOnboardingMutex = Mutex()
     private val healthSyncReminderPreferenceLock = Any()
+    private val foregroundHealthOperationLock = Any()
     private val foregroundAddressBookOperationLock = Any()
     private var hasCompletedStartup = false
     private var isForeground = false
@@ -94,6 +95,7 @@ class AppSession(
     private var healthSyncReminderPreferenceGeneration = 0L
     private var inFlightHealthSyncReminderPreference:
         HealthSyncReminderPreferenceClaim? = null
+    private var foregroundHealthOperation: ForegroundHealthOperation? = null
     private var foregroundAddressBookOperation: ForegroundAddressBookOperation? = null
 
     private val _state = MutableStateFlow(
@@ -750,7 +752,28 @@ class AppSession(
                 return false
             }
 
-            val mutation = interrupted ?: createAddressBookMutation(status.revision)
+            val mutation = if (interrupted == null) {
+                createAddressBookMutation(status.revision)
+            } else {
+                if (!localState.abandonAddressBookReplacement(interrupted.mutationId)) {
+                    publishAddressBookMessage(
+                        memberKey,
+                        epoch,
+                        "Murph couldn't safely replace the saved retry marker. Try again.",
+                    )
+                    return false
+                }
+                if (status.revision > interrupted.baseRevision) {
+                    publishAddressBookStatus(
+                        memberKey,
+                        epoch,
+                        status,
+                        "The server already advanced past the saved update, so Murph kept the newer server state instead of replaying it.",
+                    )
+                    return false
+                }
+                createAddressBookMutation(status.revision)
+            }
             pendingAddressBookPermissionFlow = PendingAddressBookPermissionFlow(
                 epoch = epoch,
                 memberKey = memberKey,
@@ -2320,6 +2343,13 @@ class AppSession(
         isForeground = false
         foregroundGeneration += 1
         needsForegroundRefresh = true
+        val foregroundHealth = synchronized(foregroundHealthOperationLock) {
+            foregroundHealthOperation
+        }
+        health.cancelActiveSync()
+        foregroundHealth?.job?.cancel(
+            ForegroundHealthSyncCancellation(),
+        )
         synchronized(foregroundAddressBookOperationLock) {
             foregroundAddressBookOperation
         }?.job?.cancel(
@@ -3423,8 +3453,7 @@ class AppSession(
             val syncSequence = lastStartedHealthSyncSequence
             var syncSucceeded = false
             try {
-                health.syncAllGrantedResources()
-                syncSucceeded = true
+                syncSucceeded = runForegroundHealthSync(foregroundClaim)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -3461,6 +3490,29 @@ class AppSession(
             epoch == sessionEpoch &&
             _state.value.phase == AppPhase.Ready &&
             _state.value.authVerifiedOnline
+
+    private suspend fun runForegroundHealthSync(
+        foregroundClaim: ForegroundRefreshClaim,
+    ): Boolean = coroutineScope {
+        val sync = async(start = CoroutineStart.LAZY) {
+            health.syncAllGrantedResources()
+        }
+        val operation = claimForegroundHealthOperation(foregroundClaim, sync)
+        if (operation == null) {
+            sync.cancel()
+            return@coroutineScope false
+        }
+        try {
+            sync.start()
+            sync.await()
+            true
+        } catch (error: CancellationException) {
+            if (!error.isForegroundHealthSyncCancellation()) throw error
+            false
+        } finally {
+            releaseForegroundHealthOperation(operation)
+        }
+    }
 
     private fun ownsHealthResumePreparation(
         memberKey: String,
@@ -4675,6 +4727,7 @@ class AppSession(
         requested: LaunchConsentFollowUp,
     ): Boolean {
         val existing = pendingLaunchConsentRecovery ?: return false
+        var displacedReminderClaim: HealthSyncReminderPreferenceClaim? = null
         val changed = synchronized(existing) {
             if (!ownsLaunchConsentRecovery(existing)) return false
             val selected = when {
@@ -4693,6 +4746,9 @@ class AppSession(
             if (selected == existing.followUp) {
                 false
             } else {
+                displacedReminderClaim =
+                    (existing.followUp as? LaunchConsentFollowUp.EnableHealthSyncReminder)
+                        ?.claim
                 existing.followUp = selected
                 existing.followUpVersion += 1
                 if (
@@ -4706,6 +4762,7 @@ class AppSession(
                 true
             }
         }
+        displacedReminderClaim?.let(::invalidateDisplacedHealthSyncReminderPreference)
         if (changed) {
             _state.update { current ->
                 current.copy(
@@ -4716,6 +4773,25 @@ class AppSession(
             }
         }
         return true
+    }
+
+    private fun invalidateDisplacedHealthSyncReminderPreference(
+        claim: HealthSyncReminderPreferenceClaim,
+    ) {
+        synchronized(healthSyncReminderPreferenceLock) {
+            if (!ownsHealthSyncReminderPreferenceLocked(claim)) return
+            healthSyncReminderPreferenceGeneration += 1
+            if (inFlightHealthSyncReminderPreference == claim) {
+                inFlightHealthSyncReminderPreference = null
+            }
+            _state.update { current ->
+                if (current.healthSyncReminderTargetEnabled == claim.enabled) {
+                    current.copy(healthSyncReminderTargetEnabled = null)
+                } else {
+                    current
+                }
+            }
+        }
     }
 
     private fun advanceCompletedHealthPermissionContinuationToSync(
@@ -6070,6 +6146,33 @@ class AppSession(
             _state.value.authVerifiedOnline &&
             !localState.signOutPending
 
+    private fun claimForegroundHealthOperation(
+        foregroundClaim: ForegroundRefreshClaim,
+        job: Job,
+    ): ForegroundHealthOperation? = synchronized(foregroundHealthOperationLock) {
+        if (
+            foregroundHealthOperation != null ||
+            !ownsForegroundRefresh(foregroundClaim)
+        ) {
+            return@synchronized null
+        }
+        ForegroundHealthOperation(
+            job = job,
+        ).also { foregroundHealthOperation = it }
+    }
+
+    private fun releaseForegroundHealthOperation(operation: ForegroundHealthOperation) {
+        synchronized(foregroundHealthOperationLock) {
+            if (foregroundHealthOperation === operation) {
+                foregroundHealthOperation = null
+            }
+        }
+    }
+
+    private fun CancellationException.isForegroundHealthSyncCancellation(): Boolean =
+        this is ForegroundHealthSyncCancellation ||
+            cause is ForegroundHealthSyncCancellation
+
     private suspend fun claimForegroundAddressBookOperation(
         foregroundClaim: ForegroundRefreshClaim,
     ): ForegroundAddressBookOperation? {
@@ -6443,6 +6546,14 @@ class AppSession(
     private data class ForegroundAddressBookOperation(
         val foregroundClaim: ForegroundRefreshClaim,
         val job: Job,
+    )
+
+    private data class ForegroundHealthOperation(
+        val job: Job,
+    )
+
+    private class ForegroundHealthSyncCancellation : CancellationException(
+        "Health sync left the foreground",
     )
 
     private class ForegroundAddressBookCancellation : CancellationException(

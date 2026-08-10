@@ -2,6 +2,9 @@ package ai.withmurph.companion.health
 
 import android.content.Context
 import android.content.Intent
+import androidx.lifecycle.asFlow
+import androidx.work.Operation
+import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
@@ -16,6 +19,7 @@ import io.tryvital.vitalhealthcore.model.VitalResource
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 class JunctionHealthSyncService(
@@ -25,6 +29,7 @@ class JunctionHealthSyncService(
 ) : HealthSyncing {
     private val appContext = context.applicationContext
     private val manager = VitalHealthConnectManager.getOrCreate(appContext)
+    private val workManager = WorkManager.getInstance(appContext)
 
     override val totalResourceCount: Int = requestedReadResources.size
 
@@ -48,6 +53,11 @@ class JunctionHealthSyncService(
 
     override fun pauseAutomaticSync() {
         manager.pauseSynchronization = true
+    }
+
+    override fun cancelActiveSync() {
+        manager.pauseSynchronization = true
+        cancelSyncWorkers()
     }
 
     override suspend fun identify(
@@ -93,11 +103,23 @@ class JunctionHealthSyncService(
                 resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
             )
         } finally {
-            withContext(NonCancellable + Dispatchers.Main.immediate) {
-                manager.pauseSynchronization = true
+            withContext(NonCancellable) {
+                withContext(Dispatchers.Main.immediate) {
+                    manager.pauseSynchronization = true
+                }
+                val cancellations = cancelSyncWorkers()
+                cancellations.forEach { operation ->
+                    val state = operation.state.asFlow().first {
+                        it is Operation.State.SUCCESS || it is Operation.State.FAILURE
+                    }
+                    if (state is Operation.State.FAILURE) throw state.throwable
+                }
             }
         }
     }
+
+    private fun cancelSyncWorkers(): List<Operation> =
+        syncWorkNames(requestedReadResources).map(workManager::cancelUniqueWork)
 
     override fun grantedResourceCount(): Int =
         configuredGrantedResources(manager.resourcesWithReadPermission()).size
@@ -144,6 +166,18 @@ class JunctionHealthSyncService(
         internal fun configuredGrantedResources(
             grantedResources: Set<VitalResource>,
         ): Set<VitalResource> = requestedReadResources.intersect(grantedResources)
+
+        /**
+         * Vital 5.0.2 exposes no public cancellation API. These are its exact
+         * unique WorkManager names for the umbrella worker and every app-owned
+         * resource worker. Keep this mapping pinned to the reviewed SDK source.
+         */
+        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> = buildSet {
+            add("HC.ResourceSyncStarter")
+            resources.forEach { resource ->
+                add("HC.ResourceSyncWorker.$resource")
+            }
+        }
     }
 }
 

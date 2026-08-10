@@ -49,6 +49,29 @@ class JunctionHealthSyncServiceTest {
     }
 
     @Test
+    fun foregroundCancellationOwnsTheExactPinnedVitalWorkerFamily() {
+        assertEquals(
+            setOf(
+                "HC.ResourceSyncStarter",
+                "HC.ResourceSyncWorker.sleep",
+                "HC.ResourceSyncWorker.workout",
+                "HC.ResourceSyncWorker.activity",
+                "HC.ResourceSyncWorker.steps",
+                "HC.ResourceSyncWorker.activeEnergyBurned",
+                "HC.ResourceSyncWorker.heartRateVariability",
+                "HC.ResourceSyncWorker.respiratoryRate",
+                "HC.ResourceSyncWorker.bloodOxygen",
+                "HC.ResourceSyncWorker.body",
+                "HC.ResourceSyncWorker.profile",
+                "HC.ResourceSyncWorker.vo2Max",
+            ),
+            JunctionHealthSyncService.syncWorkNames(
+                JunctionHealthSyncService.requestedReadResources,
+            ),
+        )
+    }
+
+    @Test
     fun providerAvailabilityPreservesTheRecoveryOwner() {
         val expected = mapOf(
             ProviderAvailability.Installed to HealthConnectAvailability.Available,

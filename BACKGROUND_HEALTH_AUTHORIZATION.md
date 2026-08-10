@@ -82,9 +82,12 @@ Foreground app entry, foreground return, and **Sync now** remain the only sync
 owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
 and sign-out checks before calling the Junction adapter. The adapter keeps
 Vital synchronization paused across permission and connect flows and unpauses
-only inside an explicit foreground call. Teardown fences new app-owned health
-work, drains the current foreground chain under the session's health mutex, and
-only then crosses the Junction identity, member, or consent boundary.
+only inside an explicit foreground call. Foreground loss cancels the registered
+app operation and the exact Vital 5.0.2 umbrella/resource WorkManager names;
+the adapter restores the pause and waits for cancellation acceptance before it
+releases the session's health mutex. Teardown therefore drains or cancels the
+current foreground chain before crossing the Junction identity, member, or
+consent boundary.
 
 ## Smallest future unlock
 

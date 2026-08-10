@@ -235,6 +235,27 @@ class AppSessionTest {
     }
 
     @Test
+    fun stopSharingSupersedesAConsentPendingReminderProjection() = runTest {
+        val fixture = completedHealthFixture(contacts = SupportedContacts)
+        fixture.api.statusError = CompanionApiException.ConsentRequired
+        assertTrue(fixture.session.setHealthSyncReminderEnabled(true))
+        assertEquals(true, fixture.session.state.value.healthSyncReminderTargetEnabled)
+
+        fixture.session.stopAddressBookSharing()
+
+        assertNull(fixture.session.state.value.healthSyncReminderTargetEnabled)
+        assertFalse(fixture.localState.reminderEnabled)
+        fixture.api.statusError = null
+        fixture.session.acceptLaunchConsent()
+
+        assertFalse(fixture.localState.reminderEnabled)
+        assertNull(fixture.localState.healthSyncReminderDeadline)
+        assertNull(fixture.session.state.value.healthSyncReminderTargetEnabled)
+        assertEquals(0, fixture.reminder.initialDeadlineCalls)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
     fun failedAcceptedReminderEnableStaysCancelable() = runTest {
         val fixture = completedHealthFixture()
         fixture.api.statusError = CompanionApiException.ConsentRequired
@@ -5638,11 +5659,7 @@ class AppSessionTest {
 
         fixture.session.didEnterBackground()
         val foreground = async { fixture.session.didBecomeActive() }
-        runCurrent()
 
-        assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
-
-        syncGate.complete(Unit)
         start.await()
         foreground.await()
 
@@ -5752,7 +5769,7 @@ class AppSessionTest {
         assertEquals(1, fixture.health.identifyCalls)
         assertEquals(1, fixture.health.configureCalls)
         assertEquals(1, fixture.health.syncCalls)
-        assertFalse(fixture.health.signedIn)
+        assertTrue(fixture.health.signedIn)
         assertFalse(fixture.session.state.value.authVerifiedOnline)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
 
@@ -6354,7 +6371,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun memberSwitchWaitsForForegroundSyncToFinishBeforeSdkTeardown() = runTest {
+    fun memberSwitchCancelsForegroundSyncBeforeSdkTeardown() = runTest {
         val fixture = completedHealthFixture()
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
         fixture.health.syncResourceStarts = 0
@@ -6369,27 +6386,22 @@ class AppSessionTest {
             verifiedOnline = true,
         )
         fixture.session.didEnterBackground()
-        val foreground = async { fixture.session.didBecomeActive() }
-        runCurrent()
-
-        assertTrue(fixture.localState.signOutPending)
-        assertFalse(foreground.isCompleted)
-        assertFalse(fixture.health.signOutEntered.isCompleted)
-        assertEquals(1, fixture.health.syncResourceStarts)
-        assertTrue(fixture.health.identifiedMemberKeys.none { it == "did:privy:replacement-member" })
-
-        syncGate.complete(Unit)
+        fixture.health.syncGate = null
         sync.await()
+        assertEquals(1, fixture.health.syncResourceStarts)
+        val foreground = async { fixture.session.didBecomeActive() }
         foreground.await()
 
-        assertEquals(fixture.health.totalResourceCount, fixture.health.syncResourceStarts)
+        assertEquals(1, fixture.health.cancelActiveSyncCalls)
+        assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals("did:privy:replacement-member", fixture.localState.memberKey)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
     }
 
     @Test
-    fun sameMemberResumeWaitsForForegroundSyncBeforeSdkIdentityReset() = runTest {
+    fun sameMemberResumeStartsAfterForegroundSyncCancellation() = runTest {
         val fixture = completedHealthFixture()
+        val syncCalls = fixture.health.syncCalls
         fixture.health.resetOnSameMemberIdentify = true
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
         fixture.health.syncResourceStarts = 0
@@ -6403,31 +6415,27 @@ class AppSessionTest {
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
         fixture.session.didEnterBackground()
         fixture.session.didBecomeActive()
+        sync.await()
         assertFalse(fixture.session.state.value.authVerifiedOnline)
 
         val tokenCount = fixture.api.intents.size
         val identifyCalls = fixture.health.identifyCalls
         val configureCalls = fixture.health.configureCalls
+        fixture.health.syncGate = null
         fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
         fixture.session.didEnterBackground()
-        val foreground = async { fixture.session.didBecomeActive() }
-        runCurrent()
-
-        assertFalse(foreground.isCompleted)
-        assertEquals(tokenCount, fixture.api.intents.size)
-        assertEquals(identifyCalls, fixture.health.identifyCalls)
-        assertEquals(configureCalls, fixture.health.configureCalls)
-        assertEquals(0, fixture.health.sameMemberIdentifyResetCalls)
-
-        syncGate.complete(Unit)
-        sync.await()
-        foreground.await()
+        fixture.session.didBecomeActive()
 
         assertEquals(tokenCount + 1, fixture.api.intents.size)
         assertEquals(ConnectionIntent.Resume, fixture.api.intents.last())
         assertEquals(identifyCalls + 1, fixture.health.identifyCalls)
         assertEquals(configureCalls + 1, fixture.health.configureCalls)
         assertEquals(1, fixture.health.sameMemberIdentifyResetCalls)
+        assertEquals(syncCalls + 2, fixture.health.syncCalls)
+        assertEquals(
+            fixture.health.totalResourceCount + 1,
+            fixture.health.syncResourceStarts,
+        )
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
     }
 
@@ -8045,8 +8053,10 @@ class AppSessionTest {
         if (startsForeground) session.markForegroundForTest()
     }
 
-    private suspend fun completedHealthFixture(): Fixture {
-        val fixture = fixture()
+    private suspend fun completedHealthFixture(
+        contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
+    ): Fixture {
+        val fixture = fixture(contacts = contacts)
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(1)
         fixture.health.grantedCount = fixture.health.totalResourceCount
@@ -8384,6 +8394,7 @@ class AppSessionTest {
         val identifiedMemberKeys = mutableListOf<String>()
         var configureCalls = 0
         var pauseAutomaticSyncCalls = 0
+        var cancelActiveSyncCalls = 0
         var connectCalls = 0
         var startAutomaticSyncOnConnect = false
         var automaticConnectSyncAttempts = 0
@@ -8432,6 +8443,10 @@ class AppSessionTest {
         override fun isSignedIn(): Boolean = signedIn
         override fun pauseAutomaticSync() {
             pauseAutomaticSyncCalls += 1
+            automaticSyncPaused = true
+        }
+        override fun cancelActiveSync() {
+            cancelActiveSyncCalls += 1
             automaticSyncPaused = true
         }
         override fun configure() {
