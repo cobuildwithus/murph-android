@@ -1,11 +1,21 @@
 package ai.withmurph.companion.health
 
 import ai.withmurph.companion.core.HealthConnectAvailability
+import androidx.work.Data
+import androidx.work.WorkInfo
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
+import java.util.UUID
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class JunctionHealthSyncServiceTest {
     @Test
     fun requestedResourcesMatchTheReviewedShippedClientScope() {
@@ -72,6 +82,24 @@ class JunctionHealthSyncServiceTest {
     }
 
     @Test
+    fun cancellationAcceptanceDoesNotReleaseTheBoundaryUntilWorkersAreTerminal() = runTest {
+        val workName = "HC.ResourceSyncWorker.sleep"
+        val workInfos = MutableStateFlow(listOf(workInfo(WorkInfo.State.RUNNING)))
+
+        val terminality = async {
+            JunctionHealthSyncService.awaitSyncWorkersTerminal(setOf(workName)) { requested ->
+                assertEquals(workName, requested)
+                workInfos
+            }
+        }
+        runCurrent()
+
+        assertFalse(terminality.isCompleted)
+        workInfos.value = listOf(workInfo(WorkInfo.State.CANCELLED))
+        terminality.await()
+    }
+
+    @Test
     fun providerAvailabilityPreservesTheRecoveryOwner() {
         val expected = mapOf(
             ProviderAvailability.Installed to HealthConnectAvailability.Available,
@@ -86,4 +114,13 @@ class JunctionHealthSyncServiceTest {
             assertEquals(app, provider.toAppAvailability())
         }
     }
+
+    private fun workInfo(state: WorkInfo.State): WorkInfo = WorkInfo(
+        UUID.randomUUID(),
+        state,
+        Data.EMPTY,
+        emptyList(),
+        Data.EMPTY,
+        0,
+    )
 }

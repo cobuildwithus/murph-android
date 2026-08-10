@@ -173,6 +173,10 @@ interface LocalState {
     fun recordAddressBookRevision(revision: Int): Boolean = false
     fun recordDisabledAddressBookRevision(revision: Int): Boolean = false
     fun beginAddressBookReplacement(mutation: AddressBookMutation): Boolean = false
+    fun replaceAddressBookReplacement(
+        expectedMutationId: String,
+        mutation: AddressBookMutation,
+    ): Boolean = false
     fun completeAddressBookReplacement(
         mutationId: String,
         revision: Int,

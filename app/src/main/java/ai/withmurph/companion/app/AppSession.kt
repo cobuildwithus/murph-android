@@ -675,6 +675,7 @@ class AppSession(
     private suspend fun prepareAddressBookSharing(
         acceptedConsentOwner: PendingLaunchConsentRecovery?,
         completesInitialSetup: Boolean,
+        requestPermission: Boolean = true,
     ): Boolean {
         if (!allowsLaunchConsentWork(acceptedConsentOwner)) return false
         if (!contacts.isSupported) return false
@@ -755,15 +756,15 @@ class AppSession(
             val mutation = if (interrupted == null) {
                 createAddressBookMutation(status.revision)
             } else {
-                if (!localState.abandonAddressBookReplacement(interrupted.mutationId)) {
-                    publishAddressBookMessage(
-                        memberKey,
-                        epoch,
-                        "Murph couldn't safely replace the saved retry marker. Try again.",
-                    )
-                    return false
-                }
                 if (status.revision > interrupted.baseRevision) {
+                    if (!localState.abandonAddressBookReplacement(interrupted.mutationId)) {
+                        publishAddressBookMessage(
+                            memberKey,
+                            epoch,
+                            "Murph couldn't safely clear the resolved retry marker. Try again.",
+                        )
+                        return false
+                    }
                     publishAddressBookStatus(
                         memberKey,
                         epoch,
@@ -772,7 +773,29 @@ class AppSession(
                     )
                     return false
                 }
-                createAddressBookMutation(status.revision)
+                if (status.revision != interrupted.baseRevision) {
+                    publishAddressBookMessage(
+                        memberKey,
+                        epoch,
+                        "Murph couldn't verify the saved retry against the current server revision. Try again.",
+                    )
+                    return false
+                }
+                val replacement = createAddressBookMutation(status.revision)
+                if (
+                    !localState.replaceAddressBookReplacement(
+                        expectedMutationId = interrupted.mutationId,
+                        mutation = replacement,
+                    )
+                ) {
+                    publishAddressBookMessage(
+                        memberKey,
+                        epoch,
+                        "Murph couldn't safely replace the saved retry marker. Try again.",
+                    )
+                    return false
+                }
+                replacement
             }
             pendingAddressBookPermissionFlow = PendingAddressBookPermissionFlow(
                 epoch = epoch,
@@ -784,7 +807,7 @@ class AppSession(
                     status.enabled && localState.addressBookRevision == status.revision
                 },
             )
-            requestAddressBookPermissionLaunch()
+            if (requestPermission) requestAddressBookPermissionLaunch()
             prepared = true
             return true
         } catch (error: CancellationException) {
@@ -2343,13 +2366,7 @@ class AppSession(
         isForeground = false
         foregroundGeneration += 1
         needsForegroundRefresh = true
-        val foregroundHealth = synchronized(foregroundHealthOperationLock) {
-            foregroundHealthOperation
-        }
-        health.cancelActiveSync()
-        foregroundHealth?.job?.cancel(
-            ForegroundHealthSyncCancellation(),
-        )
+        cancelForegroundHealthOperation(cancelWorkersWhenIdle = true)
         synchronized(foregroundAddressBookOperationLock) {
             foregroundAddressBookOperation
         }?.job?.cancel(
@@ -2643,6 +2660,7 @@ class AppSession(
             }
             return@withContext
         }
+        cancelForegroundHealthOperation(cancelWorkersWhenIdle = true)
         healthSyncReminder.cancel()
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
@@ -4582,13 +4600,9 @@ class AppSession(
         return true
     }
 
-    /**
-     * Called only after epoch and phase state have fenced new health work.
-     * Vital 5.0.2 cancels its starter before a separately scheduled child is
-     * guaranteed terminal, so drain the app-owned chain before changing SDK
-     * identity instead of treating cancellation state as execution proof.
-     */
+    /** Called only after epoch and phase state have fenced new health work. */
     private suspend fun signOutHealthSdkAfterDrainingWork() {
+        cancelForegroundHealthOperation(cancelWorkersWhenIdle = false)
         healthMutex.withLock { health.signOutSdk() }
     }
 
@@ -5400,20 +5414,17 @@ class AppSession(
                             localState.initialSetupStep != InitialSetupStep.FriendlyNames
                     )
                 ) {
-                    localState.abandonAddressBookReplacement(
-                        followUp.pending.mutation.mutationId,
-                    )
+                    localState.pendingAddressBookReplacement?.let { replacement ->
+                        localState.abandonAddressBookReplacement(replacement.mutationId)
+                    }
                     return
                 }
-                val memberKey = currentMemberKey ?: return
-                val restored = followUp.pending.copy(
-                    epoch = sessionEpoch,
-                    memberKey = memberKey,
+                val prepared = prepareAddressBookSharing(
+                    acceptedConsentOwner = pending,
+                    completesInitialSetup = followUp.pending.completesInitialSetup,
+                    requestPermission = false,
                 )
-                pendingAddressBookPermissionFlow = restored
-                _state.update {
-                    it.copy(isAddressBookBusy = true, addressBookMessage = null)
-                }
+                if (!prepared) return
                 completeAddressBookPermissionFlow(
                     permissionGranted = true,
                     acceptedConsentDispatch = AcceptedLaunchConsentDispatch(
@@ -6167,6 +6178,16 @@ class AppSession(
                 foregroundHealthOperation = null
             }
         }
+    }
+
+    private fun cancelForegroundHealthOperation(cancelWorkersWhenIdle: Boolean) {
+        val operation = synchronized(foregroundHealthOperationLock) {
+            foregroundHealthOperation
+        }
+        if (operation != null || cancelWorkersWhenIdle) {
+            health.cancelActiveSync()
+        }
+        operation?.job?.cancel(ForegroundHealthSyncCancellation())
     }
 
     private fun CancellationException.isForegroundHealthSyncCancellation(): Boolean =

@@ -83,11 +83,14 @@ owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
 and sign-out checks before calling the Junction adapter. The adapter keeps
 Vital synchronization paused across permission and connect flows and unpauses
 only inside an explicit foreground call. Foreground loss cancels the registered
-app operation and the exact Vital 5.0.2 umbrella/resource WorkManager names;
-the adapter restores the pause and waits for cancellation acceptance before it
-releases the session's health mutex. Teardown therefore drains or cancels the
-current foreground chain before crossing the Junction identity, member, or
-consent boundary.
+app operation and the exact Vital 5.0.2 umbrella/resource WorkManager names.
+Cancellation acceptance is not execution proof, so the adapter also waits
+until every matching work item is absent or terminal before it releases the
+session's health mutex. Sign-out requests that cancellation immediately after
+the durable tombstone commits, and Junction teardown repeats the same terminal
+check before changing SDK identity. Teardown therefore closes the current
+foreground chain before crossing the Junction identity, member, or consent
+boundary, including after process reconstruction.
 
 ## Smallest future unlock
 

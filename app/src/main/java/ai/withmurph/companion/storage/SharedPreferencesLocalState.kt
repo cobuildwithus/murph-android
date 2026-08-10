@@ -216,6 +216,25 @@ class SharedPreferencesLocalState internal constructor(
             removeAddressBookDeletion()
         }
 
+    override fun replaceAddressBookReplacement(
+        expectedMutationId: String,
+        mutation: AddressBookMutation,
+    ): Boolean {
+        val pending = pendingAddressBookReplacement ?: return false
+        if (
+            pending.mutationId != expectedMutationId ||
+            mutation.mutationId == expectedMutationId ||
+            mutation.baseRevision != pending.baseRevision
+        ) {
+            return false
+        }
+        return commitAddressBookChange {
+            putInt(KEY_ADDRESS_BOOK_REPLACEMENT_BASE_REVISION, mutation.baseRevision)
+            putString(KEY_ADDRESS_BOOK_REPLACEMENT_MUTATION_ID, mutation.mutationId)
+            removeAddressBookDeletion()
+        }
+    }
+
     override fun completeAddressBookReplacement(
         mutationId: String,
         revision: Int,

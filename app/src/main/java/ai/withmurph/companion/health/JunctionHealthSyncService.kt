@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.asFlow
 import androidx.work.Operation
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
@@ -19,6 +20,7 @@ import io.tryvital.vitalhealthcore.model.VitalResource
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
@@ -64,6 +66,7 @@ class JunctionHealthSyncService(
         memberKey: String,
         authenticate: suspend () -> String,
     ) {
+        pauseAndAwaitSyncWorkers()
         val externalUserId = JunctionExternalUserId.derive(memberKey, environment)
         if (VitalClient.identifiedExternalUser == externalUserId) {
             // Vital 5.0.2 returns early for an unchanged external id without invoking
@@ -107,13 +110,7 @@ class JunctionHealthSyncService(
                 withContext(Dispatchers.Main.immediate) {
                     manager.pauseSynchronization = true
                 }
-                val cancellations = cancelSyncWorkers()
-                cancellations.forEach { operation ->
-                    val state = operation.state.asFlow().first {
-                        it is Operation.State.SUCCESS || it is Operation.State.FAILURE
-                    }
-                    if (state is Operation.State.FAILURE) throw state.throwable
-                }
+                cancelAndAwaitSyncWorkers()
             }
         }
     }
@@ -125,7 +122,28 @@ class JunctionHealthSyncService(
         configuredGrantedResources(manager.resourcesWithReadPermission()).size
 
     override suspend fun signOutSdk() {
+        pauseAndAwaitSyncWorkers()
         VitalClient.getOrCreate(appContext).signOut()
+    }
+
+    private suspend fun pauseAndAwaitSyncWorkers() {
+        withContext(Dispatchers.Main.immediate) {
+            manager.pauseSynchronization = true
+        }
+        cancelAndAwaitSyncWorkers()
+    }
+
+    private suspend fun cancelAndAwaitSyncWorkers() {
+        val workNames = syncWorkNames(requestedReadResources)
+        cancelSyncWorkers().forEach { operation ->
+            val state = operation.state.asFlow().first {
+                it is Operation.State.SUCCESS || it is Operation.State.FAILURE
+            }
+            if (state is Operation.State.FAILURE) throw state.throwable
+        }
+        awaitSyncWorkersTerminal(workNames) { workName ->
+            workManager.getWorkInfosForUniqueWorkLiveData(workName).asFlow()
+        }
     }
 
     companion object {
@@ -176,6 +194,17 @@ class JunctionHealthSyncService(
             add("HC.ResourceSyncStarter")
             resources.forEach { resource ->
                 add("HC.ResourceSyncWorker.$resource")
+            }
+        }
+
+        internal suspend fun awaitSyncWorkersTerminal(
+            workNames: Set<String>,
+            workInfos: (String) -> Flow<List<WorkInfo>>,
+        ) {
+            workNames.forEach { workName ->
+                workInfos(workName).first { infos ->
+                    infos.all { info -> info.state.isFinished }
+                }
             }
         }
     }

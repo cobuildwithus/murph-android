@@ -619,6 +619,36 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
+    fun replacementRetryRotationIsOneDurableHandoff() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        val first = AddressBookMutation(8, MUTATION_ONE)
+        val second = AddressBookMutation(8, MUTATION_TWO)
+        assertTrue(state.beginAddressBookReplacement(first))
+
+        assertTrue(state.replaceAddressBookReplacement(MUTATION_ONE, second))
+        assertEquals(
+            second,
+            SharedPreferencesLocalState(preferences.recreated())
+                .pendingAddressBookReplacement,
+        )
+
+        preferences.failCommits = true
+        assertFalse(
+            state.replaceAddressBookReplacement(
+                MUTATION_TWO,
+                AddressBookMutation(8, "00000000-0000-4000-8000-000000000003"),
+            ),
+        )
+        assertEquals(second, state.pendingAddressBookReplacement)
+        assertEquals(
+            second,
+            SharedPreferencesLocalState(preferences.recreated())
+                .pendingAddressBookReplacement,
+        )
+    }
+
+    @Test
     fun friendlyNamesDeferralAtomicallyClearsASettledReplacementRetry() {
         val preferences = FaultInjectedPreferences()
         val state = SharedPreferencesLocalState(preferences)

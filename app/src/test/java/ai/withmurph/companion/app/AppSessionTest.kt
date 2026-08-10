@@ -6269,7 +6269,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun signOutWaitsForFirstSetupSyncToFinishBeforeSdkTeardown() = runTest {
+    fun signOutCancelsFirstSetupSyncBeforeSdkTeardown() = runTest {
         val fixture = fixture()
         fixture.session.start()
         assertTrue(fixture.session.prepareHealthConnection())
@@ -6278,6 +6278,10 @@ class AppSessionTest {
         val syncGate = CompletableDeferred<Unit>()
         fixture.health.syncGate = syncGate
         fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.cancelActiveSyncHook = {
+            assertTrue(fixture.localState.signOutPending)
+            assertNull(fixture.localState.healthAccessRequestedAt)
+        }
 
         val setup = async {
             fixture.session.completeHealthPermissionFlow(permissionRequestCompleted = true)
@@ -6286,23 +6290,21 @@ class AppSessionTest {
         val signOut = async { fixture.session.signOut() }
         runCurrent()
 
-        assertTrue(fixture.localState.signOutPending)
         assertNull(fixture.localState.healthAccessRequestedAt)
-        assertFalse(signOut.isCompleted)
-        assertFalse(fixture.health.signOutEntered.isCompleted)
         assertEquals(1, fixture.health.syncResourceStarts)
 
-        syncGate.complete(Unit)
         assertTrue(setup.await())
         signOut.await()
 
-        assertEquals(fixture.health.totalResourceCount, fixture.health.syncResourceStarts)
+        assertEquals(1, fixture.health.syncResourceStarts)
+        assertEquals(2, fixture.health.cancelActiveSyncCalls)
+        assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertEquals(listOf("sign-out", "privy-sign-out"), fixture.events.takeLast(2))
     }
 
     @Test
-    fun consentRecoveryWaitsForForegroundSyncToFinishBeforeSdkTeardown() = runTest {
+    fun consentRecoveryCancelsForegroundSyncBeforeSdkTeardown() = runTest {
         val fixture = fixture(contacts = SupportedContacts)
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(1)
@@ -6321,20 +6323,19 @@ class AppSessionTest {
         val addressBook = async { fixture.session.prepareAddressBookSharing() }
         runCurrent()
 
-        assertFalse(addressBook.isCompleted)
-        assertFalse(fixture.health.signOutEntered.isCompleted)
+        assertTrue(addressBook.isCompleted)
+        assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(1, fixture.health.syncResourceStarts)
-        assertTrue(fixture.api.launchConsentFetches.isEmpty())
+        assertEquals(listOf(MEMBER_KEY), fixture.api.launchConsentFetches)
         assertEquals(
-            LaunchConsentRecoveryPhase.Pausing,
+            LaunchConsentRecoveryPhase.Required,
             fixture.session.state.value.launchConsentRecovery?.phase,
         )
 
-        syncGate.complete(Unit)
         sync.await()
         assertFalse(addressBook.await())
 
-        assertEquals(fixture.health.totalResourceCount, fixture.health.syncResourceStarts)
+        assertEquals(1, fixture.health.syncResourceStarts)
         assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(
             LaunchConsentRecoveryPhase.Required,
@@ -6343,29 +6344,31 @@ class AppSessionTest {
     }
 
     @Test
-    fun signOutWaitsForForegroundSyncToFinishBeforeSdkTeardown() = runTest {
+    fun signOutCancelsForegroundSyncBeforeSdkTeardown() = runTest {
         val fixture = completedHealthFixture()
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
         fixture.health.syncResourceStarts = 0
         val syncGate = CompletableDeferred<Unit>()
         fixture.health.syncGate = syncGate
         fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.cancelActiveSyncHook = {
+            assertTrue(fixture.localState.signOutPending)
+            assertNull(fixture.localState.healthAccessRequestedAt)
+        }
 
         val sync = async { fixture.session.syncNow() }
         fixture.health.syncEntered.await()
         val signOut = async { fixture.session.signOut() }
         runCurrent()
 
-        assertTrue(fixture.localState.signOutPending)
-        assertFalse(signOut.isCompleted)
-        assertFalse(fixture.health.signOutEntered.isCompleted)
         assertEquals(1, fixture.health.syncResourceStarts)
 
-        syncGate.complete(Unit)
         sync.await()
         signOut.await()
 
-        assertEquals(fixture.health.totalResourceCount, fixture.health.syncResourceStarts)
+        assertEquals(1, fixture.health.syncResourceStarts)
+        assertEquals(2, fixture.health.cancelActiveSyncCalls)
+        assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertEquals(listOf("sign-out", "privy-sign-out"), fixture.events.takeLast(2))
     }
@@ -8395,6 +8398,7 @@ class AppSessionTest {
         var configureCalls = 0
         var pauseAutomaticSyncCalls = 0
         var cancelActiveSyncCalls = 0
+        var cancelActiveSyncHook: (() -> Unit)? = null
         var connectCalls = 0
         var startAutomaticSyncOnConnect = false
         var automaticConnectSyncAttempts = 0
@@ -8448,6 +8452,7 @@ class AppSessionTest {
         override fun cancelActiveSync() {
             cancelActiveSyncCalls += 1
             automaticSyncPaused = true
+            cancelActiveSyncHook?.invoke()
         }
         override fun configure() {
             configureCalls += 1
