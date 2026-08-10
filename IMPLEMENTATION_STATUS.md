@@ -7,7 +7,7 @@
 - Existing companion sign-in-token and status API client, including an active-member and legal-consent bootstrap check.
 - Native signed-in launch-consent recovery through the companion legal-consent endpoint, with strict unambiguous `murph.hosted-consent-status.v1` parsing, same-origin HTTPS document links, at-most-two sequential exact missing-scope acceptance bodies, monotonic-progress enforcement, canonical `CONSENT_DOCUMENT_VERSIONS_STALE` reload handling, partial-success retention, and no persisted consent truth.
 - Environment-scoped Junction external-user pseudonym matching `murph-ios`.
-- Transactional Junction Health Connect setup and permission recovery, including foreground preservation of an owned Connect attempt, post-consent grant refresh before connection, authoritative sign-out/member-switch cancellation, four minimum-necessary resources, 30-day backfill, app-owned foreground sync, and setup-time history permission.
+- Transactional Junction Health Connect setup and permission recovery, including foreground preservation of an owned Connect attempt, final server receipt-baseline refresh immediately before Connect and again after consent recovery, post-consent grant refresh, one atomic restart snapshot for setup authorization and receipt truth, fail-closed rollback on commit failure, exactly one app-owned foreground sync attempt after setup commits or foreground returns while preserving Vital's separate asynchronous connect-time sync, authoritative sign-out/member-switch cancellation, eleven reviewed resources with explicit `Activity`, `Steps`, and `ActiveEnergyBurned` owners matching Vital's global discovery behavior, an admitted `activity` summary plus compatibility-preserved standalone uploads that current Murph defaults do not ingest, ordinary-window 30-day backfill without an extended-history grant, and app-owned foreground sync.
 - Current-member and backend-consent preflight before health uploads, plus account-switch, reinstall, incomplete-setup, stale-session, native launch-consent recovery, and fail-closed sign-out safeguards. Sign-out atomically records a durable tombstone and invalidates setup authorization before waiting on startup or touching either SDK; process reconstruction finishes Junction-first, Privy-second teardown before restoration.
 - Offline-to-online restoration revalidates backend membership and consent before setup, including sessions with no prior Health Connect marker.
 - Fault-injected preferences coverage proving failed durable revocation and sign-out commits restore their process-visible authorization snapshot.
@@ -51,7 +51,7 @@ The project has now been resolved and compiled with JDK 17, Gradle 8.11.1,
 Android Gradle Plugin 8.10.1, compile SDK 36, and the real vendor artifacts:
 
 - Privy Android `0.12.0` APIs (`Privy.init`, `getAuthState`, `getUser`, `user.identityToken`, SMS/email OTP, `logout`).
-- Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the four-resource Health Connect bridge, and manual sync).
+- Junction/Vital Android `5.0.2` APIs (`identifyExternalUser`, `SignInToken`, `VitalHealthConnectManager`, explicit connect, the eleven-resource reviewed scope, and manual sync).
 
 The visual-proof contract tests pass directly and now run first in
 `./scripts/verify.sh`. The prior executable Android verification covered Debug

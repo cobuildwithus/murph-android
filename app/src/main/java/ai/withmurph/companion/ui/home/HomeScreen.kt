@@ -114,7 +114,7 @@ private fun InitialHealthSetupContent(
                 color = MurphColors.Slate,
             )
             Text(
-                text = "Connect sleep, workouts, steps, and activity to power your baselines and insights.",
+                text = "Connect sleep, workouts, and other approved health data to power your baselines and insights.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MurphColors.SlateMuted,
             )

@@ -10,8 +10,10 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
-- Four minimum-necessary Junction resources: sleep, workouts, steps, and active calories.
-- Optional history permission during setup.
+- Eleven reviewed Junction client resources spanning sleep, workouts, daily
+  activity, steps, active energy, HRV, respiratory rate, blood oxygen, body
+  measurements, height, and VO2 max.
+- Thirty-day foreground backfill within ordinary Health Connect read access.
 - Foreground sync on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
@@ -153,16 +155,41 @@ the response reports `REVIEW_OUTCOME: PASS`.
 setOf(
     VitalResource.Sleep,
     VitalResource.Workout,
+    VitalResource.Activity,
     VitalResource.Steps,
     VitalResource.ActiveEnergyBurned,
+    VitalResource.HeartRateVariability,
+    VitalResource.RespiratoryRate,
+    VitalResource.BloodOxygen,
+    VitalResource.Body,
+    VitalResource.Profile,
+    VitalResource.Vo2Max,
 )
 ```
 
-This deliberately covers only the first Health Connect bridge use case: sleep, workouts, steps, and active calories.
+Vital 5.0.2 scans all resources during permission reconciliation and its
+`remapped()` operation is an identity operation in this version. Murph pauses
+SDK synchronization before permission and through `connect()`, then unpauses
+only around an explicit foreground call with the configured-and-granted
+intersection. The shipped `READ_STEPS` and `READ_ACTIVE_CALORIES_BURNED` grants
+can activate the separate `Steps` and `ActiveEnergyBurned` paths while shared
+grants may also activate `Activity`, so all three remain explicit. Murph
+currently ingests daily steps and active calories through the `activity`
+summary; its default intake normalizes the standalone `steps` and
+`calories_active` uploads away. Those two client paths remain configured to
+preserve shipped behavior, not to claim standalone end-to-end
+ingestion. See `ARCHITECTURE.md` for provider-specific limitations.
 
-The manifest declares only the four corresponding Health Connect read permissions. Users still choose each category in the Health Connect system UI. Denied categories remain unavailable and do not block categories the user approved.
+The manifest declares only the corresponding Health Connect read permissions.
+Users still choose each category in the Health Connect system UI. Denied
+categories remain unavailable and do not block categories the user approved.
 
-The app asks for Health Connect history access during initial setup where supported. Junction documents Health Connect backfill as a fixed 30-day window, so the app is configured for 30 days and does not promise broader history. Background Health Connect reads, boot receivers, and exact-alarm synchronization are intentionally excluded from this release.
+Junction/Vital Android 5.0.2 hard-clamps backfill to the ordinary 30-day Health
+Connect read window, so the app does not request broader history access with no
+reachable benefit. Background reads, boot receivers, and exact-alarm
+synchronization are intentionally excluded from this release. See
+[`BACKGROUND_HEALTH_AUTHORIZATION.md`](BACKGROUND_HEALTH_AUTHORIZATION.md) for
+the durable authorization requirements blocking unattended health work.
 
 ### Optional address-book projection
 
@@ -196,10 +223,26 @@ message.
   online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
   After at least one category is granted, the app revalidates the member and
-  requests a backend token with `connectionIntent: "connect"`. If launch
-  consent interrupts that continuation, Murph refreshes Health Connect grants
-  again before connecting and aborts when none remain.
+  refreshes the server receipt baseline immediately before requesting a backend
+  token with `connectionIntent: "connect"`. If launch consent interrupts that
+  continuation, Murph refreshes Health Connect grants and the receipt baseline
+  again before connecting, and aborts when either check cannot complete.
+- The application session records completed setup, then starts exactly one
+  app-owned foreground sync attempt after the setup marker, receipt baseline,
+  observation time, and reconnect clearance commit as one restart snapshot.
+  SDK automatic synchronization stays paused across permission and connect,
+  and the adapter unpauses only for that explicit configured-resource call. A
+  failed commit rolls back the live Junction identity. The SDK's reachable
+  backfill is already limited to 30 days, so setup does not request an
+  extended-history grant.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
+- If omitted or passive `resume` receives
+  `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and
+  shows **Reconnect Health Connect**. Ordinary refresh remains read-only; only
+  that visible action can reach a `connectionIntent: "connect"` request after
+  the Health Connect permission flow. Setup revocation and the typed reconnect
+  marker commit together, and the marker remains authoritative through token,
+  identify, and connection work until final setup commits.
 - Reconnecting after all permissions were revoked first removes the previous
   setup marker and receipt, then tears down the old Junction identity before a
   fresh `connect` transaction can begin.
@@ -269,7 +312,8 @@ Pixel/Samsung acceptance evidence. See
 
 Before a Play release:
 
-1. Apply for Google Play Health Connect access for sleep, exercise, steps, active calories, and history.
+1. Apply for Google Play Health Connect access for all eleven declared read
+   permissions across the eleven configured resources.
 2. Complete Play Data Safety disclosures, the Health Apps declaration, and the
    Contacts permission disclosure for optional familiar-name projection.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.

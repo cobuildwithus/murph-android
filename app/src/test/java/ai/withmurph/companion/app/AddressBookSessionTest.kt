@@ -1836,6 +1836,7 @@ class AddressBookSessionTest {
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
         override fun isSignedIn(): Boolean = signedIn
+        override fun pauseAutomaticSync() = Unit
         override fun configure() = Unit
         override fun grantedResourceCount(): Int = grantedCount
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {

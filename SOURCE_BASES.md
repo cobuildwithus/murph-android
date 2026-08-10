@@ -13,3 +13,34 @@ Account admission and initial onboarding require the listed Murph backend PRs
 to deploy before this Android change. The mobile client deliberately consumes
 those server-owned contracts rather than duplicating signup, catalog, or
 completion state.
+
+## Health-scope review
+
+The Android health scope was revalidated on August 5, 2026 against primary
+sources rather than inferred from the iOS enum names:
+
+- Junction/Vital Android 5.0.2
+  [`VitalResource`](https://github.com/tryVital/vital-android/blob/eda6a537d0518a7ca7c3716a5c8b25f4a8fae5d0/VitalHealthCore/src/main/java/io/tryvital/vitalhealthcore/model/VitalResource.kt),
+  [Health Connect record mapping](https://github.com/tryVital/vital-android/blob/eda6a537d0518a7ca7c3716a5c8b25f4a8fae5d0/VitalHealthConnect/src/main/java/io/tryvital/vitalhealthconnect/model/VitalResource.kt),
+  [permission behavior](https://github.com/tryVital/vital-android/blob/eda6a537d0518a7ca7c3716a5c8b25f4a8fae5d0/VitalHealthConnect/src/main/java/io/tryvital/vitalhealthconnect/VitalPermissionRequestContract.kt),
+  [global grant discovery and connect-time sync](https://github.com/tryVital/vital-android/blob/eda6a537d0518a7ca7c3716a5c8b25f4a8fae5d0/VitalHealthConnect/src/main/java/io/tryvital/vitalhealthconnect/VitalHealthConnectManager.kt),
+  and [30-day SDK clamp](https://github.com/tryVital/vital-android/blob/eda6a537d0518a7ca7c3716a5c8b25f4a8fae5d0/VitalHealthCore/src/main/java/io/tryvital/vitalhealthcore/workers/BaseLocalSyncStateManager.kt).
+- Android's official [Health Connect data-type and permission table](https://developer.android.com/health-and-fitness/health-connect/data-types)
+  and [history-read behavior](https://developer.android.com/health-and-fitness/health-connect/read-data).
+- WHOOP's official [Health Connect export and import matrix](https://support.whoop.com/s/article/Google-Health-Integration-For-Android).
+- Murph `05f28303e2008324f7ed6a03dbab82bf322acfcf` default Junction
+  [timeseries scope](https://github.com/cobuildwithus/murph/blob/05f28303e2008324f7ed6a03dbab82bf322acfcf/packages/contracts/src/junction-resources.ts)
+  and [summary/ingestion scope](https://github.com/cobuildwithus/murph/blob/05f28303e2008324f7ed6a03dbab82bf322acfcf/packages/importers/src/device-providers/junction-resources.ts).
+
+That source review showed that Vital 5.0.2 discovers grants across every
+resource after permission/connect flows and does not remap the standalone
+activity resources. Android therefore pauses SDK synchronization before the
+permission flow and through `connect()`, then unpauses only for an explicit
+foreground call with the configured-and-granted intersection. It keeps the
+already-shipped step and active-calorie permissions and makes `Activity`,
+`Steps`, and `ActiveEnergyBurned` explicit configured owners. All three may run
+during that call. Murph's current default intake admits the `activity` summary,
+while `steps` and `calories_active` are known but not allowed default
+timeseries and are normalized away. Their explicit Android owners preserve
+shipped client upload behavior without claiming standalone end-to-end
+ingestion.

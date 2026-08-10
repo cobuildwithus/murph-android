@@ -39,14 +39,6 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val historyPermissionLauncher = registerForActivityResult(
-            graph.health.extendedPermissionContract(),
-        ) {
-            graph.applicationScope.launch {
-                graph.session.completeHealthHistoryPermissionFlow()
-            }
-        }
-
         val contactsPermissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission(),
         ) { granted ->
@@ -89,25 +81,6 @@ class MainActivity : ComponentActivity() {
                                 "Health Connect permissions couldn't be opened. Try again.",
                             )
                         }
-                    }
-                }
-            }
-            LaunchedEffect(appState.pendingHealthHistoryPermissionRequestId) {
-                val requestId = appState.pendingHealthHistoryPermissionRequestId
-                    ?: return@LaunchedEffect
-                lifecycle.withResumed {
-                    if (graph.session.consumeHealthHistoryPermissionLaunchRequest(requestId)) {
-                        launchHealthHistoryPermissionsOrComplete(
-                            supportedPermissions = graph.health::supportedHistoryPermissions,
-                            launchPermissions = { permissions ->
-                                historyPermissionLauncher.launch(permissions)
-                            },
-                            complete = {
-                                graph.applicationScope.launch {
-                                    graph.session.completeHealthHistoryPermissionFlow()
-                                }
-                            },
-                        )
                     }
                 }
             }
@@ -371,23 +344,4 @@ class MainActivity : ComponentActivity() {
         return action == "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" ||
             action == "android.intent.action.VIEW_PERMISSION_USAGE"
     }
-}
-
-internal fun launchHealthHistoryPermissionsOrComplete(
-    supportedPermissions: () -> Set<String>,
-    launchPermissions: (Set<String>) -> Unit,
-    complete: () -> Unit,
-) {
-    val needsCompletion = try {
-        val permissions = supportedPermissions()
-        if (permissions.isEmpty()) {
-            true
-        } else {
-            launchPermissions(permissions)
-            false
-        }
-    } catch (_: Exception) {
-        true
-    }
-    if (needsCompletion) complete()
 }

@@ -2,10 +2,6 @@ package ai.withmurph.companion.health
 
 import android.content.Context
 import android.content.Intent
-import androidx.health.connect.client.HealthConnectClient
-import androidx.health.connect.client.HealthConnectFeatures
-import androidx.health.connect.client.PermissionController
-import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_HISTORY
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
@@ -14,10 +10,13 @@ import io.tryvital.client.AuthenticateRequest
 import io.tryvital.client.VitalClient
 import io.tryvital.vitalhealthconnect.VitalHealthConnectManager
 import io.tryvital.vitalhealthconnect.model.PermissionOutcome
-import kotlinx.coroutines.Deferred
 import io.tryvital.vitalhealthcore.model.ConnectionPolicy
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 class JunctionHealthSyncService(
     context: Context,
@@ -26,31 +25,18 @@ class JunctionHealthSyncService(
 ) : HealthSyncing {
     private val appContext = context.applicationContext
     private val manager = VitalHealthConnectManager.getOrCreate(appContext)
-    private val readResources = setOf(
-        VitalResource.Sleep,
-        VitalResource.Workout,
-        VitalResource.Steps,
-        VitalResource.ActiveEnergyBurned,
-    )
 
-    override val totalResourceCount: Int = readResources.size
+    override val totalResourceCount: Int = requestedReadResources.size
 
     fun healthPermissionContract() = manager.createPermissionRequestContract(
-        readResources = readResources,
+        readResources = requestedReadResources,
         writeResources = emptySet(),
     )
 
-    fun extendedPermissionContract() = PermissionController.createRequestPermissionResultContract()
-
     suspend fun permissionRequestCompleted(outcome: Deferred<PermissionOutcome>): Boolean {
         if (outcome.await() !is PermissionOutcome.Success) return false
-        return manager.resourcesWithReadPermission().isNotEmpty()
+        return configuredGrantedResources(manager.resourcesWithReadPermission()).isNotEmpty()
     }
-
-    fun supportedHistoryPermissions(): Set<String> = supportedPermission(
-        feature = HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY,
-        permission = PERMISSION_READ_HEALTH_DATA_HISTORY,
-    )
 
     override fun availability(): HealthConnectAvailability =
         VitalHealthConnectManager.isAvailable(appContext).toAppAvailability()
@@ -59,6 +45,10 @@ class JunctionHealthSyncService(
         VitalHealthConnectManager.openHealthConnectIntent(appContext)
 
     override fun isSignedIn(): Boolean = VitalClient.Status.SignedIn in VitalClient.status
+
+    override fun pauseAutomaticSync() {
+        manager.pauseSynchronization = true
+    }
 
     override suspend fun identify(
         memberKey: String,
@@ -77,6 +67,7 @@ class JunctionHealthSyncService(
     }
 
     override fun configure() {
+        pauseAutomaticSync()
         manager.configureHealthConnectClient(
             logsEnabled = false,
             syncOnAppStart = false,
@@ -94,26 +85,65 @@ class JunctionHealthSyncService(
     }
 
     override suspend fun syncAllGrantedResources() {
-        manager.syncData(resources = null)
+        withContext(Dispatchers.Main.immediate) {
+            manager.pauseSynchronization = false
+        }
+        try {
+            manager.syncData(
+                resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
+            )
+        } finally {
+            withContext(NonCancellable + Dispatchers.Main.immediate) {
+                manager.pauseSynchronization = true
+            }
+        }
     }
 
-    override fun grantedResourceCount(): Int = manager.resourcesWithReadPermission().size
+    override fun grantedResourceCount(): Int =
+        configuredGrantedResources(manager.resourcesWithReadPermission()).size
 
     override suspend fun signOutSdk() {
         VitalClient.getOrCreate(appContext).signOut()
     }
 
-    private fun supportedPermission(feature: Int, permission: String): Set<String> {
-        if (availability() != HealthConnectAvailability.Available) return emptySet()
-        val client = HealthConnectClient.getOrCreate(appContext)
-        return if (
-            client.features.getFeatureStatus(feature) ==
-            HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
-        ) {
-            setOf(permission)
-        } else {
-            emptySet()
-        }
+    companion object {
+        /**
+         * The complete app-owned Junction scope. Keep this set aligned with the
+         * read-only Health Connect permissions in AndroidManifest.xml.
+         *
+         * Heart rate remains outside this set because Vital cannot request it
+         * only as sleep/workout enrichment, while Murph intentionally excludes
+         * the unbounded standalone stream from default ingestion.
+         *
+         * Vital 5.0.2 discovers granted resources by scanning every SDK
+         * resource. Murph keeps the SDK paused across permission and connect
+         * flows, then briefly unpauses only inside syncAllGrantedResources so
+         * this configured, post-commit call owns the resource chain. Vital's
+         * resource remapping is an identity operation in this version, so
+         * Activity, Steps, and ActiveEnergyBurned remain separate sync owners.
+         * Keep all three explicit here so manual sync and resource counts match
+         * the already-shipped manifest grants. Murph's current default intake
+         * admits the Activity summary but not the two standalone timeseries;
+         * preserving their client upload behavior avoids a silent mobile
+         * regression while that backend boundary remains explicit.
+         */
+        internal val requestedReadResources = setOf(
+            VitalResource.Sleep,
+            VitalResource.Workout,
+            VitalResource.Activity,
+            VitalResource.Steps,
+            VitalResource.ActiveEnergyBurned,
+            VitalResource.HeartRateVariability,
+            VitalResource.RespiratoryRate,
+            VitalResource.BloodOxygen,
+            VitalResource.Body,
+            VitalResource.Profile,
+            VitalResource.Vo2Max,
+        )
+
+        internal fun configuredGrantedResources(
+            grantedResources: Set<VitalResource>,
+        ): Set<VitalResource> = requestedReadResources.intersect(grantedResources)
     }
 }
 

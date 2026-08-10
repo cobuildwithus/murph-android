@@ -27,12 +27,28 @@
       "declarationCategory": "Fitness info"
     },
     {
+      "name": "android.permission.health.READ_BODY_FAT",
+      "declarationCategory": "Health info"
+    },
+    {
       "name": "android.permission.health.READ_EXERCISE",
       "declarationCategory": "Fitness info"
     },
     {
-      "name": "android.permission.health.READ_HEALTH_DATA_HISTORY",
-      "declarationCategory": "Health Connect access scope; no additional data type"
+      "name": "android.permission.health.READ_HEART_RATE_VARIABILITY",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_HEIGHT",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_OXYGEN_SATURATION",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_RESPIRATORY_RATE",
+      "declarationCategory": "Health info"
     },
     {
       "name": "android.permission.health.READ_SLEEP",
@@ -41,6 +57,14 @@
     {
       "name": "android.permission.health.READ_STEPS",
       "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_VO2_MAX",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_WEIGHT",
+      "declarationCategory": "Health info"
     }
   ],
   "appManifestRemovedPermissions": [
@@ -75,16 +99,34 @@
       "android:name": "android.permission.health.READ_ACTIVE_CALORIES_BURNED"
     },
     {
+      "android:name": "android.permission.health.READ_BODY_FAT"
+    },
+    {
       "android:name": "android.permission.health.READ_EXERCISE"
     },
     {
-      "android:name": "android.permission.health.READ_HEALTH_DATA_HISTORY"
+      "android:name": "android.permission.health.READ_HEART_RATE_VARIABILITY"
+    },
+    {
+      "android:name": "android.permission.health.READ_HEIGHT"
+    },
+    {
+      "android:name": "android.permission.health.READ_OXYGEN_SATURATION"
+    },
+    {
+      "android:name": "android.permission.health.READ_RESPIRATORY_RATE"
     },
     {
       "android:name": "android.permission.health.READ_SLEEP"
     },
     {
       "android:name": "android.permission.health.READ_STEPS"
+    },
+    {
+      "android:name": "android.permission.health.READ_VO2_MAX"
+    },
+    {
+      "android:name": "android.permission.health.READ_WEIGHT"
     }
   ],
   "releaseManifest": {
@@ -240,17 +282,24 @@
   },
   "healthConnect": {
     "resourceOwner": "app/src/main/java/ai/withmurph/companion/health/JunctionHealthSyncService.kt",
-    "resourceSetSymbol": "readResources",
+    "resourceSetSymbol": "requestedReadResources",
     "readResources": [
       "ActiveEnergyBurned",
+      "Activity",
+      "BloodOxygen",
+      "Body",
+      "HeartRateVariability",
+      "Profile",
+      "RespiratoryRate",
       "Sleep",
       "Steps",
+      "Vo2Max",
       "Workout"
     ],
-    "readResourceCount": 4,
-    "readDataPermissionCount": 4,
+    "readResourceCount": 11,
+    "readDataPermissionCount": 11,
     "backfillDays": 30,
-    "historyPermissionRequested": true,
+    "historyPermissionRequested": false,
     "syncOnAppStart": false,
     "backgroundPermissionRequested": false
   },

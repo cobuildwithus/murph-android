@@ -6,7 +6,7 @@ The checked-in packet does **not** mean the app is ready to publish. `play/opera
 
 The Android source contains canonical account admission, but source presence is not runtime proof. Submission remains blocked until a Murph backend compatible with lifecycle-neutral admission is deployed and the exact signed candidate proves new-account admission end to end.
 
-The current source-derived health scope is four centralized `VitalResource` values covering four Health Connect data-type read permissions: sleep, exercise, steps, and active calories. The app also requests Health Connect history access where the installed provider supports it, while Junction remains configured for a 30-day backfill. Availability still depends on the member's device, membership, and Health Connect sources; the packet does not claim that every source exports every requested type.
+The current source-derived health scope is eleven centralized `VitalResource` values covering eleven Health Connect data-type read permissions: sleep, exercise, steps, active calories, HRV, respiratory rate, oxygen saturation, body fat, weight, height, and VO2 max. Junction remains configured for the ordinary 30-day foreground window; the app requests neither extended-history nor background access. Availability still depends on the member's device, membership, and Health Connect sources, and the packet does not claim that every source exports or Murph independently ingests every requested type.
 
 ## What is here
 
