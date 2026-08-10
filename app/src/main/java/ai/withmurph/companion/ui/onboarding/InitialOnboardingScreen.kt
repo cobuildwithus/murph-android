@@ -10,7 +10,6 @@ import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.components.MurphGhostButton
 import ai.withmurph.companion.ui.components.MurphIcon
 import ai.withmurph.companion.ui.components.MurphIconKind
-import ai.withmurph.companion.ui.components.MurphLinkButton
 import ai.withmurph.companion.ui.components.MurphMark
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.theme.MurphColors
@@ -47,6 +46,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -91,7 +95,6 @@ import java.net.URL
 fun InitialOnboardingScreen(
     state: AppUiState,
     actions: MurphActions,
-    onOpenSettings: () -> Unit,
     contactAvatarPainters: Map<String, Painter> = emptyMap(),
 ) {
     val onboarding = state.initialOnboarding ?: return
@@ -176,148 +179,128 @@ fun InitialOnboardingScreen(
     }
 
     if (stage == InitialOnboardingStage.Welcome) {
-        WelcomeScreen(state, actions, onOpenSettings)
+        WelcomeScreen(state, actions)
         return
     }
 
     val stageScrollState = key(stage) { rememberScrollState() }
     val stageHeadingFocus = remember(stage) { FocusRequester() }
+    val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(stage) {
         stageHeadingFocus.requestFocus()
         stageScrollState.scrollTo(0)
     }
+    LaunchedEffect(state.initialOnboardingMessage) {
+        snackbarHostState.currentSnackbarData?.dismiss()
+        state.initialOnboardingMessage?.let { message ->
+            val result = snackbarHostState.showSnackbar(
+                message = message,
+                actionLabel = "Sign out",
+                duration = SnackbarDuration.Indefinite,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                actions.onSignOut()
+            }
+        }
+    }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
             .safeDrawingPadding(),
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .weight(1f)
+                .widthIn(max = 680.dp)
+                .fillMaxWidth()
+                .align(Alignment.CenterHorizontally)
+                .verticalScroll(stageScrollState)
+                .padding(horizontal = 20.dp)
+                .padding(top = 28.dp, bottom = 18.dp)
+                .semantics { paneTitle = stage.onboardingTitle() },
+            verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .widthIn(max = 680.dp)
-                    .fillMaxWidth()
-                    .align(Alignment.CenterHorizontally)
-                    .verticalScroll(stageScrollState)
-                    .padding(horizontal = 20.dp)
-                    .padding(top = 62.dp, bottom = 18.dp)
-                    .semantics { paneTitle = stage.onboardingTitle() },
-                verticalArrangement = Arrangement.spacedBy(22.dp),
-            ) {
-                OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
-                when (stage) {
-                    InitialOnboardingStage.Contact -> ContactChoices(
-                        avatars = onboarding.contactCard?.avatars.orEmpty(),
-                        selectedId = draft.avatarId,
-                        avatarPainters = contactAvatarPainters,
-                        onSelect = actions.onSelectInitialOnboardingAvatar,
-                    )
-                    InitialOnboardingStage.MainPersona -> PersonaChoices(
-                        personas = catalog.personas,
-                        selectedId = draft.mainPersonaId,
-                        onSelect = actions.onSelectInitialOnboardingMainPersona,
-                    )
-                    InitialOnboardingStage.SupportingPersona -> SupportingPersonaChoices(
-                        personas = catalog.personas,
-                        draft = draft,
-                        onSelect = actions.onSelectInitialOnboardingSupportingPersona,
-                    )
-                    InitialOnboardingStage.Voice -> VoiceChoices(
-                        personas = catalog.personas,
-                        voices = catalog.voices,
-                        draft = draft,
-                        loadingVoiceId = loadingVoiceId,
-                        previewingVoiceId = previewingVoiceId,
-                        onSelect = actions.onSelectInitialOnboardingVoice,
-                        onPreview = ::togglePreview,
-                    )
-                    InitialOnboardingStage.Tone -> Column(
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        catalog.tones.forEach { tone ->
-                            ChoiceCard(
-                                title = tone.label,
-                                description = tone.sample,
-                                icon = MurphIconKind.Quote,
-                                selected = draft.toneId == tone.id,
-                                onClick = { actions.onSelectInitialOnboardingTone(tone.id) },
-                            )
-                        }
-                    }
-                    InitialOnboardingStage.Welcome -> Unit
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MurphColors.Cream),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                HorizontalDivider(color = MurphColors.BorderWarm)
-                Column(
-                    modifier = Modifier
-                        .widthIn(max = 680.dp)
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+            OnboardingHeader(stage, draft, catalog.personas, stageHeadingFocus)
+            when (stage) {
+                InitialOnboardingStage.Contact -> ContactChoices(
+                    avatars = onboarding.contactCard?.avatars.orEmpty(),
+                    selectedId = draft.avatarId,
+                    avatarPainters = contactAvatarPainters,
+                    onSelect = actions.onSelectInitialOnboardingAvatar,
+                )
+                InitialOnboardingStage.MainPersona -> PersonaChoices(
+                    personas = catalog.personas,
+                    selectedId = draft.mainPersonaId,
+                    onSelect = actions.onSelectInitialOnboardingMainPersona,
+                )
+                InitialOnboardingStage.SupportingPersona -> SupportingPersonaChoices(
+                    personas = catalog.personas,
+                    draft = draft,
+                    onSelect = actions.onSelectInitialOnboardingSupportingPersona,
+                )
+                InitialOnboardingStage.Voice -> VoiceChoices(
+                    personas = catalog.personas,
+                    voices = catalog.voices,
+                    draft = draft,
+                    loadingVoiceId = loadingVoiceId,
+                    previewingVoiceId = previewingVoiceId,
+                    onSelect = actions.onSelectInitialOnboardingVoice,
+                    onPreview = ::togglePreview,
+                )
+                InitialOnboardingStage.Tone -> Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    state.initialOnboardingMessage?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MurphColors.Sienna,
-                            textAlign = TextAlign.Center,
-                        )
-                        MurphLinkButton(
-                            text = "Sign out and stop syncing",
-                            onClick = actions.onSignOut,
-                            enabled = !state.isInitialOnboardingSaving,
+                    catalog.tones.forEach { tone ->
+                        ChoiceCard(
+                            title = tone.label,
+                            description = tone.sample,
+                            icon = MurphIconKind.Quote,
+                            selected = draft.toneId == tone.id,
+                            onClick = { actions.onSelectInitialOnboardingTone(tone.id) },
                         )
                     }
-                    OnboardingFooter(stage, state.isInitialOnboardingSaving, actions)
                 }
+                InitialOnboardingStage.Welcome -> Unit
             }
         }
 
-        OnboardingSettingsBar(
-            onClick = onOpenSettings,
-            modifier = Modifier.align(Alignment.TopCenter),
-        )
-    }
-}
-
-@Composable
-private fun OnboardingSettingsBar(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .background(MurphColors.Cream),
-    ) {
-        Box(
+        SnackbarHost(
+            hostState = snackbarHostState,
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 8.dp)
-                .size(48.dp)
-                .clip(CircleShape)
-                .clickable(role = Role.Button, onClick = onClick)
-                .semantics { contentDescription = "Open Settings" },
-            contentAlignment = Alignment.Center,
-        ) {
-            MurphIcon(
-                kind = MurphIconKind.GearFilled,
-                modifier = Modifier.size(20.dp),
-                tint = MurphColors.Slate,
+                .widthIn(max = 680.dp)
+                .fillMaxWidth()
+                .align(Alignment.CenterHorizontally),
+        ) { snackbarData ->
+            Snackbar(
+                snackbarData = snackbarData,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(14.dp),
+                containerColor = MurphColors.Slate,
+                contentColor = MurphColors.Cream,
+                actionColor = MurphColors.Sand,
+                dismissActionContentColor = MurphColors.Sand,
             )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MurphColors.Cream),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            HorizontalDivider(color = MurphColors.BorderWarm)
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 680.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OnboardingFooter(stage, state.isInitialOnboardingSaving, actions)
+            }
         }
     }
 }
@@ -932,7 +915,7 @@ private fun OnboardingFooter(
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         MurphPrimaryButton(
@@ -961,7 +944,6 @@ private fun OnboardingFooter(
 private fun WelcomeScreen(
     state: AppUiState,
     actions: MurphActions,
-    onOpenSettings: () -> Unit,
 ) {
     val action = state.initialOnboarding?.contactAction
     BoxWithConstraints(
@@ -1034,10 +1016,6 @@ private fun WelcomeScreen(
                 )
             }
         }
-        OnboardingSettingsBar(
-            onClick = onOpenSettings,
-            modifier = Modifier.align(Alignment.TopCenter),
-        )
     }
 }
 

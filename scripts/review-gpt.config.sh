@@ -2,7 +2,6 @@
 
 review_gpt_config_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 review_gpt_repo_root="$(CDPATH= cd -- "$review_gpt_config_dir/.." && pwd -P)"
-source "$review_gpt_config_dir/repo-tools.config.sh"
 
 review_gpt_invalid_browser_lane() {
   echo "Error: unsupported ReviewGPT browser lane '$1'. Use random, eragon, phlebas, or mountain." >&2
@@ -143,14 +142,10 @@ managed_browser_port="${managed_browser_port:-$selected_port}"
 managed_browser_background_mode="${managed_browser_background_mode:-balanced}"
 export REVIEW_GPT_SELECTED_BROWSER_LANE="$selected_lane"
 
-name_prefix="murph-android-$selected_lane-chatgpt-audit"
-package_script="scripts/package-review-context.sh"
-repo_context_url=""
-attach_artifacts=1
-include_tests=1
-include_docs=1
+repo_context_url="https://github.com/cobuildwithus/murph-android"
+attach_artifacts=0
 preset_dir="scripts/chatgpt-review-presets"
-app_connector="current"
+app_connector="github"
 model="gpt-5.6-sol"
 thinking="current"
 

@@ -83,7 +83,10 @@ class ScreenshotFixtureTest {
         val now = Instant.parse("2026-08-06T12:00:00Z")
         val loading = ScreenshotScenario.from("onboardingLoading").appState(now)
         val error = ScreenshotScenario.from("onboardingError").appState(now)
+        val contactError = ScreenshotScenario.from("onboardingContactError").appState(now)
         val saving = ScreenshotScenario.from("onboardingSaving").appState(now)
+        val consentLoadFailure =
+            ScreenshotScenario.from("onboardingConsentLoadFailure").appState(now)
 
         assertEquals(AppPhase.Launching, loading.phase)
         assertNull(loading.initialOnboarding)
@@ -95,8 +98,14 @@ class ScreenshotFixtureTest {
         assertFalse(error.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingError.isInitialOnboarding())
         assertEquals(
-            "We couldn't save your setup yet. Your choices are still here. Try again.",
+            "Couldn't save. Try again.",
             error.initialOnboardingMessage,
+        )
+
+        assertEquals(InitialOnboardingStage.Contact, contactError.initialOnboardingStage)
+        assertEquals(
+            "We couldn't open the contact card. Check your connection and try again.",
+            contactError.initialOnboardingMessage,
         )
 
         assertEquals(AppPhase.Ready, saving.phase)
@@ -105,6 +114,14 @@ class ScreenshotFixtureTest {
         assertTrue(saving.isInitialOnboardingSaving)
         assertTrue(ScreenshotScenario.OnboardingSaving.isInitialOnboarding())
         assertNull(saving.initialOnboardingMessage)
+
+        assertNotNull(consentLoadFailure.initialOnboarding)
+        assertEquals(
+            LaunchConsentRecoveryPhase.LoadFailed,
+            consentLoadFailure.launchConsentRecovery?.phase,
+        )
+        assertTrue(requireNotNull(consentLoadFailure.launchConsentRecovery).showSheet)
+        assertTrue(ScreenshotScenario.OnboardingConsentLoadFailure.isInitialOnboarding())
     }
 
     @Test
