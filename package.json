@@ -13,6 +13,6 @@
     "review:verify": "bash scripts/verify-review-workflow.sh"
   },
   "devDependencies": {
-    "@cobuild/review-gpt": "0.5.114"
+    "@cobuild/review-gpt": "0.5.124"
   }
 }

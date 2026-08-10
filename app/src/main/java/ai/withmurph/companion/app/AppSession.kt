@@ -239,7 +239,9 @@ class AppSession(
             current.launchConsentRecovery != null ||
             current.isInitialOnboardingSaving
         ) return
-        _state.update { state -> state.copy(initialOnboardingStage = stage) }
+        _state.update { state ->
+            state.copy(initialOnboardingStage = stage, initialOnboardingMessage = null)
+        }
     }
 
     suspend fun skipInitialOnboarding() {
@@ -464,7 +466,7 @@ class AppSession(
                     authoritativeLocalAuth = error.observedState
                 } else {
                     publishInitialOnboardingFailure(
-                        "We couldn't save your setup yet. Your choices are still here. Try again.",
+                        "Couldn't save. Try again.",
                     )
                 }
             } catch (_: CompanionApiException.ConsentRequired) {
@@ -492,13 +494,13 @@ class AppSession(
                     publishTerminalMemberBoundaryFailure(error)
                 } else {
                     publishInitialOnboardingFailure(
-                        "We couldn't save your setup yet. Your choices are still here. Try again.",
+                        "Couldn't save. Try again.",
                     )
                 }
             } catch (_: Exception) {
                 if (ownsInitialOnboardingRequest(memberKey, epoch, generation)) {
                     publishInitialOnboardingFailure(
-                        "We couldn't save your setup yet. Your choices are still here. Try again.",
+                        "Couldn't save. Try again.",
                     )
                 }
             } finally {
@@ -3905,7 +3907,10 @@ class AppSession(
 
     private fun publishInitialOnboardingFailure(message: String) {
         _state.update {
-            it.copy(isInitialOnboardingSaving = false, initialOnboardingMessage = message)
+            it.copy(
+                isInitialOnboardingSaving = false,
+                initialOnboardingMessage = message,
+            )
         }
     }
 

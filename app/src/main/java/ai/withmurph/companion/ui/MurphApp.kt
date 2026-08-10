@@ -141,7 +141,7 @@ internal fun readyAppShellState(
     hasInitialOnboarding: Boolean = false,
     hasLaunchConsentRecovery: Boolean = false,
 ): ReadyAppShellState {
-    val activeTab = selectedTab
+    val activeTab = if (hasInitialOnboarding) AppTab.Home else selectedTab
     val showsInitialOnboarding =
         activeTab == AppTab.Home &&
             hasInitialOnboarding &&
@@ -156,7 +156,7 @@ internal fun readyAppShellState(
                 !healthReconnectRequired &&
                 !hasInitialOnboarding &&
                 activeTab == AppTab.Home,
-        showsTabBar = !showsInitialOnboarding,
+        showsTabBar = !hasInitialOnboarding,
     )
 }
 
@@ -341,7 +341,6 @@ private fun ReadyApp(
                             InitialOnboardingScreen(
                                 state = state,
                                 actions = actions,
-                                onOpenSettings = { selectedTab = AppTab.Settings },
                                 contactAvatarPainters = initialOnboardingContactAvatarPainters,
                             )
                         } else {
@@ -432,6 +431,7 @@ private fun ReadyApp(
                 onAccept = actions.onAcceptLaunchConsent,
                 onRetry = actions.onRetryLaunchConsent,
                 onDismiss = actions.onDismissLaunchConsent,
+                onSignOut = if (state.initialOnboarding != null) actions.onSignOut else null,
                 onOpenDocument = actions.onOpenConsentDocument,
             )
         }
@@ -688,6 +688,7 @@ private fun LaunchConsentRecoveryContent(
     onAccept: () -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
+    onSignOut: (() -> Unit)?,
     onOpenDocument: (String) -> Unit,
 ) {
     val status = recovery.status
@@ -798,12 +799,14 @@ private fun LaunchConsentRecoveryContent(
                     }
                 }
 
+                val secondaryActionText = if (onSignOut == null) "Not now" else "Sign out"
+                val secondaryAction = onSignOut ?: onDismiss
                 when (recovery.phase) {
                     LaunchConsentRecoveryPhase.LoadFailed -> {
                         MurphPrimaryButton("Try again", onRetry)
                         MurphLinkButton(
-                            text = "Not now",
-                            onClick = onDismiss,
+                            text = secondaryActionText,
+                            onClick = secondaryAction,
                             modifier = Modifier.align(Alignment.CenterHorizontally),
                         )
                     }
@@ -814,8 +817,8 @@ private fun LaunchConsentRecoveryContent(
                             enabled = recovery.canAccept || status?.launchGranted == true,
                         )
                         MurphLinkButton(
-                            text = "Not now",
-                            onClick = onDismiss,
+                            text = secondaryActionText,
+                            onClick = secondaryAction,
                             modifier = Modifier.align(Alignment.CenterHorizontally),
                         )
                     }

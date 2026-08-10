@@ -1216,7 +1216,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun failedInitialOnboardingSaveRetainsDraftAndOffersFullSignOut() = runTest {
+    fun failedInitialOnboardingSaveRetainsDraftAndPublishesRetryMessage() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding = pendingInitialOnboarding()
         fixture.session.start()
@@ -1226,7 +1226,30 @@ class AppSessionTest {
         fixture.session.saveInitialOnboarding()
 
         assertEquals("coach", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
-        assertTrue(fixture.session.state.value.initialOnboardingMessage.orEmpty().contains("choices"))
+        assertEquals(
+            "Couldn't save. Try again.",
+            fixture.session.state.value.initialOnboardingMessage,
+        )
+        assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
+    }
+
+    @Test
+    fun failedInitialOnboardingSkipRetainsDraftAndPublishesRetryMessage() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.session.selectInitialOnboardingMainPersona("coach")
+        fixture.api.initialOnboardingCompletionError = CompanionApiException.Network
+
+        fixture.session.skipInitialOnboarding()
+
+        val request = fixture.api.initialOnboardingCompletions.single().second
+        assertEquals(InitialOnboardingCompletionAction.Skip, request.action)
+        assertEquals("coach", fixture.session.state.value.initialOnboardingDraft?.mainPersonaId)
+        assertEquals(
+            "Couldn't save. Try again.",
+            fixture.session.state.value.initialOnboardingMessage,
+        )
         assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
     }
 
@@ -1346,6 +1369,26 @@ class AppSessionTest {
     }
 
     @Test
+    fun failedContactCardHandoffPublishesRetryMessage() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = pendingInitialOnboarding()
+        fixture.session.start()
+        fixture.api.initialOnboardingContactCardError = CompanionApiException.Network
+
+        fixture.session.prepareInitialOnboardingContactCard()
+        val event = fixture.session.state.value.initialOnboardingContactCardHandoff!!
+        assertFalse(fixture.session.launchInitialOnboardingContactCardHandoff(event.id) { true })
+
+        assertEquals(InitialOnboardingStage.Contact, fixture.session.state.value.initialOnboardingStage)
+        assertTrue(fixture.session.state.value.initialOnboardingMessage.orEmpty().contains("contact card"))
+        assertNull(fixture.session.state.value.initialOnboardingContactCardHandoff)
+        assertFalse(fixture.session.state.value.isInitialOnboardingSaving)
+
+        fixture.session.setInitialOnboardingStage(InitialOnboardingStage.MainPersona)
+        assertNull(fixture.session.state.value.initialOnboardingMessage)
+    }
+
+    @Test
     fun failedContactCardMemberBoundaryResetReleasesSavingState() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding = pendingInitialOnboarding()
@@ -1429,6 +1472,7 @@ class AppSessionTest {
         assertTrue(fixture.api.initialOnboardingContactCards.isEmpty())
         assertNull(fixture.session.state.value.initialOnboardingContactCardHandoff)
         assertEquals(InitialOnboardingStage.Contact, fixture.session.state.value.initialOnboardingStage)
+        assertTrue(fixture.session.state.value.initialOnboardingMessage.orEmpty().contains("verify your session"))
     }
 
     @Test

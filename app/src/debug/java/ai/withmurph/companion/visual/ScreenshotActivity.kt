@@ -63,6 +63,8 @@ class ScreenshotActivity : ComponentActivity() {
         private set
     internal var consumedOpenSettingsRequestCount = 0
         private set
+    internal var signOutRequests = 0
+        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +103,9 @@ class ScreenshotActivity : ComponentActivity() {
                                 consumedOpenSettingsRequestCount += 1
                             }
                         },
-                        actions = NoOpActions,
+                        actions = NoOpActions.copy(
+                            onSignOut = { signOutRequests += 1 },
+                        ),
                         initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
                     )
                 }
@@ -161,10 +165,13 @@ internal enum class ScreenshotScenario {
     OnboardingSupporting,
     OnboardingVoice,
     OnboardingTone,
+    OnboardingContactError,
     OnboardingError,
     OnboardingSaving,
     OnboardingWelcome,
     OnboardingConsentBanner,
+    OnboardingConsentRequired,
+    OnboardingConsentLoadFailure,
     OnboardingReconnectRequired,
     FriendlyNames,
     FriendlyNamesReconnectRequired,
@@ -239,9 +246,13 @@ internal enum class ScreenshotScenario {
         OnboardingSupporting -> onboardingState(InitialOnboardingStage.SupportingPersona)
         OnboardingVoice -> onboardingState(InitialOnboardingStage.Voice)
         OnboardingTone -> onboardingState(InitialOnboardingStage.Tone)
+        OnboardingContactError -> onboardingState(InitialOnboardingStage.Contact).copy(
+            initialOnboardingMessage =
+                "We couldn't open the contact card. Check your connection and try again.",
+        )
         OnboardingError -> onboardingState(InitialOnboardingStage.Tone).copy(
             initialOnboardingMessage =
-                "We couldn't save your setup yet. Your choices are still here. Try again.",
+                "Couldn't save. Try again.",
         )
         OnboardingSaving -> onboardingState(InitialOnboardingStage.Tone).copy(
             isInitialOnboardingSaving = true,
@@ -254,6 +265,22 @@ internal enum class ScreenshotScenario {
                 phase = LaunchConsentRecoveryPhase.Required,
                 status = consentStatus(),
                 showSheet = false,
+            ),
+        )
+        OnboardingConsentRequired -> onboardingState(InitialOnboardingStage.MainPersona).copy(
+            launchConsentRecovery = LaunchConsentRecoveryUiState(
+                phase = LaunchConsentRecoveryPhase.Required,
+                status = consentStatus(),
+                message = "Murph couldn't save consent. Check your connection and try again.",
+                showSheet = true,
+            ),
+        )
+        OnboardingConsentLoadFailure -> onboardingState(InitialOnboardingStage.MainPersona).copy(
+            launchConsentRecovery = LaunchConsentRecoveryUiState(
+                phase = LaunchConsentRecoveryPhase.LoadFailed,
+                message =
+                    "Murph couldn't load the latest consent documents. Check your connection and try again.",
+                showSheet = true,
             ),
         )
         OnboardingReconnectRequired -> onboardingState(InitialOnboardingStage.MainPersona).copy(
@@ -338,10 +365,13 @@ internal enum class ScreenshotScenario {
         OnboardingSupporting,
         OnboardingVoice,
         OnboardingTone,
+        OnboardingContactError,
         OnboardingError,
         OnboardingSaving,
         OnboardingWelcome,
         OnboardingConsentBanner,
+        OnboardingConsentRequired,
+        OnboardingConsentLoadFailure,
         OnboardingReconnectRequired,
         FriendlyNames,
     FriendlyNamesReconnectRequired,
@@ -360,10 +390,13 @@ internal enum class ScreenshotScenario {
         OnboardingSupporting,
         OnboardingVoice,
         OnboardingTone,
+        OnboardingContactError,
         OnboardingError,
         OnboardingSaving,
         OnboardingWelcome,
         OnboardingConsentBanner,
+        OnboardingConsentRequired,
+        OnboardingConsentLoadFailure,
         OnboardingReconnectRequired -> true
         else -> false
     }

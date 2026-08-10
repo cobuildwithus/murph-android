@@ -167,7 +167,7 @@ class MurphAppShellStateTest {
     }
 
     @Test
-    fun initialOnboardingKeepsSettingsReachableWithoutShowingItsBanner() {
+    fun initialOnboardingOwnsTheShellWhenSettingsWasSelected() {
         val shell = readyAppShellState(
             selectedTab = AppTab.Settings,
             initialSetupStep = InitialSetupStep.FriendlyNames,
@@ -175,10 +175,10 @@ class MurphAppShellStateTest {
             hasInitialOnboarding = true,
         )
 
-        assertEquals(AppTab.Settings, shell.activeTab)
-        assertFalse(shell.showsInitialOnboarding)
+        assertEquals(AppTab.Home, shell.activeTab)
+        assertTrue(shell.showsInitialOnboarding)
         assertFalse(shell.showsFriendlyNamesSetup)
-        assertTrue(shell.showsTabBar)
+        assertFalse(shell.showsTabBar)
     }
 
     @Test
@@ -197,9 +197,9 @@ class MurphAppShellStateTest {
     }
 
     @Test
-    fun retainedOnboardingConsentRecoveryRestoresTheAuthenticatedShell() {
+    fun retainedOnboardingConsentRecoveryKeepsTheOnboardingShell() {
         val shell = readyAppShellState(
-            selectedTab = AppTab.Home,
+            selectedTab = AppTab.Settings,
             initialSetupStep = InitialSetupStep.FriendlyNames,
             healthReconnectRequired = false,
             hasInitialOnboarding = true,
@@ -210,13 +210,13 @@ class MurphAppShellStateTest {
         assertFalse(shell.showsInitialOnboarding)
         assertFalse(shell.showsReconnect)
         assertFalse(shell.showsFriendlyNamesSetup)
-        assertTrue(shell.showsTabBar)
+        assertFalse(shell.showsTabBar)
     }
 
     @Test
-    fun retainedOnboardingReconnectRestoresTheAuthenticatedShell() {
+    fun retainedOnboardingReconnectKeepsTheOnboardingShell() {
         val shell = readyAppShellState(
-            selectedTab = AppTab.Home,
+            selectedTab = AppTab.Settings,
             initialSetupStep = InitialSetupStep.FriendlyNames,
             healthReconnectRequired = true,
             hasInitialOnboarding = true,
@@ -226,7 +226,7 @@ class MurphAppShellStateTest {
         assertFalse(shell.showsInitialOnboarding)
         assertTrue(shell.showsReconnect)
         assertFalse(shell.showsFriendlyNamesSetup)
-        assertTrue(shell.showsTabBar)
+        assertFalse(shell.showsTabBar)
     }
 
     @Test

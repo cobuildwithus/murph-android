@@ -138,14 +138,17 @@ The repository includes the same pinned, managed-browser ReviewGPT workflow as
 pnpm install --frozen-lockfile
 pnpm review:verify
 pnpm review:gpt android-review --wait \
+  --no-zip \
+  --connector github \
   --response-marker ANDROID_REVIEW_COMPLETE \
   --response-file output-packages/android-review-response.md \
   --prompt "Review exact committed head: $(git rev-parse HEAD)"
 ```
 
-Review the exact committed head with a clean worktree. Resolve accepted
-findings, rerun Android verification, commit the remediation, and repeat until
-the response reports `REVIEW_OUTCOME: PASS`.
+ReviewGPT reads the repository through the GitHub connector; it does not build
+or upload a repository ZIP. Review the exact committed head with a clean
+worktree. Resolve accepted findings, rerun Android verification, commit the
+remediation, and repeat until the response reports `REVIEW_OUTCOME: PASS`.
 
 ## Data requested
 
