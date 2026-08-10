@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,6 +87,31 @@ class ScreenshotScenarioSmokeTest {
             onAllNodesWithText("Not now").assertCountEquals(0)
             onAllNodesWithText("Settings").assertCountEquals(0)
         }
+
+    @Test
+    fun onboardingRequiredConsentOffersAndInvokesSignOutWithoutSettings() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "onboardingConsentRequired")
+
+        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.waitForIdle()
+            compose.onNodeWithText(
+                "Murph couldn't save consent. Check your connection and try again.",
+            ).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Sign out")
+                .performScrollTo()
+                .assertIsDisplayed()
+                .assertHasClickAction()
+                .performClick()
+            compose.waitForIdle()
+            compose.onAllNodesWithText("Not now").assertCountEquals(0)
+            compose.onAllNodesWithText("Settings").assertCountEquals(0)
+            scenario.onActivity { activity ->
+                assertEquals(1, activity.signOutRequests)
+            }
+        }
+    }
 
     @Test
     fun onboardingReconnectDoesNotExposeSettings() =

@@ -799,12 +799,14 @@ private fun LaunchConsentRecoveryContent(
                     }
                 }
 
+                val secondaryActionText = if (onSignOut == null) "Not now" else "Sign out"
+                val secondaryAction = onSignOut ?: onDismiss
                 when (recovery.phase) {
                     LaunchConsentRecoveryPhase.LoadFailed -> {
                         MurphPrimaryButton("Try again", onRetry)
                         MurphLinkButton(
-                            text = if (onSignOut == null) "Not now" else "Sign out",
-                            onClick = onSignOut ?: onDismiss,
+                            text = secondaryActionText,
+                            onClick = secondaryAction,
                             modifier = Modifier.align(Alignment.CenterHorizontally),
                         )
                     }
@@ -815,8 +817,8 @@ private fun LaunchConsentRecoveryContent(
                             enabled = recovery.canAccept || status?.launchGranted == true,
                         )
                         MurphLinkButton(
-                            text = "Not now",
-                            onClick = onDismiss,
+                            text = secondaryActionText,
+                            onClick = secondaryAction,
                             modifier = Modifier.align(Alignment.CenterHorizontally),
                         )
                     }

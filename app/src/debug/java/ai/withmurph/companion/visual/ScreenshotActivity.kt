@@ -63,6 +63,8 @@ class ScreenshotActivity : ComponentActivity() {
         private set
     internal var consumedOpenSettingsRequestCount = 0
         private set
+    internal var signOutRequests = 0
+        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +103,9 @@ class ScreenshotActivity : ComponentActivity() {
                                 consumedOpenSettingsRequestCount += 1
                             }
                         },
-                        actions = NoOpActions,
+                        actions = NoOpActions.copy(
+                            onSignOut = { signOutRequests += 1 },
+                        ),
                         initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
                     )
                 }
@@ -166,6 +170,7 @@ internal enum class ScreenshotScenario {
     OnboardingSaving,
     OnboardingWelcome,
     OnboardingConsentBanner,
+    OnboardingConsentRequired,
     OnboardingConsentLoadFailure,
     OnboardingReconnectRequired,
     FriendlyNames,
@@ -260,6 +265,14 @@ internal enum class ScreenshotScenario {
                 phase = LaunchConsentRecoveryPhase.Required,
                 status = consentStatus(),
                 showSheet = false,
+            ),
+        )
+        OnboardingConsentRequired -> onboardingState(InitialOnboardingStage.MainPersona).copy(
+            launchConsentRecovery = LaunchConsentRecoveryUiState(
+                phase = LaunchConsentRecoveryPhase.Required,
+                status = consentStatus(),
+                message = "Murph couldn't save consent. Check your connection and try again.",
+                showSheet = true,
             ),
         )
         OnboardingConsentLoadFailure -> onboardingState(InitialOnboardingStage.MainPersona).copy(
@@ -357,6 +370,7 @@ internal enum class ScreenshotScenario {
         OnboardingSaving,
         OnboardingWelcome,
         OnboardingConsentBanner,
+        OnboardingConsentRequired,
         OnboardingConsentLoadFailure,
         OnboardingReconnectRequired,
         FriendlyNames,
@@ -381,6 +395,7 @@ internal enum class ScreenshotScenario {
         OnboardingSaving,
         OnboardingWelcome,
         OnboardingConsentBanner,
+        OnboardingConsentRequired,
         OnboardingConsentLoadFailure,
         OnboardingReconnectRequired -> true
         else -> false
