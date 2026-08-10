@@ -4751,8 +4751,7 @@ class AppSessionTest {
         val preSyncStatusGate = CompletableDeferred<Unit>()
         fixture.api.statusGate = preSyncStatusGate
         fixture.api.statusGateOnCall = 1
-        fixture.health.syncError = IllegalStateException("vendor sync failed")
-        fixture.health.syncErrorOnCall = 1
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
 
         val startup = async { fixture.session.start() }
         fixture.api.statusGateEntered.await()
@@ -4764,7 +4763,7 @@ class AppSessionTest {
         foreground.await()
 
         assertEquals(2, fixture.health.syncCalls)
-        assertEquals(4, fixture.api.statusSources.size)
+        assertEquals(2, fixture.api.statusSources.size)
         assertFalse(fixture.session.state.value.healthStatusIsStale)
     }
 
@@ -7509,7 +7508,7 @@ class AppSessionTest {
             }
         }
         assertTrue(fixture.session.prepareHealthConnection())
-        fixture.health.syncError = IllegalStateException("vendor sync failed")
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
         assertTrue(fixture.session.completeHealthPermissionFlow(true))
 
         assertEquals(
@@ -7536,7 +7535,7 @@ class AppSessionTest {
                 "activity" to CompanionSyncStatus.ResourceStatus(advancedReceipt),
             ),
         )
-        fixture.health.syncError = null
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
         fixture.session.syncNow()
 
         assertEquals(
@@ -7576,7 +7575,7 @@ class AppSessionTest {
             }
         }
         assertTrue(fixture.session.prepareHealthConnection())
-        fixture.health.syncError = IllegalStateException("vendor sync failed")
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
         assertTrue(fixture.session.completeHealthPermissionFlow(true))
 
         assertEquals(null, fixture.localState.healthReceiptBaselineAt)
@@ -7613,7 +7612,7 @@ class AppSessionTest {
                 "activity" to CompanionSyncStatus.ResourceStatus(qualifyingReceipt),
             ),
         )
-        fixture.health.syncError = null
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
         replacement.retry()
         assertEquals(
             HealthSyncState.Synced(qualifyingReceipt),
@@ -7870,6 +7869,91 @@ class AppSessionTest {
         assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
         assertTrue(replacement.state.value.healthReconnectRequired)
         assertFalse(replacement.state.value.healthSync is HealthSyncState.Synced)
+    }
+
+    @Test
+    fun notStartedSyncDoesNotPersistOwnersOrRepeatFailingGrantDiscovery() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = completedHealthFixture()
+        val grantedKeyCalls = fixture.health.grantedResourceKeyCalls
+        fixture.health.grantedResourceKeysError = IllegalStateException("grant discovery failed")
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+
+        fixture.session.syncNow()
+
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(grantedKeyCalls, fixture.health.grantedResourceKeyCalls)
+        assertEquals(
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        val sleepReceipt = now.plusSeconds(60)
+        fixture.api.status = CompanionSyncStatus(
+            sleepReceipt,
+            now.plusSeconds(120),
+            mapOf("sleep" to CompanionSyncStatus.ResourceStatus(sleepReceipt)),
+        )
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        fixture.session.syncNow()
+
+        assertEquals(HealthSyncState.Synced(sleepReceipt), fixture.session.state.value.healthSync)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(grantedKeyCalls, fixture.health.grantedResourceKeyCalls)
+    }
+
+    @Test
+    fun notStartedPostSetupAndForegroundAttemptsStayTransient() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        val syncCalls = fixture.health.syncCalls
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry.",
+            fixture.session.state.value.healthMessage,
+        )
+    }
+
+    @Test
+    fun unclassifiedPostEnqueueFailureDurablyRequiresReconnect() = runTest {
+        val fixture = completedHealthFixture()
+        val signOutCalls = fixture.health.signOutCalls
+        fixture.health.syncResult = HealthSyncAttemptResult.ReconnectRequired
+
+        fixture.session.syncNow()
+
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(
+            "Health Connect needs to reconnect before syncing can resume.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+        assertTrue(replacement.state.value.healthReconnectRequired)
     }
 
     private suspend fun assertPermissionRecoveryFailureRollsBack(configureFails: Boolean) {
@@ -8699,6 +8783,8 @@ class AppSessionTest {
         var signOutCalls = 0
         var grantedCount = 0
         var actualGrantedCount: Int? = null
+        var grantedResourceKeyCalls = 0
+        var grantedResourceKeysError: Throwable? = null
         var grantedKeys = setOf(
             "activity",
             "sleep",
@@ -8757,8 +8843,11 @@ class AppSessionTest {
             configureError?.let { throw it }
         }
         override fun grantedResourceCount(): Int = grantedCount
-        override fun grantedResourceKeys(): Set<String> =
-            if (grantedCount == 0) emptySet() else grantedKeys
+        override fun grantedResourceKeys(): Set<String> {
+            grantedResourceKeyCalls += 1
+            grantedResourceKeysError?.let { throw it }
+            return if (grantedCount == 0) emptySet() else grantedKeys
+        }
 
         override fun revokeUnpromotedSyncLaunch() {
             revokeUnpromotedSyncLaunchCalls += 1

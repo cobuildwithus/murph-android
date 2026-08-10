@@ -214,6 +214,8 @@ private val TEMPERATURE_BACKEND_RECEIPT_KEYS =
 
 sealed interface HealthSyncAttemptResult {
     data object Complete : HealthSyncAttemptResult
+    data object NotStarted : HealthSyncAttemptResult
+    data object ReconnectRequired : HealthSyncAttemptResult
 
     data class PartialFailure(val resourceKeys: Set<String>) : HealthSyncAttemptResult {
         init {

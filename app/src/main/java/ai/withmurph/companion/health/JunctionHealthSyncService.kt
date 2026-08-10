@@ -3,6 +3,7 @@ package ai.withmurph.companion.health
 import android.content.Context
 import android.content.Intent
 import androidx.health.connect.client.HealthConnectClient
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
@@ -108,6 +109,44 @@ internal fun backendFailureOwnerKeyFor(resource: VitalResource): String = when (
     VitalResource.Temperature -> TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
     VitalResource.Meal -> "meal"
 }
+
+internal data class VitalStarterWorkEvidence(
+    val id: java.util.UUID,
+    val state: WorkInfo.State,
+    val failedResources: Set<VitalResource>?,
+)
+
+internal fun healthSyncResultForStarterEvidence(
+    workEvidence: List<VitalStarterWorkEvidence>,
+    existingStarterIds: Set<java.util.UUID>,
+): HealthSyncAttemptResult {
+    val newStarterWork = workEvidence.filter { it.id !in existingStarterIds }
+    if (newStarterWork.isEmpty()) return HealthSyncAttemptResult.NotStarted
+    val starter = newStarterWork.singleOrNull()
+        ?: return HealthSyncAttemptResult.ReconnectRequired
+    return when {
+        starter.state == WorkInfo.State.SUCCEEDED -> HealthSyncAttemptResult.Complete
+        starter.state == WorkInfo.State.FAILED && starter.failedResources != null ->
+            HealthSyncAttemptResult.PartialFailure(
+                starter.failedResources.mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor),
+            )
+        else -> HealthSyncAttemptResult.ReconnectRequired
+    }
+}
+
+internal fun healthSyncResultForNewStarterWork(
+    workInfos: List<WorkInfo>,
+    existingStarterIds: Set<java.util.UUID>,
+): HealthSyncAttemptResult = healthSyncResultForStarterEvidence(
+    workEvidence = workInfos.map { workInfo ->
+        VitalStarterWorkEvidence(
+            id = workInfo.id,
+            state = workInfo.state,
+            failedResources = vitalFailedResources(workInfo.outputData),
+        )
+    },
+    existingStarterIds = existingStarterIds,
+)
 
 internal fun healthPermissionRequestResult(
     activeResources: Set<VitalResource>,
@@ -225,46 +264,90 @@ class JunctionHealthSyncService(
         // An upgrade can inherit durable all-granted work enqueued by Vital's public
         // unpause setter. Retire every pinned chain before evaluating the exact set,
         // including when the new configured-and-granted intersection is empty.
-        cancelAndAwaitVitalWork()
-        val resources = configuredHealthConnectReadResources(
-            manager.resourcesWithReadPermission(),
-        )
-        if (resources.isEmpty()) return HealthSyncAttemptResult.Complete
-        val workManager = WorkManager.getInstance(appContext)
-        val existingStarterIds = workManager
-            .getWorkInfosForUniqueWork(vitalResourceSyncStarter)
-            .await()
-            .mapTo(mutableSetOf()) { it.id }
-        VitalHealthWorkerLease.openFor(expectedMemberKey)
-        var launchRejected = false
+        val preparation = try {
+            cancelAndAwaitVitalWork()
+            val resources = configuredHealthConnectReadResources(
+                manager.resourcesWithReadPermission(),
+            )
+            if (resources.isEmpty()) return HealthSyncAttemptResult.Complete
+            val workManager = WorkManager.getInstance(appContext)
+            val existingStarterIds = workManager
+                .getWorkInfosForUniqueWork(vitalResourceSyncStarter)
+                .await()
+                .mapTo(mutableSetOf()) { it.id }
+            PreparedHealthSync(workManager, existingStarterIds, resources)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return HealthSyncAttemptResult.NotStarted
+        }
+
         try {
-            setManualSyncPaused(false)
+            VitalHealthWorkerLease.openFor(expectedMemberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return HealthSyncAttemptResult.NotStarted
+        }
+
+        var launchRejected = false
+        var syncInvocationBegan = false
+        var manualGateOpened = false
+        var outcome: HealthSyncAttemptResult = HealthSyncAttemptResult.NotStarted
+        var cleanupFailure: Throwable? = null
+        try {
             try {
-                manager.syncData(resources = resources)
+                setManualSyncPaused(false)
+                manualGateOpened = true
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: Exception) {
-                if (VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)) {
-                    throw HealthSyncForegroundLaunchRejectedException()
-                }
-                partialFailureResult(workManager, existingStarterIds)?.let { return it }
-                throw error
+            } catch (_: Exception) {
+                outcome = HealthSyncAttemptResult.NotStarted
             }
-            launchRejected = VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
-            partialFailureResult(workManager, existingStarterIds)?.let { return it }
+
+            if (manualGateOpened) {
+                // Only enter the SDK after the manual gate is durably open.
+                syncInvocationBegan = true
+                outcome = try {
+                    manager.syncData(resources = preparation.resources)
+                    launchRejected =
+                        VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+                    syncResultFromCurrentStarterWork(preparation)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    launchRejected =
+                        VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+                    if (launchRejected) {
+                        HealthSyncAttemptResult.NotStarted
+                    } else {
+                        syncResultFromCurrentStarterWork(preparation)
+                    }
+                }
+            }
         } catch (error: CancellationException) {
             throw error
         } finally {
             withContext(NonCancellable) {
                 try {
                     cancelAndAwaitVitalWork()
+                } catch (error: Exception) {
+                    cleanupFailure = error
                 } finally {
                     VitalHealthWorkerLease.closeFor(expectedMemberKey)
                 }
             }
         }
+        cleanupFailure?.let { error ->
+            if (error is CancellationException) throw error
+            outcome = if (syncInvocationBegan) {
+                HealthSyncAttemptResult.ReconnectRequired
+            } else {
+                HealthSyncAttemptResult.NotStarted
+            }
+        }
         if (launchRejected) throw HealthSyncForegroundLaunchRejectedException()
-        return HealthSyncAttemptResult.Complete
+        return outcome
     }
 
     override fun grantedResourceCount(): Int =
@@ -330,18 +413,26 @@ class JunctionHealthSyncService(
         VitalHealthWorkerLease.awaitNoActiveExecutions()
     }
 
-    private suspend fun partialFailureResult(
-        workManager: WorkManager,
-        existingStarterIds: Set<java.util.UUID>,
-    ): HealthSyncAttemptResult.PartialFailure? {
-        val failedResources = newVitalStarterFailedResources(
-            workInfos = workManager.getWorkInfosForUniqueWork(vitalResourceSyncStarter).await(),
-            existingIds = existingStarterIds,
-        ) ?: return null
-        return HealthSyncAttemptResult.PartialFailure(
-            failedResources.mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor),
+    private suspend fun syncResultFromCurrentStarterWork(
+        preparation: PreparedHealthSync,
+    ): HealthSyncAttemptResult = try {
+        healthSyncResultForNewStarterWork(
+            workInfos = preparation.workManager
+                .getWorkInfosForUniqueWork(vitalResourceSyncStarter)
+                .await(),
+            existingStarterIds = preparation.existingStarterIds,
         )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        HealthSyncAttemptResult.ReconnectRequired
     }
+
+    private data class PreparedHealthSync(
+        val workManager: WorkManager,
+        val existingStarterIds: Set<java.util.UUID>,
+        val resources: Set<VitalResource>,
+    )
 }
 
 private fun createVitalManagerAfterGuardedWorkManager(

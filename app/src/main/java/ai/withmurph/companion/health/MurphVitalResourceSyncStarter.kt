@@ -59,14 +59,6 @@ internal fun vitalFailedResources(outputData: Data): Set<VitalResource>? =
         }
         ?.takeIf { it.isNotEmpty() }
 
-internal fun newVitalStarterFailedResources(
-    workInfos: List<WorkInfo>,
-    existingIds: Set<java.util.UUID>,
-): Set<VitalResource>? = workInfos
-    .filter { it.id !in existingIds && it.state == WorkInfo.State.FAILED }
-    .mapNotNull { vitalFailedResources(it.outputData) }
-    .singleOrNull()
-
 internal fun vitalDataSyncForegroundServiceType(): Int =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC

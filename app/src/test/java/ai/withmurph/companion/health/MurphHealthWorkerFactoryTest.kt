@@ -2,6 +2,7 @@ package ai.withmurph.companion.health
 
 import androidx.work.Data
 import androidx.work.WorkInfo
+import ai.withmurph.companion.core.HealthSyncAttemptResult
 import io.tryvital.vitalhealthcore.model.VitalResource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -200,6 +201,70 @@ class MurphHealthWorkerFactoryTest {
             healthConnectReadResources.filterTo(linkedSetOf()) {
                 backendFailureOwnerKeyFor(it).isNotEmpty()
             },
+        )
+    }
+
+    @Test
+    fun starterEvidenceSeparatesNotStartedPartialCompleteAndReconnectOutcomes() {
+        val existingId = java.util.UUID.randomUUID()
+        val currentId = java.util.UUID.randomUUID()
+        val existing = setOf(existingId)
+        val prior = VitalStarterWorkEvidence(
+            existingId,
+            WorkInfo.State.SUCCEEDED,
+            failedResources = null,
+        )
+
+        assertEquals(
+            HealthSyncAttemptResult.NotStarted,
+            healthSyncResultForStarterEvidence(listOf(prior), existing),
+        )
+        assertEquals(
+            HealthSyncAttemptResult.PartialFailure(setOf("sleep")),
+            healthSyncResultForStarterEvidence(
+                listOf(
+                    prior,
+                    VitalStarterWorkEvidence(
+                        currentId,
+                        WorkInfo.State.FAILED,
+                        failedResources = setOf(VitalResource.Sleep),
+                    ),
+                ),
+                existing,
+            ),
+        )
+        assertEquals(
+            HealthSyncAttemptResult.Complete,
+            healthSyncResultForStarterEvidence(
+                listOf(prior, VitalStarterWorkEvidence(currentId, WorkInfo.State.SUCCEEDED, null)),
+                existing,
+            ),
+        )
+        assertEquals(
+            HealthSyncAttemptResult.ReconnectRequired,
+            healthSyncResultForStarterEvidence(
+                listOf(prior, VitalStarterWorkEvidence(currentId, WorkInfo.State.CANCELLED, null)),
+                existing,
+            ),
+        )
+        assertEquals(
+            HealthSyncAttemptResult.ReconnectRequired,
+            healthSyncResultForStarterEvidence(
+                listOf(
+                    prior,
+                    VitalStarterWorkEvidence(
+                        currentId,
+                        WorkInfo.State.FAILED,
+                        failedResources = setOf(VitalResource.Sleep),
+                    ),
+                    VitalStarterWorkEvidence(
+                        java.util.UUID.randomUUID(),
+                        WorkInfo.State.SUCCEEDED,
+                        failedResources = null,
+                    ),
+                ),
+                existing,
+            ),
         )
     }
 

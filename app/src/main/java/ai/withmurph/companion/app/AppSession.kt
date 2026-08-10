@@ -37,7 +37,6 @@ import ai.withmurph.companion.core.NoopHealthSyncReminderLifecycle
 import ai.withmurph.companion.core.PendingHealthSyncFailure
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
-import ai.withmurph.companion.core.UNKNOWN_HEALTH_RESOURCE_KEY
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -3258,6 +3257,24 @@ class AppSession(
             try {
                 when (val result = health.syncAllGrantedResources(syncMemberKey)) {
                     HealthSyncAttemptResult.Complete -> syncSucceeded = true
+                    HealthSyncAttemptResult.NotStarted -> {
+                        _state.update { current ->
+                            current.copy(
+                                healthMessage = if (
+                                    localState.pendingHealthSyncFailure == null
+                                ) {
+                                    HEALTH_SYNC_NOT_STARTED_MESSAGE
+                                } else {
+                                    HEALTH_PARTIAL_SYNC_MESSAGE
+                                },
+                            )
+                        }
+                        return false
+                    }
+                    HealthSyncAttemptResult.ReconnectRequired -> {
+                        requireHealthReconnectAfterUnclassifiedSyncFailure()
+                        return false
+                    }
                     is HealthSyncAttemptResult.PartialFailure -> {
                         if (
                             !recordPendingHealthSyncFailure(
@@ -3278,15 +3295,8 @@ class AppSession(
             } catch (_: Exception) {
                 if (!ownsVerifiedHealthWork(epoch)) return false
                 if (!health.isSignedIn()) return true
-                if (
-                    !recordPendingHealthSyncFailure(
-                        resourceKeys = health.grantedResourceKeys().ifEmpty {
-                            setOf(UNKNOWN_HEALTH_RESOURCE_KEY)
-                        },
-                        receiptFloorAt = preSyncStatus.observedAt,
-                    )
-                ) return false
-                // Status refresh below still reports the last backend-confirmed receipt.
+                requireHealthReconnectAfterUnclassifiedSyncFailure()
+                return false
             }
             // A successfully promoted foreground transfer may finish after the
             // Activity backgrounds. From this point forward, retain only member,
@@ -3694,6 +3704,57 @@ class AppSession(
         val pending = localState.pendingHealthSyncFailure ?: return
         val retained = pending.retainingGranted(health.grantedResourceKeys())
         if (retained != pending) localState.replacePendingHealthSyncFailure(retained)
+    }
+
+    /** Called only while [healthMutex] is held. */
+    private suspend fun requireHealthReconnectAfterUnclassifiedSyncFailure(): Boolean {
+        if (!localState.requireHealthReconnect()) {
+            _state.update { current ->
+                current.copy(
+                    healthSync = HealthSyncState.NeedsAttention(
+                        cachedHealthStatus()?.lastDataReceivedAt,
+                    ),
+                    healthMessage =
+                        "Murph couldn't safely prepare Health Connect to reconnect. Try again.",
+                    phase = AppPhase.Failed(
+                        message =
+                            "Murph couldn't safely prepare Health Connect to reconnect. Try again.",
+                        canRetry = true,
+                        canSignOut = true,
+                    ),
+                )
+            }
+            return false
+        }
+
+        healthSyncReminder.cancel()
+        invalidateSessionEpoch()
+        val sdkReset = try {
+            health.signOutSdk()
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+        _state.update { current ->
+            current.copy(
+                healthSync = HealthSyncState.NotConnected,
+                healthReconnectRequired = true,
+                healthMessage = HEALTH_RECONNECT_REQUIRED_MESSAGE,
+                phase = if (sdkReset) {
+                    current.phase
+                } else {
+                    AppPhase.Failed(
+                        message =
+                            "Murph couldn't safely reset health sync. Keep the app open and try again.",
+                        canRetry = true,
+                        canSignOut = true,
+                    )
+                },
+            )
+        }
+        return sdkReset
     }
 
     private fun clearPendingHealthSyncFailureWhenReceiptsConfirm(
@@ -6420,6 +6481,8 @@ class AppSession(
             "Health Connect needs to reconnect before syncing can resume."
         const val HEALTH_FOREGROUND_SYNC_RETRY_MESSAGE =
             "Health sync didn't start before Murph left the foreground. Return to Murph and tap Sync now."
+        const val HEALTH_SYNC_NOT_STARTED_MESSAGE =
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry."
         const val HEALTH_PARTIAL_SYNC_MESSAGE =
             "Some Health Connect categories didn't finish syncing. Keep Murph open and tap Sync now to retry."
     }
