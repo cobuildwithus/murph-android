@@ -118,6 +118,8 @@ fun SettingsScreen(
         val healthConnected = state.healthSync != HealthSyncState.NotConnected
         val reminderCanEnable =
             healthConnected && state.authVerifiedOnline && !state.healthStatusIsStale
+        val reminderTargetEnabled =
+            state.healthSyncReminderTargetEnabled ?: state.healthSyncReminderEnabled
         Section(
             title = "Health Connect",
             footer = stringResource(R.string.health_sync_reminder_section_footer),
@@ -132,6 +134,10 @@ fun SettingsScreen(
                 title = stringResource(R.string.health_sync_reminder_title),
                 detail = stringResource(
                     when {
+                        state.healthSyncReminderTargetEnabled == true ->
+                            R.string.health_sync_reminder_turning_on_detail
+                        state.healthSyncReminderTargetEnabled == false ->
+                            R.string.health_sync_reminder_turning_off_detail
                         !healthConnected -> R.string.health_sync_reminder_unavailable_detail
                         !reminderCanEnable && !state.healthSyncReminderEnabled ->
                             R.string.health_sync_reminder_requires_online_detail
@@ -143,16 +149,14 @@ fun SettingsScreen(
                 ),
                 icon = MurphIconKind.Bell,
                 actionLabel = when {
-                    state.healthSyncReminderEnabled ->
+                    reminderTargetEnabled ->
                         stringResource(R.string.health_sync_reminder_turn_off)
                     reminderCanEnable -> stringResource(R.string.health_sync_reminder_turn_on)
                     else -> null
                 },
-                enabled = reminderCanEnable || state.healthSyncReminderEnabled,
-                checked = state.healthSyncReminderEnabled,
-                onClick = {
-                    onSetHealthSyncReminderEnabled(!state.healthSyncReminderEnabled)
-                },
+                enabled = reminderCanEnable || reminderTargetEnabled,
+                checked = reminderTargetEnabled,
+                onCheckedChange = onSetHealthSyncReminderEnabled,
             )
             if (
                 !healthSyncNotificationsAllowed &&

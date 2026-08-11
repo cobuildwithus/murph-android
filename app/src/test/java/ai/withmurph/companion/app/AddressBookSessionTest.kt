@@ -32,6 +32,7 @@ import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -217,7 +218,8 @@ class AddressBookSessionTest {
         assertFalse(failure.canRetry)
         assertEquals(2, fixture.api.replacements.size)
         assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
-        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertEquals(savedMutation.baseRevision, fixture.api.replacements[1].second.mutation.baseRevision)
+        assertFalse(savedMutation == fixture.api.replacements[1].second.mutation)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertNull(fixture.localState.addressBookRevision)
@@ -406,7 +408,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun friendlyNamesDeferralKeepsAnInterruptedReplacementVisibleUntilCleanup() = runTest {
+    fun friendlyNamesUncertainReplacementConvergesBeforeDeferral() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 1, count = 1),
             initializeLocal = {
@@ -429,18 +431,14 @@ class AddressBookSessionTest {
                 .contains("stop and delete"),
         )
 
-        assertTrue(fixture.session.prepareInitialAddressBookSharing())
-        assertFalse(fixture.session.completeAddressBookPermissionFlow(false))
+        assertFalse(fixture.session.prepareInitialAddressBookSharing())
         assertEquals(0, fixture.contacts.readCalls)
         assertTrue(fixture.api.deletions.isEmpty())
-        assertEquals(MUTATION_ONE, fixture.localState.pendingAddressBookReplacement?.mutationId)
-
-        fixture.session.stopAddressBookSharing()
-
-        assertEquals(listOf(1), fixture.api.deletions.map { it.second.mutation.baseRevision })
-        assertEquals(2, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertFalse(fixture.session.state.value.addressBookHasInterruptedReplacement)
+        val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
+        assertTrue(sharing.enabled)
+        assertFalse(sharing.ownedByInstallation)
         assertTrue(fixture.session.deferAddressBookSharingInitialSetup())
         assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
     }
@@ -577,7 +575,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun interruptedReplacementReusesMutationAndAcceptsReplayCount() = runTest {
+    fun interruptedReplacementConvergesWhenTheServerAlreadyAdvanced() = runTest {
         val fixture = fixture()
         fixture.session.start()
         fixture.contacts.permissionGranted = true
@@ -600,24 +598,72 @@ class AddressBookSessionTest {
         assertEquals(0, interrupted?.baseRevision)
         assertTrue(fixture.session.state.value.addressBookHasInterruptedReplacement)
 
-        fixture.contacts.rows = listOf(
-            person("Anna", "Smith", "+12125550101"),
-            person("Ben", "Jones", "+12125550102"),
-        )
-        assertTrue(fixture.session.prepareAddressBookSharing())
-        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+        assertFalse(fixture.session.prepareAddressBookSharing())
 
-        assertEquals(2, fixture.api.replacements.size)
-        assertEquals(
-            fixture.api.replacements[0].second.mutation,
-            fixture.api.replacements[1].second.mutation,
-        )
-        assertEquals(2, fixture.api.replacements[1].second.contacts.size)
-        assertEquals(1, fixture.localState.addressBookRevision)
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(0, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
         assertEquals(1, sharing.storedContactCount)
-        assertTrue(sharing.ownedByInstallation)
+        assertFalse(sharing.ownedByInstallation)
+    }
+
+    @Test
+    fun freshRetryMutationCannotOverwriteALateFirstCommit() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (fixture.api.replacements.size == 1) {
+                throw CompanionApiException.Network
+            }
+            fixture.api.statuses[memberKey] = enabledStatus(revision = 1, count = 1)
+            throw CompanionApiException.Conflict
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val uncertainMutation = requireNotNull(
+            fixture.localState.pendingAddressBookReplacement,
+        )
+
+        fixture.contacts.rows = listOf(person("Ben", "Jones", "+12125550102"))
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(2, fixture.api.replacements.size)
+        val retryMutation = fixture.api.replacements.last().second.mutation
+        assertEquals(uncertainMutation.baseRevision, retryMutation.baseRevision)
+        assertFalse(uncertainMutation == retryMutation)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(0, fixture.localState.addressBookRevision)
+        val sharing = fixture.session.state.value.addressBookSharing as AddressBookSharingState.Server
+        assertEquals(1, sharing.storedContactCount)
+        assertFalse(sharing.ownedByInstallation)
+    }
+
+    @Test
+    fun failedAtomicRetryRotationKeepsTheOldMarkerAndStopsBeforeContactsRead() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.api.replaceHandler = { _, _ -> throw CompanionApiException.Network }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val uncertainMutation = requireNotNull(
+            fixture.localState.pendingAddressBookReplacement,
+        )
+        val readsBeforeRetry = fixture.contacts.readCalls
+        fixture.localState.replaceAddressBookReplacementSucceeds = false
+
+        assertFalse(fixture.session.prepareAddressBookSharing())
+
+        assertEquals(uncertainMutation, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(readsBeforeRetry, fixture.contacts.readCalls)
+        assertEquals(1, fixture.api.replacements.size)
     }
 
     @Test
@@ -642,8 +688,7 @@ class AddressBookSessionTest {
         assertTrue(fixture.localState.pendingAddressBookReplacement != null)
 
         fixture.api.statuses[MEMBER_ONE] = disabledStatus(revision = 2)
-        assertTrue(fixture.session.prepareAddressBookSharing())
-        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        assertFalse(fixture.session.prepareAddressBookSharing())
 
         assertEquals(2, fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
@@ -948,6 +993,95 @@ class AddressBookSessionTest {
     }
 
     @Test
+    fun backgroundCancelsContactReadAndRotatesTheUncertainMutationBeforeRetry() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        fixture.contacts.readGate = CompletableDeferred()
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        fixture.contacts.readEntered.await()
+        val savedMutation = requireNotNull(
+            fixture.localState.pendingAddressBookReplacement,
+        )
+
+        fixture.session.didEnterBackground()
+        assertFalse(completion.await())
+
+        assertTrue(fixture.contacts.readCancellationObserved)
+        assertTrue(fixture.api.replacements.isEmpty())
+        assertFalse(fixture.session.state.value.isAddressBookBusy)
+        assertEquals(savedMutation, fixture.localState.pendingAddressBookReplacement)
+
+        fixture.contacts.readGate = null
+        fixture.session.didBecomeActive()
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertTrue(fixture.session.completeAddressBookPermissionFlow(true))
+
+        assertEquals(1, fixture.api.replacements.size)
+        val retriedMutation = fixture.api.replacements.single().second.mutation
+        assertEquals(savedMutation.baseRevision, retriedMutation.baseRevision)
+        assertFalse(savedMutation == retriedMutation)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+    }
+
+    @Test
+    fun backgroundCancelsStartedReplacementAndFencesItsLateResult() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val replaceEntered = CompletableDeferred<Unit>()
+        val replaceGate = CompletableDeferred<Unit>()
+        val replaceCancellationObserved = CompletableDeferred<Unit>()
+        fixture.api.replaceHandler = { memberKey, request ->
+            val applied = enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+            replaceEntered.complete(Unit)
+            try {
+                replaceGate.await()
+            } catch (error: CancellationException) {
+                replaceCancellationObserved.complete(Unit)
+                throw error
+            }
+            applied
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        replaceEntered.await()
+        val savedMutation = requireNotNull(
+            fixture.localState.pendingAddressBookReplacement,
+        )
+
+        fixture.session.didEnterBackground()
+        replaceCancellationObserved.await()
+        assertFalse(completion.await())
+
+        assertEquals(1, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements.single().second.mutation)
+        assertEquals(0, fixture.localState.addressBookRevision)
+        assertEquals(savedMutation, fixture.localState.pendingAddressBookReplacement)
+        assertFalse(fixture.session.state.value.isAddressBookBusy)
+        assertEquals(1, fixture.api.statuses.getValue(MEMBER_ONE).revision)
+
+        fixture.session.didBecomeActive()
+        assertFalse(fixture.session.prepareAddressBookSharing())
+
+        assertEquals(1, fixture.api.replacements.size)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(0, fixture.localState.addressBookRevision)
+        assertTrue(
+            fixture.session.state.value.addressBookMessage.orEmpty()
+                .contains("already advanced"),
+        )
+    }
+
+    @Test
     fun explicitStopWaitsForForegroundReconciliationThenDeletesOnce() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
@@ -986,19 +1120,46 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun signOutFencesLateReplacementAndClearsAllContactMetadata() = runTest {
+    fun signOutCancelsAndConvergesACommittedReplacementBeforeAuthLogout() = runTest {
         val fixture = fixture()
         fixture.session.start()
         fixture.contacts.permissionGranted = true
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        fixture.api.replaceHandler = { _, request ->
-            entered.complete(Unit)
-            release.await()
-            enabledStatus(request.mutation.baseRevision + 1, request.contacts.size)
+        val cancellationObserved = CompletableDeferred<Unit>()
+        var authWasStillOwnedAtCancellation = false
+        var authWasStillOwnedAtSettlement = false
+        var replacementAttempt = 0
+        fixture.api.replaceHandler = { memberKey, request ->
+            replacementAttempt += 1
+            if (replacementAttempt > 1) {
+                authWasStillOwnedAtSettlement =
+                    fixture.auth.state == AuthSessionState.SignedIn(
+                        MEMBER_ONE,
+                        verifiedOnline = true,
+                    )
+                fixture.api.statuses.getValue(memberKey)
+            } else {
+                entered.complete(Unit)
+                try {
+                    release.await()
+                } catch (error: CancellationException) {
+                    authWasStillOwnedAtCancellation =
+                        fixture.auth.state == AuthSessionState.SignedIn(
+                            MEMBER_ONE,
+                            verifiedOnline = true,
+                        )
+                    fixture.api.statuses[memberKey] = enabledStatus(
+                        request.mutation.baseRevision + 1,
+                        request.contacts.size,
+                    )
+                    cancellationObserved.complete(Unit)
+                    throw error
+                }
+                error("The replacement should be cancelled by sign-out")
+            }
         }
-
         assertTrue(fixture.session.prepareAddressBookSharing())
         val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
         entered.await()
@@ -1006,16 +1167,68 @@ class AddressBookSessionTest {
 
         fixture.session.signOut()
 
+        cancellationObserved.await()
+        assertTrue(completion.isCompleted)
+        assertTrue(authWasStillOwnedAtCancellation)
+        assertTrue(authWasStillOwnedAtSettlement)
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(
+            fixture.api.replacements[0].second,
+            fixture.api.replacements[1].second,
+        )
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
+        assertEquals(AuthSessionState.SignedOut, fixture.auth.state)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.addressBookRevision)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertNull(fixture.localState.pendingAddressBookDeletion)
 
-        release.complete(Unit)
         assertFalse(completion.await())
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertNull(fixture.localState.addressBookRevision)
+    }
+
+    @Test
+    fun signOutKeepsTheTombstoneAndMutationWhenReplacementSettlementIsUncertain() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val cancellationObserved = CompletableDeferred<Unit>()
+        var replacementAttempt = 0
+        fixture.api.replaceHandler = { _, _ ->
+            replacementAttempt += 1
+            if (replacementAttempt == 1) {
+                entered.complete(Unit)
+                try {
+                    release.await()
+                } catch (error: CancellationException) {
+                    cancellationObserved.complete(Unit)
+                    throw error
+                }
+            }
+            throw CompanionApiException.Network
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        val completion = async { fixture.session.completeAddressBookPermissionFlow(true) }
+        entered.await()
+        val pendingMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
+
+        fixture.session.signOut()
+
+        cancellationObserved.await()
+        assertFalse(completion.await())
+        assertTrue(fixture.localState.signOutPending)
+        assertEquals(MEMBER_ONE, fixture.localState.memberKey)
+        assertEquals(pendingMutation, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(
+            AuthSessionState.SignedIn(MEMBER_ONE, verifiedOnline = true),
+            fixture.auth.state,
+        )
+        assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
     }
 
     @Test
@@ -1027,10 +1240,17 @@ class AddressBookSessionTest {
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        fixture.api.replaceHandler = { _, request ->
-            entered.complete(Unit)
-            release.await()
-            enabledStatus(request.mutation.baseRevision + 1, request.contacts.size)
+        var replacementAttempt = 0
+        fixture.api.replaceHandler = { memberKey, request ->
+            replacementAttempt += 1
+            if (replacementAttempt == 1) {
+                entered.complete(Unit)
+                release.await()
+            }
+            enabledStatus(
+                request.mutation.baseRevision + 1,
+                request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
         }
 
         assertTrue(fixture.session.prepareAddressBookSharing())
@@ -1544,9 +1764,13 @@ class AddressBookSessionTest {
         fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
+        var replacementAttempt = 0
         fixture.api.replaceHandler = { _, _ ->
-            entered.complete(Unit)
-            release.await()
+            replacementAttempt += 1
+            if (replacementAttempt == 1) {
+                entered.complete(Unit)
+                release.await()
+            }
             throw CompanionApiException.ConsentRequired
         }
 
@@ -1595,12 +1819,126 @@ class AddressBookSessionTest {
 
         assertEquals(2, fixture.api.replacements.size)
         assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
-        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertEquals(savedMutation?.baseRevision, fixture.api.replacements[1].second.mutation.baseRevision)
+        assertFalse(savedMutation == fixture.api.replacements[1].second.mutation)
         assertEquals(null, fixture.localState.pendingAddressBookReplacement)
         assertEquals(1, fixture.localState.addressBookRevision)
         assertEquals(InitialSetupStep.Complete, fixture.localState.initialSetupStep)
         assertEquals(InitialSetupStep.Complete, fixture.session.state.value.initialSetupStep)
         assertEquals(null, fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun backgroundingAcceptedConsentReplacementPublishesRetryableFailure() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        var requiresConsent = true
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (requiresConsent) {
+                requiresConsent = false
+                throw CompanionApiException.ConsentRequired
+            }
+            enabledStatus(
+                revision = request.mutation.baseRevision + 1,
+                count = request.contacts.size,
+            ).also { fixture.api.statuses[memberKey] = it }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val savedMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(
+            LaunchConsentRecoveryPhase.Required,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        fixture.contacts.readEntered = CompletableDeferred()
+        fixture.contacts.readGate = CompletableDeferred()
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        fixture.contacts.readEntered.await()
+        val rotatedMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(savedMutation.baseRevision, rotatedMutation.baseRevision)
+        assertFalse(savedMutation == rotatedMutation)
+
+        fixture.session.didEnterBackground()
+        acceptance.await()
+
+        assertTrue(fixture.contacts.readCancellationObserved)
+        assertEquals(rotatedMutation, fixture.localState.pendingAddressBookReplacement)
+        assertEquals(1, fixture.api.replacements.size)
+        assertFalse(fixture.session.state.value.isAddressBookBusy)
+        assertEquals(
+            LaunchConsentRecoveryPhase.LoadFailed,
+            fixture.session.state.value.launchConsentRecovery?.phase,
+        )
+
+        fixture.contacts.readGate = null
+        fixture.contacts.readEntered = CompletableDeferred()
+        fixture.session.didBecomeActive()
+        fixture.session.retryLaunchConsentRecovery()
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertEquals(savedMutation, fixture.api.replacements.first().second.mutation)
+        val retriedMutation = fixture.api.replacements.last().second.mutation
+        assertEquals(savedMutation.baseRevision, retriedMutation.baseRevision)
+        assertFalse(savedMutation == retriedMutation)
+        assertFalse(rotatedMutation == retriedMutation)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertEquals(1, fixture.localState.addressBookRevision)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
+    }
+
+    @Test
+    fun acceptedReplacementLateCommitConvergesWithoutReusingItsMutation() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        fixture.contacts.permissionGranted = true
+        fixture.contacts.rows = listOf(person("Anna", "Smith", "+12125550101"))
+        val resumedRequestEntered = CompletableDeferred<Unit>()
+        val resumedRequestGate = CompletableDeferred<Unit>()
+        var requiresConsent = true
+        fixture.api.replaceHandler = { memberKey, request ->
+            if (requiresConsent) {
+                requiresConsent = false
+                throw CompanionApiException.ConsentRequired
+            }
+            resumedRequestEntered.complete(Unit)
+            try {
+                resumedRequestGate.await()
+                error("The resumed request should be canceled at the foreground boundary.")
+            } catch (error: CancellationException) {
+                fixture.api.statuses[memberKey] = enabledStatus(
+                    revision = request.mutation.baseRevision + 1,
+                    count = request.contacts.size,
+                )
+                throw error
+            }
+        }
+
+        assertTrue(fixture.session.prepareAddressBookSharing())
+        assertFalse(fixture.session.completeAddressBookPermissionFlow(true))
+        val firstMutation = requireNotNull(fixture.localState.pendingAddressBookReplacement)
+
+        val acceptance = async { fixture.session.acceptLaunchConsent() }
+        resumedRequestEntered.await()
+        val resumedMutation = fixture.api.replacements.last().second.mutation
+        assertEquals(firstMutation.baseRevision, resumedMutation.baseRevision)
+        assertFalse(firstMutation == resumedMutation)
+
+        fixture.session.didEnterBackground()
+        acceptance.await()
+
+        assertEquals(resumedMutation, fixture.localState.pendingAddressBookReplacement)
+        fixture.contacts.rows = listOf(person("Ben", "Jones", "+12125550102"))
+        fixture.session.didBecomeActive()
+        fixture.session.retryLaunchConsentRecovery()
+
+        assertEquals(2, fixture.api.replacements.size)
+        assertNull(fixture.localState.pendingAddressBookReplacement)
+        assertFalse(fixture.session.state.value.addressBookHasInterruptedReplacement)
+        assertNull(fixture.session.state.value.launchConsentRecovery)
     }
 
     @Test
@@ -1633,7 +1971,8 @@ class AddressBookSessionTest {
 
         assertEquals(2, fixture.api.replacements.size)
         assertEquals(savedMutation, fixture.api.replacements[0].second.mutation)
-        assertEquals(savedMutation, fixture.api.replacements[1].second.mutation)
+        assertEquals(savedMutation.baseRevision, fixture.api.replacements[1].second.mutation.baseRevision)
+        assertFalse(savedMutation == fixture.api.replacements[1].second.mutation)
         assertNull(fixture.localState.pendingAddressBookReplacement)
         assertEquals(1, fixture.localState.addressBookRevision)
         assertEquals(InitialSetupStep.FriendlyNames, fixture.localState.initialSetupStep)
@@ -1678,7 +2017,14 @@ class AddressBookSessionTest {
                 "00000000-0000-4000-8000-${mutationSequence.toString().padStart(12, '0')}"
             },
         )
+        session.markForegroundForTest()
         return Fixture(session, auth, api, contacts, localState, health, events)
+    }
+
+    private fun AppSession.markForegroundForTest() {
+        val field = AppSession::class.java.getDeclaredField("isForeground")
+        field.isAccessible = true
+        field.setBoolean(this, true)
     }
 
     private data class Fixture(
@@ -1813,6 +2159,9 @@ class AddressBookSessionTest {
         var permissionGranted = false
         var rows: List<AddressBookPersonContact> = emptyList()
         var readCalls = 0
+        var readGate: CompletableDeferred<Unit>? = null
+        var readEntered = CompletableDeferred<Unit>()
+        var readCancellationObserved = false
 
         override fun hasPermission(): Boolean = permissionGranted
 
@@ -1820,6 +2169,13 @@ class AddressBookSessionTest {
             check(permissionGranted)
             readCalls += 1
             events += "contacts-read"
+            readEntered.complete(Unit)
+            try {
+                readGate?.await()
+            } catch (error: CancellationException) {
+                readCancellationObserved = true
+                throw error
+            }
             return rows
         }
     }
@@ -1838,6 +2194,7 @@ class AddressBookSessionTest {
         override fun openHealthConnectIntent(): Intent? = null
         override fun isSignedIn(): Boolean = signedIn
         override fun pauseAutomaticSync() = Unit
+        override fun cancelActiveSync() = Unit
         override fun configure() = Unit
         override fun grantedResourceCount(): Int = grantedCount
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
@@ -1908,6 +2265,7 @@ class AddressBookSessionTest {
         var replacement: AddressBookMutation? = null
         var deletion: AddressBookMutation? = null
         var completeAddressBookReplacementSucceeds = true
+        var replaceAddressBookReplacementSucceeds = true
         var advanceInitialSetupSucceeds = true
 
         override val addressBookRevision: Int?
@@ -1941,6 +2299,24 @@ class AddressBookSessionTest {
         }
 
         override fun beginAddressBookReplacement(mutation: AddressBookMutation): Boolean {
+            replacement = mutation
+            deletion = null
+            return true
+        }
+
+        override fun replaceAddressBookReplacement(
+            expectedMutationId: String,
+            mutation: AddressBookMutation,
+        ): Boolean {
+            if (!replaceAddressBookReplacementSucceeds) return false
+            val pending = replacement ?: return false
+            if (
+                pending.mutationId != expectedMutationId ||
+                mutation.mutationId == expectedMutationId ||
+                mutation.baseRevision != pending.baseRevision
+            ) {
+                return false
+            }
             replacement = mutation
             deletion = null
             return true

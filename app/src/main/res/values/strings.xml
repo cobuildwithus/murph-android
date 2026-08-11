@@ -9,6 +9,8 @@
     <string name="health_sync_reminder_title">Sync reminder</string>
     <string name="health_sync_reminder_off_detail">Optional. Turn on a reminder if this app hasn’t confirmed Health Connect data for three days.</string>
     <string name="health_sync_reminder_on_detail">On. Android will remind you to reopen Murph if this app hasn’t confirmed Health Connect data for three days.</string>
+    <string name="health_sync_reminder_turning_on_detail">Turning on… You can turn this off while Murph checks current sync status.</string>
+    <string name="health_sync_reminder_turning_off_detail">Turning off…</string>
     <string name="health_sync_reminder_unavailable_detail">Available after Health Connect is connected.</string>
     <string name="health_sync_reminder_requires_online_detail">Available after Murph checks sync status online.</string>
     <string name="health_sync_reminder_notifications_blocked_detail">Reminders are on in Murph, but notifications are off in Android settings.</string>

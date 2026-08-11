@@ -50,6 +50,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.Painter
@@ -65,10 +66,21 @@ class ScreenshotActivity : ComponentActivity() {
         private set
     internal var signOutRequests = 0
         private set
+    internal val healthSyncReminderPreferenceRequests = mutableListOf<Boolean>()
+    private var showsReadyApp by mutableStateOf(true)
+    private var healthSyncReminderTargetEnabled by mutableStateOf<Boolean?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scenario = ScreenshotScenario.from(intent.getStringExtra(SCENARIO_EXTRA))
+        openSettingsRequestId = savedInstanceState?.getInt(
+            STATE_OPEN_SETTINGS_REQUEST_ID,
+        ) ?: 0
+        consumedOpenSettingsRequestCount = savedInstanceState?.getInt(
+            STATE_CONSUMED_OPEN_SETTINGS_REQUEST_COUNT,
+        ) ?: 0
+        showsReadyApp = savedInstanceState?.getBoolean(STATE_SHOWS_READY_APP)
+            ?: !intent.getBooleanExtra(START_LAUNCHING_EXTRA, false)
         if (savedInstanceState == null && scenario.showsReminderSettings) {
             openSettingsRequestId += 1
         }
@@ -81,7 +93,14 @@ class ScreenshotActivity : ComponentActivity() {
 
         setContent {
             MurphTheme {
-                val appState = scenario.appState(now)
+                val readyState = scenario.appState(now).copy(
+                    healthSyncReminderTargetEnabled = healthSyncReminderTargetEnabled,
+                )
+                val appState = if (showsReadyApp) {
+                    readyState
+                } else {
+                    readyState.copy(phase = AppPhase.Launching)
+                }
                 val fixtureModifier = if (scenario == ScreenshotScenario.AccountFailure) {
                     Modifier.fillMaxWidth().height(320.dp)
                 } else {
@@ -104,6 +123,10 @@ class ScreenshotActivity : ComponentActivity() {
                             }
                         },
                         actions = NoOpActions.copy(
+                            onSetHealthSyncReminderEnabled = { enabled ->
+                                healthSyncReminderPreferenceRequests += enabled
+                                healthSyncReminderTargetEnabled = enabled
+                            },
                             onSignOut = { signOutRequests += 1 },
                         ),
                         initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
@@ -113,8 +136,22 @@ class ScreenshotActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_OPEN_SETTINGS_REQUEST_ID, openSettingsRequestId)
+        outState.putInt(
+            STATE_CONSUMED_OPEN_SETTINGS_REQUEST_COUNT,
+            consumedOpenSettingsRequestCount,
+        )
+        outState.putBoolean(STATE_SHOWS_READY_APP, showsReadyApp)
+        super.onSaveInstanceState(outState)
+    }
+
     internal fun requestOpenSettings() {
         openSettingsRequestId += 1
+    }
+
+    internal fun publishReadyApp() {
+        showsReadyApp = true
     }
 
     private fun postSyntheticHealthSyncReminder() {
@@ -138,6 +175,11 @@ class ScreenshotActivity : ComponentActivity() {
 
     companion object {
         const val SCENARIO_EXTRA = "scenario"
+        const val START_LAUNCHING_EXTRA = "start_launching"
+        private const val STATE_OPEN_SETTINGS_REQUEST_ID = "open_settings_request_id"
+        private const val STATE_CONSUMED_OPEN_SETTINGS_REQUEST_COUNT =
+            "consumed_open_settings_request_count"
+        private const val STATE_SHOWS_READY_APP = "shows_ready_app"
     }
 }
 

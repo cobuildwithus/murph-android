@@ -2,6 +2,10 @@ package ai.withmurph.companion.health
 
 import android.content.Context
 import android.content.Intent
+import androidx.lifecycle.asFlow
+import androidx.work.Operation
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
 import ai.withmurph.companion.core.HealthSyncing
@@ -16,6 +20,8 @@ import io.tryvital.vitalhealthcore.model.VitalResource
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 class JunctionHealthSyncService(
@@ -25,6 +31,7 @@ class JunctionHealthSyncService(
 ) : HealthSyncing {
     private val appContext = context.applicationContext
     private val manager = VitalHealthConnectManager.getOrCreate(appContext)
+    private val workManager = WorkManager.getInstance(appContext)
 
     override val totalResourceCount: Int = requestedReadResources.size
 
@@ -50,10 +57,17 @@ class JunctionHealthSyncService(
         manager.pauseSynchronization = true
     }
 
+    override fun cancelActiveSync() {
+        ForegroundVitalSyncAdmission.revoke()
+        manager.pauseSynchronization = true
+        cancelSyncWorkers()
+    }
+
     override suspend fun identify(
         memberKey: String,
         authenticate: suspend () -> String,
     ) {
+        pauseAndAwaitSyncWorkers()
         val externalUserId = JunctionExternalUserId.derive(memberKey, environment)
         if (VitalClient.identifiedExternalUser == externalUserId) {
             // Vital 5.0.2 returns early for an unchanged external id without invoking
@@ -85,25 +99,61 @@ class JunctionHealthSyncService(
     }
 
     override suspend fun syncAllGrantedResources() {
-        withContext(Dispatchers.Main.immediate) {
-            manager.pauseSynchronization = false
-        }
+        val admission = ForegroundVitalSyncAdmission.open()
         try {
+            withContext(Dispatchers.Main.immediate) {
+                manager.pauseSynchronization = false
+            }
             manager.syncData(
                 resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
             )
         } finally {
-            withContext(NonCancellable + Dispatchers.Main.immediate) {
-                manager.pauseSynchronization = true
+            withContext(NonCancellable) {
+                ForegroundVitalSyncAdmission.close(admission)
+                withContext(Dispatchers.Main.immediate) {
+                    manager.pauseSynchronization = true
+                }
+                cancelAndAwaitSyncWorkers()
             }
         }
     }
+
+    private fun cancelSyncWorkers(): List<Operation> =
+        syncWorkNames(requestedReadResources).map(workManager::cancelUniqueWork)
 
     override fun grantedResourceCount(): Int =
         configuredGrantedResources(manager.resourcesWithReadPermission()).size
 
     override suspend fun signOutSdk() {
+        pauseAndAwaitSyncWorkers()
         VitalClient.getOrCreate(appContext).signOut()
+    }
+
+    private suspend fun pauseAndAwaitSyncWorkers() {
+        ForegroundVitalSyncAdmission.revoke()
+        withContext(Dispatchers.Main.immediate) {
+            manager.pauseSynchronization = true
+        }
+        cancelAndAwaitSyncWorkers()
+    }
+
+    private suspend fun cancelAndAwaitSyncWorkers() {
+        cancelSyncWorkerHandoff(
+            resourceWorkNames = resourceSyncWorkNames(requestedReadResources),
+            cancelAndAwait = ::cancelAndAwaitWorkNames,
+        )
+    }
+
+    private suspend fun cancelAndAwaitWorkNames(workNames: Set<String>) {
+        workNames.map(workManager::cancelUniqueWork).forEach { operation ->
+            val state = operation.state.asFlow().first {
+                it is Operation.State.SUCCESS || it is Operation.State.FAILURE
+            }
+            if (state is Operation.State.FAILURE) throw state.throwable
+        }
+        awaitSyncWorkersTerminal(workNames) { workName ->
+            workManager.getWorkInfosForUniqueWorkLiveData(workName).asFlow()
+        }
     }
 
     companion object {
@@ -144,6 +194,45 @@ class JunctionHealthSyncService(
         internal fun configuredGrantedResources(
             grantedResources: Set<VitalResource>,
         ): Set<VitalResource> = requestedReadResources.intersect(grantedResources)
+
+        /**
+         * Vital 5.0.2 exposes no public cancellation API. These are its exact
+         * unique WorkManager names for the umbrella worker and every app-owned
+         * resource worker. Keep this mapping pinned to the reviewed SDK source.
+         */
+        internal const val RESOURCE_SYNC_STARTER_WORK_NAME = "HC.ResourceSyncStarter"
+
+        internal fun resourceSyncWorkNames(resources: Set<VitalResource>): Set<String> =
+            resources.mapTo(mutableSetOf()) { resource ->
+                "HC.ResourceSyncWorker.$resource"
+            }
+
+        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> =
+            resourceSyncWorkNames(resources) + RESOURCE_SYNC_STARTER_WORK_NAME
+
+        /**
+         * Stop the only producer before issuing the definitive resource-worker
+         * cancellation wave. Once the starter is terminal, the second pass
+         * cannot miss a resource worker enqueued after an earlier empty lookup.
+         */
+        internal suspend fun cancelSyncWorkerHandoff(
+            resourceWorkNames: Set<String>,
+            cancelAndAwait: suspend (Set<String>) -> Unit,
+        ) {
+            cancelAndAwait(setOf(RESOURCE_SYNC_STARTER_WORK_NAME))
+            cancelAndAwait(resourceWorkNames)
+        }
+
+        internal suspend fun awaitSyncWorkersTerminal(
+            workNames: Set<String>,
+            workInfos: (String) -> Flow<List<WorkInfo>>,
+        ) {
+            workNames.forEach { workName ->
+                workInfos(workName).first { infos ->
+                    infos.all { info -> info.state.isFinished }
+                }
+            }
+        }
     }
 }
 

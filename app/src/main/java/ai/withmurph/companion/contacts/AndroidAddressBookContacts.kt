@@ -6,12 +6,17 @@ import android.Manifest
 import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.CancellationSignal
 import android.provider.ContactsContract
 import android.telephony.PhoneNumberUtils
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class AndroidAddressBookContacts(
     context: Context,
@@ -28,10 +33,27 @@ class AndroidAddressBookContacts(
     override suspend fun readPersonContacts(): List<AddressBookPersonContact> =
         withContext(Dispatchers.IO) {
             check(hasPermission()) { "Contacts permission is unavailable" }
-            queryPersonContacts()
+            suspendCancellableCoroutine { continuation ->
+                val cancellationSignal = CancellationSignal()
+                continuation.invokeOnCancellation { cancellationSignal.cancel() }
+                try {
+                    val contacts = queryPersonContacts(cancellationSignal) {
+                        if (!continuation.isActive) {
+                            throw CancellationException("Contacts query was cancelled")
+                        }
+                    }
+                    continuation.resume(contacts)
+                } catch (error: Exception) {
+                    continuation.resumeWithException(error)
+                }
+            }
         }
 
-    private fun queryPersonContacts(): List<AddressBookPersonContact> {
+    private fun queryPersonContacts(
+        cancellationSignal: CancellationSignal,
+        ensureActive: () -> Unit,
+    ): List<AddressBookPersonContact> {
+        ensureActive()
         val contacts = ArrayList<AddressBookPersonContact>()
         val projection = arrayOf(
             ContactsContract.Data.CONTACT_ID,
@@ -54,6 +76,7 @@ class AndroidAddressBookContacts(
             selection,
             selectionArgs,
             sortOrder,
+            cancellationSignal,
         ) ?: error("Contacts query was unavailable")
         cursor.use { result ->
             val contactIdColumn = result.getColumnIndexOrThrow(ContactsContract.Data.CONTACT_ID)
@@ -96,6 +119,7 @@ class AndroidAddressBookContacts(
             }
 
             while (result.moveToNext()) {
+                ensureActive()
                 val contactId = result.getLong(contactIdColumn)
                 if (contactId != currentContactId) {
                     flushCurrent()
@@ -133,6 +157,7 @@ class AndroidAddressBookContacts(
                     }
                 }
             }
+            ensureActive()
             flushCurrent()
         }
         return contacts
