@@ -16,13 +16,19 @@ object AddressBookProjector {
     const val MAX_LABEL_CHARACTERS = 48
     const val MAX_LABEL_UTF8_BYTES = 96
 
-    fun project(contacts: List<AddressBookPersonContact>): List<AddressBookProjection> {
+    fun project(
+        contacts: List<AddressBookPersonContact>,
+        ensureActive: () -> Unit = {},
+    ): List<AddressBookProjection> {
+        ensureActive()
         val aliasesByPhone = linkedMapOf<String, SortedMap<String, String>>()
         var phoneValuesSeen = 0
 
         contactLoop@ for (contact in contacts.take(MAX_CONTACTS)) {
+            ensureActive()
             val advisoryName = sanitizeName(contact.givenName, contact.familyName)
             for (rawPhone in contact.phoneNumbers.take(MAX_PHONES_PER_CONTACT)) {
+                ensureActive()
                 if (phoneValuesSeen >= MAX_PHONE_VALUES) break@contactLoop
                 phoneValuesSeen += 1
                 if (advisoryName == null) continue
@@ -34,6 +40,7 @@ object AddressBookProjector {
 
         return aliasesByPhone
             .mapNotNull { (phoneNumber, aliases) ->
+                ensureActive()
                 val advisoryName = joinedAliases(aliases) ?: return@mapNotNull null
                 RankedProjection(
                     projection = AddressBookProjection(phoneNumber, advisoryName),
@@ -41,6 +48,7 @@ object AddressBookProjector {
                 )
             }
             .sortedWith { left, right ->
+                ensureActive()
                 compareDigests(left.digest, right.digest)
                     .takeIf { it != 0 }
                     ?: compareValuesBy(

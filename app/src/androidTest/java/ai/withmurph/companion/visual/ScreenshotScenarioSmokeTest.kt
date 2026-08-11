@@ -1,6 +1,6 @@
 package ai.withmurph.companion.visual
 
-import ai.withmurph.companion.consumeHealthSyncReminderSettingsIntent
+import ai.withmurph.companion.healthSyncReminderSettingsDeliveryToConsume
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import android.content.Context
 import android.content.Intent
@@ -18,7 +18,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -133,12 +132,59 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
-    fun reminderSettingsIntentActionIsConsumedExactlyOnce() {
-        val intent = Intent().setAction(HealthSyncReminderController.ACTION_OPEN_SETTINGS)
+    fun reminderSettingsDeliveryIsConsumedExactlyOnce() {
+        val intent = reminderSettingsIntent("delivery-a")
 
-        assertTrue(consumeHealthSyncReminderSettingsIntent(intent))
-        assertNull(intent.action)
-        assertFalse(consumeHealthSyncReminderSettingsIntent(intent))
+        assertEquals(
+            "delivery-a",
+            healthSyncReminderSettingsDeliveryToConsume(intent, lastHandledDeliveryId = null),
+        )
+        assertNull(
+            healthSyncReminderSettingsDeliveryToConsume(
+                intent,
+                lastHandledDeliveryId = "delivery-a",
+            ),
+        )
+    }
+
+    @Test
+    fun restoredTaskConsumesANewDeliveryAndDoesNotReplayTheSavedDelivery() {
+        assertEquals(
+            "delivery-b",
+            healthSyncReminderSettingsDeliveryToConsume(
+                intent = reminderSettingsIntent("delivery-b"),
+                lastHandledDeliveryId = "delivery-a",
+                isRestoringLegacyIntent = true,
+            ),
+        )
+        assertNull(
+            healthSyncReminderSettingsDeliveryToConsume(
+                intent = reminderSettingsIntent("delivery-a"),
+                lastHandledDeliveryId = "delivery-a",
+                isRestoringLegacyIntent = true,
+            ),
+        )
+        assertEquals(
+            "delivery-c",
+            healthSyncReminderSettingsDeliveryToConsume(
+                intent = reminderSettingsIntent("delivery-c"),
+                lastHandledDeliveryId = "delivery-b",
+            ),
+        )
+    }
+
+    @Test
+    fun restoredLegacyReminderIntentRemainsSuppressed() {
+        val legacyIntent = Intent()
+            .setAction(HealthSyncReminderController.ACTION_OPEN_SETTINGS)
+
+        assertNull(
+            healthSyncReminderSettingsDeliveryToConsume(
+                intent = legacyIntent,
+                lastHandledDeliveryId = null,
+                isRestoringLegacyIntent = true,
+            ),
+        )
     }
 
     @Test
@@ -158,8 +204,22 @@ class ScreenshotScenarioSmokeTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val intent = Intent(context, ScreenshotActivity::class.java)
             .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "reminderOff")
+            .putExtra(ScreenshotActivity.START_LAUNCHING_EXTRA, true)
 
         ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.waitForIdle()
+            scenario.onActivity { activity ->
+                assertEquals(1, activity.openSettingsRequestId)
+                assertEquals(0, activity.consumedOpenSettingsRequestCount)
+            }
+
+            scenario.recreate()
+            compose.waitForIdle()
+            scenario.onActivity { activity ->
+                assertEquals(1, activity.openSettingsRequestId)
+                assertEquals(0, activity.consumedOpenSettingsRequestCount)
+                activity.publishReadyApp()
+            }
             compose.waitForIdle()
             compose.onNodeWithText("Sync reminder").assertIsDisplayed()
             scenario.onActivity { activity ->
@@ -178,6 +238,27 @@ class ScreenshotScenarioSmokeTest {
             compose.onNodeWithText("Sync reminder").assertIsDisplayed()
             scenario.onActivity { activity ->
                 assertEquals(0, activity.openSettingsRequestId)
+                assertEquals(2, activity.consumedOpenSettingsRequestCount)
+            }
+        }
+    }
+
+    @Test
+    fun reminderTogglePassesTheRequestedTargetValue() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "reminderOff")
+        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.waitForIdle()
+            compose.onNodeWithText("TURN ON").performClick()
+            compose.onNodeWithText("Turning on… You can turn this off while Murph checks current sync status.")
+                .assertIsDisplayed()
+            compose.onNodeWithText("TURN OFF").performClick()
+            scenario.onActivity { activity ->
+                assertEquals(
+                    listOf(true, false),
+                    activity.healthSyncReminderPreferenceRequests,
+                )
             }
         }
     }
@@ -195,4 +276,8 @@ class ScreenshotScenarioSmokeTest {
             assertions(compose)
         }
     }
+
+    private fun reminderSettingsIntent(deliveryId: String): Intent = Intent()
+        .setAction(HealthSyncReminderController.ACTION_OPEN_SETTINGS)
+        .putExtra(HealthSyncReminderController.EXTRA_SETTINGS_DELIVERY_ID, deliveryId)
 }

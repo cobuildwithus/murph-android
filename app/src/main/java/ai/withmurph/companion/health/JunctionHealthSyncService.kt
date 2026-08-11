@@ -25,6 +25,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.withContext
 
@@ -225,10 +227,21 @@ class JunctionHealthSyncService(
         manager.pauseSynchronization = true
     }
 
+    override fun cancelActiveSync() {
+        VitalHealthWorkerLease.close()
+        manager.pauseSynchronization = true
+        val workManager = WorkManager.getInstance(appContext)
+        workManager.cancelUniqueWork(vitalResourceSyncStarter)
+        healthConnectReadResources.forEach { resource ->
+            workManager.cancelUniqueWork(vitalResourceSyncWorkerName(resource))
+        }
+    }
+
     override suspend fun identify(
         memberKey: String,
         authenticate: suspend () -> String,
     ) {
+        revokeActiveSyncAuthorization()
         val externalUserId = JunctionExternalUserId.derive(memberKey, environment)
         if (VitalClient.identifiedExternalUser == externalUserId) {
             // Vital 5.0.2 returns early for an unchanged external id without invoking
@@ -398,15 +411,20 @@ class JunctionHealthSyncService(
     private suspend fun cancelAndAwaitVitalWork() {
         setManualSyncPaused(true)
         val workManager = WorkManager.getInstance(appContext)
-        val workNames = buildList {
-            add(vitalResourceSyncStarter)
-            healthConnectReadResources.forEach { resource ->
-                add(vitalResourceSyncWorkerName(resource))
+        val resourceWorkNames =
+            healthConnectReadResources.mapTo(linkedSetOf(), ::vitalResourceSyncWorkerName)
+        cancelSyncWorkerHandoff(resourceWorkNames) { workNames ->
+            workNames.forEach { workName ->
+                workManager.cancelUniqueWork(workName).result.await()
+            }
+            val wave = workNames.flatMap { workName ->
+                workManager.getWorkInfosForUniqueWork(workName).await()
+            }
+            check(wave.all { it.state.isFinished }) {
+                "Vital health workers were not terminal before the next cancellation wave"
             }
         }
-        workNames.forEach { workName ->
-            workManager.cancelUniqueWork(workName).result.await()
-        }
+        val workNames = listOf(vitalResourceSyncStarter) + resourceWorkNames
         val remaining = workNames.flatMap { workName ->
             workManager.getWorkInfosForUniqueWork(workName).await()
         }
@@ -414,6 +432,36 @@ class JunctionHealthSyncService(
             "Vital health workers were not terminal before identity teardown"
         }
         VitalHealthWorkerLease.awaitNoActiveExecutions()
+    }
+
+    companion object {
+        internal const val RESOURCE_SYNC_STARTER_WORK_NAME = vitalResourceSyncStarter
+        internal val requestedReadResources: Set<VitalResource>
+            get() = healthConnectReadResources
+
+        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> = buildSet {
+            add(RESOURCE_SYNC_STARTER_WORK_NAME)
+            resources.mapTo(this, ::vitalResourceSyncWorkerName)
+        }
+
+        internal suspend fun cancelSyncWorkerHandoff(
+            resourceWorkNames: Set<String>,
+            cancelAndAwait: suspend (Set<String>) -> Unit,
+        ) {
+            cancelAndAwait(setOf(RESOURCE_SYNC_STARTER_WORK_NAME))
+            cancelAndAwait(resourceWorkNames)
+        }
+
+        internal suspend fun awaitSyncWorkersTerminal(
+            workNames: Set<String>,
+            workInfos: (String) -> Flow<List<WorkInfo>>,
+        ) {
+            workNames.forEach { workName ->
+                workInfos(workName).first { infos ->
+                    infos.all { info -> info.state.isFinished }
+                }
+            }
+        }
     }
 
     private suspend fun syncResultFromCurrentStarterWork(

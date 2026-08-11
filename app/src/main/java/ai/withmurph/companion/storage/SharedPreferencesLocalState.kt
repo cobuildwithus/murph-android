@@ -265,6 +265,25 @@ class SharedPreferencesLocalState internal constructor(
             removeAddressBookDeletion()
         }
 
+    override fun replaceAddressBookReplacement(
+        expectedMutationId: String,
+        mutation: AddressBookMutation,
+    ): Boolean {
+        val pending = pendingAddressBookReplacement ?: return false
+        if (
+            pending.mutationId != expectedMutationId ||
+            mutation.mutationId == expectedMutationId ||
+            mutation.baseRevision != pending.baseRevision
+        ) {
+            return false
+        }
+        return commitAddressBookChange {
+            putInt(KEY_ADDRESS_BOOK_REPLACEMENT_BASE_REVISION, mutation.baseRevision)
+            putString(KEY_ADDRESS_BOOK_REPLACEMENT_MUTATION_ID, mutation.mutationId)
+            removeAddressBookDeletion()
+        }
+    }
+
     override fun completeAddressBookReplacement(
         mutationId: String,
         revision: Int,
@@ -475,14 +494,20 @@ class SharedPreferencesLocalState internal constructor(
         val wasSignOutPending = signOutPending
         val previousPrivySignOutMemberKey = pendingPrivySignOutMemberKey
         val previousExternalHandoff = this.pendingExternalHandoff
+        val previousPendingHealthSyncFailure = pendingHealthSyncFailure
         val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
-        // Persist the teardown request before SDK work is cancelled. Health authority
-        // remains committed until Vital's durable workers are proven terminal and its
-        // identity is signed out; the WorkManager factory rejects new or restarted
-        // Vital work whenever this tombstone is present.
+        // Persist the teardown request and revoke reconstructible health authority
+        // before SDK work is cancelled. The member key and address-book mutation
+        // metadata remain only so teardown can settle their exact old-owner state.
         val editor = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
+            .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
+            .remove(KEY_HEALTH_RECEIPT_BASELINE_AT)
+            .remove(KEY_LAST_DATA_RECEIVED_AT)
+            .remove(KEY_LAST_STATUS_OBSERVED_AT)
+            .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .removePendingHealthSyncFailure()
             .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
             .removeHealthSyncReminderDeadline()
         if (privySignOutMemberKey == null) {
@@ -511,6 +536,7 @@ class SharedPreferencesLocalState internal constructor(
                 previousExternalHandoff,
                 setupStep,
                 addressBookSnapshot,
+                pendingHealthSyncFailure = previousPendingHealthSyncFailure,
             )
         }
         return committed

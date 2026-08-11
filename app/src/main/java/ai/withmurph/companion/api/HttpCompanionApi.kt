@@ -33,20 +33,50 @@ import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.Closeable
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
-class HttpCompanionApi(
+class HttpCompanionApi private constructor(
     baseUrl: String,
     private val identityTokenForMember: suspend (String) -> String,
+    private val connectionFactory: HttpConnectionFactory,
 ) : CompanionApi {
+    constructor(
+        baseUrl: String,
+        identityTokenForMember: suspend (String) -> String,
+    ) : this(
+        baseUrl = baseUrl,
+        identityTokenForMember = identityTokenForMember,
+        connectionFactory = HttpConnectionFactory { url ->
+            url.openConnection() as HttpURLConnection
+        },
+    )
+
+    internal constructor(
+        baseUrl: String,
+        identityTokenForMember: suspend (String) -> String,
+        openConnectionForTest: (URL) -> HttpURLConnection,
+    ) : this(
+        baseUrl = baseUrl,
+        identityTokenForMember = identityTokenForMember,
+        connectionFactory = HttpConnectionFactory(openConnectionForTest),
+    )
+
     private val baseUri = URI(baseUrl.trimEnd('/')).also { uri ->
         require(uri.scheme == "https") { "Murph backend URL must use HTTPS" }
         require(uri.host != null) { "Murph backend URL must have a host" }
@@ -247,57 +277,41 @@ class HttpCompanionApi(
         revisionConflict: Boolean = false,
         connectTimeoutMillis: Int = 15_000,
         readTimeoutMillis: Int = 30_000,
-    ): JSONObject = withContext(Dispatchers.IO) {
-        val token = authenticate?.let { tokenProvider ->
-            try {
-                tokenProvider()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: CompanionApiException.LocalAuthUnavailable) {
-                throw error
-            } catch (_: Exception) {
-                throw CompanionApiException.LocalAuthUnavailable(
-                    observedState = AuthSessionState.TemporarilyUnavailable,
-                )
-            }
-        }
-
-        val connection = (baseUri.resolve(path).toURL().openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = connectTimeoutMillis
-            readTimeout = readTimeoutMillis
-            instanceFollowRedirects = false
-            useCaches = false
-            setRequestProperty("Accept", "application/json")
-            if (token != null) {
-                setRequestProperty("Authorization", "Bearer $token")
-            }
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-            }
-        }
-
-        try {
-            if (body != null) {
-                connection.outputStream.use { stream ->
-                    stream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+    ): JSONObject {
+        val token = withContext(Dispatchers.IO) {
+            authenticate?.let { tokenProvider ->
+                try {
+                    tokenProvider()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: CompanionApiException.LocalAuthUnavailable) {
+                    throw error
+                } catch (_: Exception) {
+                    throw CompanionApiException.LocalAuthUnavailable(
+                        observedState = AuthSessionState.TemporarilyUnavailable,
+                    )
                 }
             }
-            val status = connection.responseCode
-            val text = readResponseBody(connection, status)
-            if (status !in 200..299) {
-                throw mapCompanionApiError(status, text, revisionConflict)
+        }
+        currentCoroutineContext().ensureActive()
+        val response = executeHttpRequest(
+            openConnection = connectionFactory::open,
+            url = baseUri.resolve(path).toURL(),
+            method = method,
+            token = token,
+            body = body?.toString(),
+            connectTimeoutMillis = connectTimeoutMillis,
+            readTimeoutMillis = readTimeoutMillis,
+        )
+        return withContext(Dispatchers.IO) {
+            if (response.status !in 200..299) {
+                throw mapCompanionApiError(response.status, response.text, revisionConflict)
             }
-            if (text.isBlank()) JSONObject() else JSONObject(text)
-        } catch (error: CompanionApiException) {
-            throw error
-        } catch (_: IOException) {
-            throw CompanionApiException.Network
-        } catch (_: org.json.JSONException) {
-            throw CompanionApiException.InvalidResponse
-        } finally {
-            connection.disconnect()
+            try {
+                if (response.text.isBlank()) JSONObject() else JSONObject(response.text)
+            } catch (_: org.json.JSONException) {
+                throw CompanionApiException.InvalidResponse
+            }
         }
     }
 
@@ -323,27 +337,199 @@ class HttpCompanionApi(
     }
 }
 
+private fun interface HttpConnectionFactory {
+    fun open(url: URL): HttpURLConnection
+}
+
+internal data class HttpResponse(
+    val status: Int,
+    val text: String,
+)
+
+internal suspend fun executeHttpRequest(
+    openConnection: (URL) -> HttpURLConnection,
+    url: URL,
+    method: String,
+    token: String?,
+    body: String?,
+    connectTimeoutMillis: Int = 15_000,
+    readTimeoutMillis: Int = 30_000,
+): HttpResponse = suspendCancellableCoroutine { continuation ->
+    val activeRequest = CancellableHttpRequest()
+    continuation.invokeOnCancellation { activeRequest.cancel() }
+    Dispatchers.IO.dispatch(continuation.context) {
+        try {
+            if (!continuation.isActive) return@dispatch
+            val connection = openConnection(url)
+            if (!activeRequest.attachConnection(connection)) return@dispatch
+            connection.apply {
+                requestMethod = method
+                connectTimeout = connectTimeoutMillis
+                readTimeout = readTimeoutMillis
+                instanceFollowRedirects = false
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+                if (token != null) {
+                    setRequestProperty("Authorization", "Bearer $token")
+                }
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
+            }
+            if (!continuation.isActive) return@dispatch
+
+            if (body != null) {
+                val stream = connection.outputStream
+                if (!activeRequest.attachStream(stream)) return@dispatch
+                try {
+                    if (!continuation.isActive) return@dispatch
+                    stream.write(body.toByteArray(StandardCharsets.UTF_8))
+                } finally {
+                    activeRequest.closeStream(stream)
+                }
+            }
+            if (!continuation.isActive) return@dispatch
+
+            val status = connection.responseCode
+            if (!continuation.isActive) return@dispatch
+            val text = readResponseBody(
+                connection = connection,
+                status = status,
+                onStreamOpened = activeRequest::attachStream,
+                onStreamClosed = activeRequest::releaseStream,
+            )
+            if (!continuation.isActive) return@dispatch
+            continuation.resume(HttpResponse(status, text))
+        } catch (error: Exception) {
+            if (!continuation.isActive) return@dispatch
+            val mapped = when (error) {
+                is CancellationException -> error
+                is CompanionApiException -> error
+                is IOException -> CompanionApiException.Network
+                else -> error
+            }
+            continuation.resumeWithException(mapped)
+        } finally {
+            activeRequest.finish()
+        }
+    }
+}
+
 internal const val MAX_RESPONSE_CHARS = 128 * 1024
 private const val MAX_UTF8_BYTES_PER_RESPONSE_CHAR = 4L
 
-internal fun readResponseBody(connection: HttpURLConnection, status: Int): String {
+internal fun readResponseBody(
+    connection: HttpURLConnection,
+    status: Int,
+    onStreamOpened: (InputStream) -> Boolean = { true },
+    onStreamClosed: (InputStream) -> Unit = {},
+): String {
     if (connection.contentLengthLong > MAX_RESPONSE_CHARS * MAX_UTF8_BYTES_PER_RESPONSE_CHAR) {
         throw CompanionApiException.InvalidResponse
     }
 
     val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-    return stream?.reader(StandardCharsets.UTF_8)?.use { reader ->
-        val body = StringBuilder()
-        val chunk = CharArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val remaining = MAX_RESPONSE_CHARS - body.length
-            val read = reader.read(chunk, 0, minOf(chunk.size, remaining + 1))
-            if (read < 0) break
-            if (read > remaining) throw CompanionApiException.InvalidResponse
-            body.append(chunk, 0, read)
+        ?: return ""
+    if (!onStreamOpened(stream)) {
+        closeQuietly(stream)
+        throw CancellationException("HTTP request was cancelled")
+    }
+    return try {
+        stream.reader(StandardCharsets.UTF_8).use { reader ->
+            val body = StringBuilder()
+            val chunk = CharArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val remaining = MAX_RESPONSE_CHARS - body.length
+                val read = reader.read(chunk, 0, minOf(chunk.size, remaining + 1))
+                if (read < 0) break
+                if (read > remaining) throw CompanionApiException.InvalidResponse
+                body.append(chunk, 0, read)
+            }
+            body.toString()
         }
-        body.toString()
-    }.orEmpty()
+    } finally {
+        onStreamClosed(stream)
+    }
+}
+
+private class CancellableHttpRequest {
+    private val lock = Any()
+    private var cancelled = false
+    private var connection: HttpURLConnection? = null
+    private var stream: Closeable? = null
+
+    fun attachConnection(candidate: HttpURLConnection): Boolean {
+        val attached = synchronized(lock) {
+            if (cancelled) false else {
+                connection = candidate
+                true
+            }
+        }
+        if (!attached) disconnectQuietly(candidate)
+        return attached
+    }
+
+    fun attachStream(candidate: Closeable): Boolean {
+        val attached = synchronized(lock) {
+            if (cancelled) false else {
+                stream = candidate
+                true
+            }
+        }
+        if (!attached) closeQuietly(candidate)
+        return attached
+    }
+
+    fun closeStream(candidate: Closeable) {
+        releaseStream(candidate)
+        closeQuietly(candidate)
+    }
+
+    fun releaseStream(candidate: Closeable) {
+        synchronized(lock) {
+            if (stream === candidate) stream = null
+        }
+    }
+
+    fun cancel() {
+        val active = synchronized(lock) {
+            cancelled = true
+            val captured = stream to connection
+            stream = null
+            connection = null
+            captured
+        }
+        closeQuietly(active.first)
+        disconnectQuietly(active.second)
+    }
+
+    fun finish() {
+        val active = synchronized(lock) {
+            val captured = stream to connection
+            stream = null
+            connection = null
+            captured
+        }
+        closeQuietly(active.first)
+        disconnectQuietly(active.second)
+    }
+}
+
+private fun closeQuietly(closeable: Closeable?) {
+    try {
+        closeable?.close()
+    } catch (_: Exception) {
+        // Cancellation and cleanup must preserve the request outcome.
+    }
+}
+
+private fun disconnectQuietly(connection: HttpURLConnection?) {
+    try {
+        connection?.disconnect()
+    } catch (_: Exception) {
+        // Cancellation and cleanup must preserve the request outcome.
+    }
 }
 
 internal object CompanionAdmissionApiContract {

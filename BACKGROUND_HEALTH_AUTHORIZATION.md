@@ -78,8 +78,10 @@ default factory before `MurphApplication`'s configuration could take effect.
 The adapter obtains the on-demand WorkManager instance through that guarded
 configuration before creating the Vital manager. The lease starts in a
 launch-authorized state, becomes promoted only after `setForeground` succeeds,
-and is rejected if the Activity backgrounds first. A promoted visible transfer
-may continue; an unpromoted request cannot reach a resource reader.
+and is rejected if the Activity backgrounds first. Foreground loss closes either
+lease stage, cancels the registered operation child, drains the starter first,
+then issues the definitive resource-worker cancellation wave. No new resource
+reader may start after that boundary.
 
 That design intentionally cannot authorize an alarm, boot, or other unattended
 entry point: no live foreground member/backend preflight exists to open the
@@ -108,9 +110,9 @@ them in order and reports aggregate failure after the loop, while cancellation
 or lease revocation stops immediately. Teardown fences new app-owned health
 work, cancels the current foreground chain, waits for zero actual delegated
 executions, and only then crosses the Junction identity, member, or consent
-boundary. Backgrounding before foreground-service promotion rejects the launch
-and leaves an explicit foreground retry; backgrounding after promotion does not
-interrupt the visible transfer.
+boundary. Backgrounding invalidates the foreground claim and cancels the chain
+whether it happens before or after foreground-service promotion; a later
+foreground return owns any retry.
 
 ## Smallest future unlock
 

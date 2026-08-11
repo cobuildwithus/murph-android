@@ -297,9 +297,10 @@ message.
 - Every app-triggered foreground sync revalidates the current Privy member and
   backend consent before Junction can read or upload health data.
 - The process lease authorizes foreground-service launch only while Murph remains
-  foreground. If the member leaves before promotion, no resource worker starts
-  and the app asks them to return and tap **Sync now**. After promotion succeeds,
-  the existing visible `dataSync` transfer may finish normally in the background.
+  foreground. Leaving Murph invalidates the foreground claim, closes the lease,
+  cancels the registered operation, drains the starter, and then cancels every
+  exact resource-worker name whether or not foreground promotion already
+  succeeded. A later foreground return owns any retry.
 - When the backend returns structured launch consent required, Murph keeps the
   Privy member session, signs out only the local Junction SDK, strictly loads
   same-origin HTTPS legal and health-data documents in native UI, and posts at
@@ -332,7 +333,9 @@ message.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
 - Signing out atomically records a durable pending-sign-out tombstone, revokes
-  the active process lease, cancels the exact health work, and awaits zero actual
+  reconstructible health authorization and the active process lease, cancels
+  and joins registered health and Contacts operations, settles uncertain
+  address-book state with the old member's authority, and awaits zero actual
   delegated resource executions before crossing Junction and Privy identity
   boundaries. Startup finishes Junction-first, Privy-second teardown before any
   session restore.
@@ -377,7 +380,7 @@ Before a Play release:
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
 4. Inspect the exact signed AAB and prove Junction's boot receiver and exact-alarm service remain removed.
 5. Verify the `dataSync` foreground transfer and notification on Android 13–16, including a real run beyond three minutes without a `shortService` timeout or ANR.
-6. On API 31–36, block immediately before promotion and press Home: prove no resource read begins and return shows the **Sync now** retry. Repeat after promotion and prove the visible transfer completes.
+6. On API 31–36, press Home immediately before and after promotion: prove the foreground claim is invalidated, the exact starter/resource chain drains without another read, and foreground return owns the retry.
 7. On API 28–30, reconstruct exact Vital work in a headless process after a committed teardown tombstone and prove Murph's rejecting factory—not Vital's original starter—runs.
 8. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
 9. Verify Contacts grant, denial, permanent denial, app-settings recovery,

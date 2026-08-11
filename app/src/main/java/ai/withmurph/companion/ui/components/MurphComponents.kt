@@ -866,7 +866,8 @@ fun SettingsRow(
     showsExternalLink: Boolean = false,
     enabled: Boolean = true,
     checked: Boolean? = null,
-    onClick: () -> Unit,
+    onClick: () -> Unit = {},
+    onCheckedChange: (Boolean) -> Unit = {},
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val interactionModifier = if (checked == null) {
@@ -883,7 +884,7 @@ fun SettingsRow(
             indication = null,
             enabled = enabled,
             role = Role.Switch,
-            onValueChange = { onClick() },
+            onValueChange = onCheckedChange,
         )
     }
     Row(

@@ -244,7 +244,7 @@ class HealthSyncReminderScheduleTest {
             existing = existing,
         )
         assertEquals(
-            Duration.ofHours(1).plusMinutes(15).toMillis(),
+            Duration.ofHours(1).plus(Duration.ofMinutes(15)).toMillis(),
             afterReboot.triggerElapsedRealtimeMillis,
         )
 
