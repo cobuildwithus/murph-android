@@ -147,12 +147,122 @@ data class InitialOnboardingContactCardHandoff(
     val url: String,
 )
 
+enum class PendingExternalHandoff {
+    AccountDeletion,
+}
+
 data class CompanionSyncStatus(
     val lastDataReceivedAt: Instant?,
     val observedAt: Instant,
     val resources: Map<String, ResourceStatus>,
 ) {
     data class ResourceStatus(val lastReceivedAt: Instant?)
+}
+
+data class PendingHealthSyncFailure(
+    val receiptFloorsByResource: Map<String, InstantValue>,
+) {
+    constructor(
+        resourceKeys: Set<String>,
+        receiptFloorAt: InstantValue,
+    ) : this(resourceKeys.associateWith { receiptFloorAt })
+
+    val resourceKeys: Set<String>
+        get() = receiptFloorsByResource.keys
+
+    init {
+        require(receiptFloorsByResource.isNotEmpty())
+        require(receiptFloorsByResource.size <= MAX_HEALTH_RESOURCE_OWNERS)
+        require(receiptFloorsByResource.keys.all { HEALTH_RESOURCE_KEY.matches(it) })
+    }
+
+    fun isConfirmedBy(status: CompanionSyncStatus): Boolean =
+        retainingUnconfirmed(status) == null
+
+    fun retainingUnconfirmed(status: CompanionSyncStatus): PendingHealthSyncFailure? {
+        val retained = receiptFloorsByResource.filterTo(linkedMapOf()) {
+            (resourceKey, receiptFloorAt) ->
+            !isResourceConfirmed(
+                resourceKey,
+                Instant.ofEpochMilli(receiptFloorAt.epochMilliseconds),
+                status,
+            )
+        }
+        return retained.takeIf { it.isNotEmpty() }?.let(::PendingHealthSyncFailure)
+    }
+
+    fun mergedWith(other: PendingHealthSyncFailure): PendingHealthSyncFailure {
+        val merged = receiptFloorsByResource.toMutableMap()
+        other.receiptFloorsByResource.forEach { (resourceKey, newFloor) ->
+            val currentFloor = merged[resourceKey]
+            if (
+                currentFloor == null ||
+                newFloor.epochMilliseconds > currentFloor.epochMilliseconds
+            ) {
+                merged[resourceKey] = newFloor
+            }
+        }
+        return PendingHealthSyncFailure(merged)
+    }
+
+    fun retainingGranted(resourceKeys: Set<String>): PendingHealthSyncFailure? {
+        val retained = receiptFloorsByResource.filterTo(linkedMapOf()) { (resourceKey, _) ->
+            resourceKey == UNKNOWN_HEALTH_RESOURCE_KEY || resourceKey in resourceKeys
+        }
+        return retained.takeIf { it.isNotEmpty() }?.let(::PendingHealthSyncFailure)
+    }
+
+    private companion object {
+        const val MAX_HEALTH_RESOURCE_OWNERS = 21
+        val HEALTH_RESOURCE_KEY = Regex("[a-z0-9_]{1,64}")
+
+        fun isResourceConfirmed(
+            resourceKey: String,
+            floor: Instant,
+            status: CompanionSyncStatus,
+        ): Boolean = when (resourceKey) {
+            UNKNOWN_HEALTH_RESOURCE_KEY -> false
+            TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY ->
+                TEMPERATURE_BACKEND_RECEIPT_KEYS.any { receiptKey ->
+                    status.resources[receiptKey]?.lastReceivedAt?.isAfter(floor) == true
+                }
+            else -> status.resources[resourceKey]
+                ?.lastReceivedAt
+                ?.isAfter(floor) == true
+        }
+    }
+}
+
+const val UNKNOWN_HEALTH_RESOURCE_KEY = "unknown"
+const val TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY = "temperature"
+
+private val TEMPERATURE_BACKEND_RECEIPT_KEYS =
+    setOf("body_temperature", "basal_body_temperature")
+
+sealed interface HealthSyncAttemptResult {
+    data object Complete : HealthSyncAttemptResult
+    data object NotStarted : HealthSyncAttemptResult
+    data object ReconnectRequired : HealthSyncAttemptResult
+
+    data class PartialFailure(val resourceKeys: Set<String>) : HealthSyncAttemptResult {
+        init {
+            require(resourceKeys.isNotEmpty())
+        }
+    }
+}
+
+sealed interface HealthGrantSnapshot {
+    data class Available(
+        val resourceCount: Int,
+        val resourceKeys: Set<String>,
+    ) : HealthGrantSnapshot {
+        init {
+            require(resourceCount >= 0)
+            require(resourceKeys.size <= resourceCount)
+        }
+    }
+
+    data object Unavailable : HealthGrantSnapshot
 }
 
 data class LaunchConsentDocument(

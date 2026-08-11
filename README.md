@@ -10,11 +10,9 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
-- Eleven reviewed Junction client resources spanning sleep, workouts, daily
-  activity, steps, active energy, HRV, respiratory rate, blood oxygen, body
-  measurements, height, and VO2 max.
+- The complete pinned Vital 5.0.2 Health Connect read surface: 21 centralized resources backed by 29 data-type read permissions.
 - Thirty-day foreground backfill within ordinary Health Connect read access.
-- Foreground sync on app entry, foreground return, and explicit **Sync now**.
+- Visible `dataSync` foreground transfer on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
 - Provider-neutral Health Connect setup and recovery guidance.
@@ -27,7 +25,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Automatic meal-photo capture and a Meals tab.
 - Chat, vault browsing, challenges, or a general Murph client.
 - Direct wearable-provider OAuth.
-- Samsung Health support before the Health Connect path is proven.
+- A direct Samsung Health SDK integration; supported Samsung Health records may relay through Health Connect.
 - Contact backup, continuous/background contact sync, invitations, messaging,
   identity proof, signup prefill, or contact-derived routing authority.
 - App-owned Hilt, Room, Retrofit, analytics, and crash-reporting SDKs. Junction
@@ -152,40 +150,79 @@ remediation, and repeat until the response reports `REVIEW_OUTCOME: PASS`.
 
 ## Data requested
 
-`JunctionHealthSyncService` uses:
+`JunctionHealthSyncService` explicitly enumerates every `VitalResource` exposed
+by the pinned Vital 5.0.2 Health Connect SDK:
 
 ```kotlin
 setOf(
-    VitalResource.Sleep,
+    VitalResource.Profile,
+    VitalResource.Body,
     VitalResource.Workout,
     VitalResource.Activity,
+    VitalResource.Sleep,
+    VitalResource.Glucose,
+    VitalResource.BloodPressure,
+    VitalResource.BloodOxygen,
+    VitalResource.HeartRate,
+    VitalResource.Water,
+    VitalResource.HeartRateVariability,
+    VitalResource.MenstrualCycle,
     VitalResource.Steps,
     VitalResource.ActiveEnergyBurned,
-    VitalResource.HeartRateVariability,
-    VitalResource.RespiratoryRate,
-    VitalResource.BloodOxygen,
-    VitalResource.Body,
-    VitalResource.Profile,
+    VitalResource.BasalEnergyBurned,
+    VitalResource.FloorsClimbed,
+    VitalResource.DistanceWalkingRunning,
     VitalResource.Vo2Max,
+    VitalResource.RespiratoryRate,
+    VitalResource.Temperature,
+    VitalResource.Meal,
 )
 ```
 
+The set is intentionally explicit even though the SDK exposes `values()`: a
+unit test compares the two, so a dependency upgrade cannot silently broaden
+permissions or Play declarations. The Android manifest declares the 29
+record-type read permissions required by this pinned set. Users still choose
+each category in the Health Connect system UI; denied categories remain
+unavailable and do not block categories the user approved. No write permission
+is requested. On a repeated permission request, Vital may report `NotPrompted`
+because the latest interaction added no category. Murph reloads and classifies
+the complete current grant set in that case, so an existing usable grant can
+resume setup without asking the member to broaden access. Cancellation,
+unavailability, and unknown permission failures still abort the attempt.
+
 Vital 5.0.2 scans all resources during permission reconciliation and its
 `remapped()` operation is an identity operation in this version. Murph pauses
-SDK synchronization before permission and through `connect()`, then unpauses
-only around an explicit foreground call with the configured-and-granted
-intersection. The shipped `READ_STEPS` and `READ_ACTIVE_CALORIES_BURNED` grants
-can activate the separate `Steps` and `ActiveEnergyBurned` paths while shared
-grants may also activate `Activity`, so all three remain explicit. Murph
-currently ingests daily steps and active calories through the `activity`
-summary; its default intake normalizes the standalone `steps` and
-`calories_active` uploads away. Those two client paths remain configured to
-preserve shipped behavior, not to claim standalone end-to-end
-ingestion. See `ARCHITECTURE.md` for provider-specific limitations.
-
-The manifest declares only the corresponding Health Connect read permissions.
-Users still choose each category in the Health Connect system UI. Denied
-categories remain unavailable and do not block categories the user approved.
+SDK synchronization before permission and through `connect()`. Before each
+explicit foreground sync, it retires any pinned durable starter/resource work,
+opens Vital's manual gate without invoking the SDK setter that schedules an
+all-granted worker, and sends only the configured-and-granted intersection.
+The process-local member lease starts closed, opens only after the existing
+current-member/backend preflight, and starts as launch-only authority. Leaving
+the foreground before WorkManager promotion rejects that launch and shows a
+specific **Sync now** retry; once promotion succeeds, the visible transfer may
+finish after the Activity backgrounds. The factory wraps the pinned resource
+worker body with a process-local execution count. Cancellation of its WorkInfo
+does not authorize teardown until the delegated `doWork()` actually exits, so a
+headless restarted process cannot infer permission to upload from durable
+preferences. Both WorkManager's default Startup metadata and
+Vital's dependent initializer are removed; the Junction adapter initializes
+WorkManager through `MurphApplication`'s guarded configuration before creating
+the Vital manager. WorkManager 2.11.2 then substitutes a Murph-owned `dataSync`
+umbrella for Vital 5.0.2's three-minute `shortService` starter while retaining
+Vital's real per-resource readers, uploaders, input contract, notification, and
+unique work names. A failed child is remembered while later authorized resources
+are still attempted; the umbrella reports aggregate failure after the loop.
+Cancellation, lease revocation, or a missing child stops the chain immediately.
+An empty intersection is a no-op. Shared permissions can activate multiple SDK
+resources, so the app declares the relevant aggregate owners explicitly. When
+no usable resource is active, a workout or reproductive detail without its
+required aggregate base names the missing Workouts or Menstruation grant instead
+of silently accepting an unusable detail-only selection. An orphan detail does
+not block a separate configured resource that is already usable. Actual source
+availability and backend receipt remain physical-device release gates; this
+permission surface does not claim that every source exports or Murph ingests
+every requested category.
 
 Junction/Vital Android 5.0.2 hard-clamps backfill to the ordinary 30-day Health
 Connect read window, so the app does not request broader history access with no
@@ -234,8 +271,13 @@ message.
   app-owned foreground sync attempt after the setup marker, receipt baseline,
   observation time, and reconnect clearance commit as one restart snapshot.
   SDK automatic synchronization stays paused across permission and connect,
-  and the adapter unpauses only for that explicit configured-resource call. A
-  failed commit rolls back the live Junction identity. The SDK's reachable
+  and the adapter opens its manual gate only for that explicit configured-resource
+  call. An on-demand WorkManager factory rejects new or restarted Vital workers
+  without a member, completed setup, clear sign-out state, and a process-local
+  lease for the exact backend-validated member. Vital's Startup initializer is
+  also removed because it depends on the default WorkManager initializer; the
+  adapter obtains the guarded on-demand WorkManager instance before creating the
+  Vital manager. A failed commit rolls back the live Junction identity. The SDK's reachable
   backfill is already limited to 30 days, so setup does not request an
   extended-history grant.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
@@ -254,6 +296,11 @@ message.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
 - Every app-triggered foreground sync revalidates the current Privy member and
   backend consent before Junction can read or upload health data.
+- The process lease authorizes foreground-service launch only while Murph remains
+  foreground. Leaving Murph invalidates the foreground claim, closes the lease,
+  cancels the registered operation, drains the starter, and then cancels every
+  exact resource-worker name whether or not foreground promotion already
+  succeeded. A later foreground return owns any retry.
 - When the backend returns structured launch consent required, Murph keeps the
   Privy member session, signs out only the local Junction SDK, strictly loads
   same-origin HTTPS legal and health-data documents in native UI, and posts at
@@ -270,16 +317,28 @@ message.
   permission launch before the Activity is resumed.
 - Returning from a consent document or account-control page reloads consent and
   rechecks the Privy member/account boundary before any paused action resumes.
-- “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`.
+- **Delete Account** first records a durable local stop boundary and static
+  account-deletion handoff reason, revokes the active process lease, cancels
+  every exact Vital work chain, waits for the actual delegated resource-worker
+  bodies to exit, signs out Junction, and clears local member/setup authority.
+  Only the current `RESUMED` Activity may consume the retained handoff and open
+  the fixed HTTPS deletion resource. Stop, rotation, process recreation, or an
+  external-launch failure retains a visible retry and prevents automatic
+  admission or health work until a launch succeeds.
+- “Synced” is rendered only from `GET /api/device-sync/companion/status?sourceProviderSlug=health_connect`. Each unresolved resource owner retains its own server-observed failure floor across retries and process recreation. A confirmed or revoked owner is removed before a later unrelated failure can merge, so another category cannot resurrect it or advance its floor. A hard-stopped serial transfer records the current and every unattempted owner. Temperature remains one worker/permission owner and either ordinary or basal body-temperature evidence confirms it; it never requires a source to produce both subtypes. Infrastructure failure before a new starter exists is a transient retry and records no owner; post-enqueue failure without exact starter evidence durably requires reconnect. Neither path guesses from the grant list. Permission discovery returns one total typed count-and-owner snapshot; an unavailable snapshot preserves the cached classification as stale, starts no SDK work, and is never translated to zero. If a failure marker or confirmed-owner removal cannot be committed, setup is likewise forced through reconnect instead of projecting success after reconstruction.
 - A source-scoped receipt must also be at or after the current setup boundary;
   an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online
   account verification is temporarily unavailable.
 - Login destinations and OTP digits are protected from Android task snapshots,
   and a successful OTP is cleared before the app enters the signed-in session.
-- Signing out atomically records a durable pending-sign-out tombstone and
-  invalidates health restoration before waiting on other app work. Startup
-  finishes Junction-first, Privy-second teardown before any session restore.
+- Signing out atomically records a durable pending-sign-out tombstone, revokes
+  reconstructible health authorization and the active process lease, cancels
+  and joins registered health and Contacts operations, settles uncertain
+  address-book state with the old member's authority, and awaits zero actual
+  delegated resource executions before crossing Junction and Privy identity
+  boundaries. Startup finishes Junction-first, Privy-second teardown before any
+  session restore.
 - A failed preferences commit restores the pre-call live authorization snapshot,
   so an undurable tombstone or marker removal cannot drive SDK work.
 - Address-book Settings state comes from
@@ -315,15 +374,16 @@ Pixel/Samsung acceptance evidence. See
 
 Before a Play release:
 
-1. Apply for Google Play Health Connect access for all eleven declared read
-   permissions across the eleven configured resources.
+1. Apply for Google Play Health Connect access for every one of the 29 declared data-type read permissions.
 2. Complete Play Data Safety disclosures, the Health Apps declaration, and the
    Contacts permission disclosure for optional familiar-name projection.
 3. Verify the permission-rationale deep link opens the exact production privacy policy.
 4. Inspect the exact signed AAB and prove Junction's boot receiver and exact-alarm service remain removed.
-5. Verify foreground sync and its notification behavior on Android 13–16.
-6. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
-7. Verify Contacts grant, denial, permanent denial, app-settings recovery,
+5. Verify the `dataSync` foreground transfer and notification on Android 13–16, including a real run beyond three minutes without a `shortService` timeout or ANR.
+6. On API 31–36, press Home immediately before and after promotion: prove the foreground claim is invalidated, the exact starter/resource chain drains without another read, and foreground return owns the retry.
+7. On API 28–30, reconstruct exact Vital work in a headless process after a committed teardown tombstone and prove Murph's rejecting factory—not Vital's original starter—runs.
+8. Verify the member's health apps export each product-critical field. Murph cannot manufacture fields that do not reach Health Connect.
+9. Verify Contacts grant, denial, permanent denial, app-settings recovery,
    permission revocation cleanup, compare-and-swap conflict handling, and Stop
    deletion on at least one Pixel and one Samsung device.
 

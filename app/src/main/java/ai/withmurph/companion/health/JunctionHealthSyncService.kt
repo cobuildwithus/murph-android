@@ -2,14 +2,18 @@ package ai.withmurph.companion.health
 
 import android.content.Context
 import android.content.Intent
-import androidx.lifecycle.asFlow
-import androidx.work.Operation
+import androidx.health.connect.client.HealthConnectClient
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import ai.withmurph.companion.core.AppEnvironment
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthGrantSnapshot
+import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncAttemptResult
+import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncing
 import ai.withmurph.companion.core.JunctionExternalUserId
+import ai.withmurph.companion.core.TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
 import io.tryvital.client.AuthenticateRequest
 import io.tryvital.client.VitalClient
 import io.tryvital.vitalhealthconnect.VitalHealthConnectManager
@@ -17,12 +21,168 @@ import io.tryvital.vitalhealthconnect.model.PermissionOutcome
 import io.tryvital.vitalhealthcore.model.ConnectionPolicy
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
 import io.tryvital.vitalhealthcore.model.VitalResource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.withContext
+
+private const val vitalPausePreference = "pauseSync"
+internal const val vitalResourceSyncStarter = "HC.ResourceSyncStarter"
+
+internal fun vitalResourceSyncWorkerName(resource: VitalResource): String =
+    "HC.ResourceSyncWorker.${resource.name}"
+
+private const val readExercise = "android.permission.health.READ_EXERCISE"
+private const val readElevation = "android.permission.health.READ_ELEVATION_GAINED"
+private const val readPower = "android.permission.health.READ_POWER"
+private const val readSpeed = "android.permission.health.READ_SPEED"
+private const val readMenstruation = "android.permission.health.READ_MENSTRUATION"
+private const val readCervicalMucus = "android.permission.health.READ_CERVICAL_MUCUS"
+private const val readIntermenstrualBleeding =
+    "android.permission.health.READ_INTERMENSTRUAL_BLEEDING"
+private const val readOvulationTest = "android.permission.health.READ_OVULATION_TEST"
+private const val readSexualActivity = "android.permission.health.READ_SEXUAL_ACTIVITY"
+
+private val workoutDetailPermissions = setOf(readElevation, readPower, readSpeed)
+private val menstrualDetailPermissions = setOf(
+    readCervicalMucus,
+    readIntermenstrualBleeding,
+    readOvulationTest,
+    readSexualActivity,
+)
+
+// Explicitly enumerate the complete Vital 5.0.2 Health Connect surface.
+// The parity test fails when a future SDK release adds a resource so dependency
+// upgrades cannot silently broaden member permissions or Play declarations.
+internal val healthConnectReadResources: Set<VitalResource> = setOf(
+    VitalResource.Profile,
+    VitalResource.Body,
+    VitalResource.Workout,
+    VitalResource.Activity,
+    VitalResource.Sleep,
+    VitalResource.Glucose,
+    VitalResource.BloodPressure,
+    VitalResource.BloodOxygen,
+    VitalResource.HeartRate,
+    VitalResource.Water,
+    VitalResource.HeartRateVariability,
+    VitalResource.MenstrualCycle,
+    VitalResource.Steps,
+    VitalResource.ActiveEnergyBurned,
+    VitalResource.BasalEnergyBurned,
+    VitalResource.FloorsClimbed,
+    VitalResource.DistanceWalkingRunning,
+    VitalResource.Vo2Max,
+    VitalResource.RespiratoryRate,
+    VitalResource.Temperature,
+    VitalResource.Meal,
+)
+
+// Keep app-owned counts and manual syncs bound to the reviewed scope. Vital
+// discovers grants across every SDK resource, so this intersection prevents a
+// stale or newly added SDK grant from silently becoming Murph-owned behavior.
+internal fun configuredHealthConnectReadResources(
+    grantedResources: Set<VitalResource>,
+): Set<VitalResource> = healthConnectReadResources.intersect(grantedResources)
+
+internal fun backendFailureOwnerKeyFor(resource: VitalResource): String = when (resource) {
+    VitalResource.Profile -> "profile"
+    VitalResource.Body -> "body"
+    VitalResource.Workout -> "workouts"
+    VitalResource.Activity -> "activity"
+    VitalResource.Sleep -> "sleep"
+    VitalResource.Glucose -> "glucose"
+    VitalResource.BloodPressure -> "blood_pressure"
+    VitalResource.BloodOxygen -> "blood_oxygen"
+    VitalResource.HeartRate -> "heartrate"
+    VitalResource.Water -> "water"
+    VitalResource.HeartRateVariability -> "hrv"
+    VitalResource.MenstrualCycle -> "menstrual_cycle"
+    VitalResource.Steps -> "steps"
+    VitalResource.ActiveEnergyBurned -> "calories_active"
+    VitalResource.BasalEnergyBurned -> "calories_basal"
+    VitalResource.FloorsClimbed -> "floors_climbed"
+    VitalResource.DistanceWalkingRunning -> "distance"
+    VitalResource.Vo2Max -> "vo2_max"
+    VitalResource.RespiratoryRate -> "respiratory_rate"
+    VitalResource.Temperature -> TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
+    VitalResource.Meal -> "meal"
+}
+
+internal data class VitalStarterWorkEvidence(
+    val id: java.util.UUID,
+    val state: WorkInfo.State,
+    val failedResources: Set<VitalResource>?,
+)
+
+internal fun healthSyncResultForStarterEvidence(
+    workEvidence: List<VitalStarterWorkEvidence>,
+    existingStarterIds: Set<java.util.UUID>,
+): HealthSyncAttemptResult {
+    val newStarterWork = workEvidence.filter { it.id !in existingStarterIds }
+    if (newStarterWork.isEmpty()) return HealthSyncAttemptResult.NotStarted
+    val starter = newStarterWork.singleOrNull()
+        ?: return HealthSyncAttemptResult.ReconnectRequired
+    return when {
+        starter.state == WorkInfo.State.SUCCEEDED -> HealthSyncAttemptResult.Complete
+        starter.state == WorkInfo.State.FAILED && starter.failedResources != null ->
+            HealthSyncAttemptResult.PartialFailure(
+                starter.failedResources.mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor),
+            )
+        else -> HealthSyncAttemptResult.ReconnectRequired
+    }
+}
+
+internal fun healthSyncResultForNewStarterWork(
+    workInfos: List<WorkInfo>,
+    existingStarterIds: Set<java.util.UUID>,
+): HealthSyncAttemptResult = healthSyncResultForStarterEvidence(
+    workEvidence = workInfos.map { workInfo ->
+        VitalStarterWorkEvidence(
+            id = workInfo.id,
+            state = workInfo.state,
+            failedResources = vitalFailedResources(workInfo.outputData),
+        )
+    },
+    existingStarterIds = existingStarterIds,
+)
+
+internal fun healthPermissionRequestResult(
+    activeResources: Set<VitalResource>,
+    grantedPermissions: Set<String>,
+): HealthPermissionRequestResult {
+    if (configuredHealthConnectReadResources(activeResources).isNotEmpty()) {
+        return HealthPermissionRequestResult.Ready
+    }
+    val workoutBaseMissing =
+        grantedPermissions.any(workoutDetailPermissions::contains) &&
+            readExercise !in grantedPermissions
+    val menstrualBaseMissing =
+        grantedPermissions.any(menstrualDetailPermissions::contains) &&
+            readMenstruation !in grantedPermissions
+    return when {
+        workoutBaseMissing && menstrualBaseMissing ->
+            HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases
+        workoutBaseMissing -> HealthPermissionRequestResult.MissingWorkoutBase
+        menstrualBaseMissing -> HealthPermissionRequestResult.MissingMenstrualBase
+        else -> HealthPermissionRequestResult.NoActiveResource
+    }
+}
+
+/**
+ * Vital reports NotPrompted when a repeated request adds no new permission.
+ * That disposition does not erase grants from an earlier interaction, so both
+ * successful prompt dispositions must be followed by current-state discovery.
+ */
+internal fun permissionOutcomeAllowsCurrentGrantClassification(
+    outcome: PermissionOutcome,
+): Boolean =
+    outcome is PermissionOutcome.Success ||
+        outcome is PermissionOutcome.NotPrompted
 
 class JunctionHealthSyncService(
     context: Context,
@@ -30,19 +190,29 @@ class JunctionHealthSyncService(
     private val backfillDays: Int = 30,
 ) : HealthSyncing {
     private val appContext = context.applicationContext
-    private val manager = VitalHealthConnectManager.getOrCreate(appContext)
-    private val workManager = WorkManager.getInstance(appContext)
+    private val manager = createVitalManagerAfterGuardedWorkManager(appContext)
 
-    override val totalResourceCount: Int = requestedReadResources.size
+    override val totalResourceCount: Int = healthConnectReadResources.size
 
     fun healthPermissionContract() = manager.createPermissionRequestContract(
-        readResources = requestedReadResources,
+        readResources = healthConnectReadResources,
         writeResources = emptySet(),
     )
 
-    suspend fun permissionRequestCompleted(outcome: Deferred<PermissionOutcome>): Boolean {
-        if (outcome.await() !is PermissionOutcome.Success) return false
-        return configuredGrantedResources(manager.resourcesWithReadPermission()).isNotEmpty()
+    suspend fun permissionRequestCompleted(
+        outcome: Deferred<PermissionOutcome>,
+    ): HealthPermissionRequestResult {
+        if (!permissionOutcomeAllowsCurrentGrantClassification(outcome.await())) {
+            return HealthPermissionRequestResult.NoActiveResource
+        }
+        manager.reloadPermissions()
+        val grantedPermissions = HealthConnectClient.getOrCreate(appContext)
+            .permissionController
+            .getGrantedPermissions()
+        return healthPermissionRequestResult(
+            activeResources = manager.resourcesWithReadPermission(),
+            grantedPermissions = grantedPermissions,
+        )
     }
 
     override fun availability(): HealthConnectAvailability =
@@ -58,16 +228,20 @@ class JunctionHealthSyncService(
     }
 
     override fun cancelActiveSync() {
-        ForegroundVitalSyncAdmission.revoke()
+        VitalHealthWorkerLease.close()
         manager.pauseSynchronization = true
-        cancelSyncWorkers()
+        val workManager = WorkManager.getInstance(appContext)
+        workManager.cancelUniqueWork(vitalResourceSyncStarter)
+        healthConnectReadResources.forEach { resource ->
+            workManager.cancelUniqueWork(vitalResourceSyncWorkerName(resource))
+        }
     }
 
     override suspend fun identify(
         memberKey: String,
         authenticate: suspend () -> String,
     ) {
-        pauseAndAwaitSyncWorkers()
+        revokeActiveSyncAuthorization()
         val externalUserId = JunctionExternalUserId.derive(memberKey, environment)
         if (VitalClient.identifiedExternalUser == externalUserId) {
             // Vital 5.0.2 returns early for an unchanged external id without invoking
@@ -98,123 +272,178 @@ class JunctionHealthSyncService(
         manager.reloadPermissions()
     }
 
-    override suspend fun syncAllGrantedResources() {
-        val admission = ForegroundVitalSyncAdmission.open()
-        try {
-            withContext(Dispatchers.Main.immediate) {
-                manager.pauseSynchronization = false
-            }
-            manager.syncData(
-                resources = configuredGrantedResources(manager.resourcesWithReadPermission()),
+    override suspend fun syncAllGrantedResources(
+        expectedMemberKey: String,
+    ): HealthSyncAttemptResult {
+        // An upgrade can inherit durable all-granted work enqueued by Vital's public
+        // unpause setter. Retire every pinned chain before evaluating the exact set,
+        // including when the new configured-and-granted intersection is empty.
+        val preparation = try {
+            cancelAndAwaitVitalWork()
+            val resources = configuredHealthConnectReadResources(
+                manager.resourcesWithReadPermission(),
             )
+            if (resources.isEmpty()) return HealthSyncAttemptResult.Complete
+            val workManager = WorkManager.getInstance(appContext)
+            val existingStarterIds = workManager
+                .getWorkInfosForUniqueWork(vitalResourceSyncStarter)
+                .await()
+                .mapTo(mutableSetOf()) { it.id }
+            PreparedHealthSync(workManager, existingStarterIds, resources)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return HealthSyncAttemptResult.NotStarted
+        }
+
+        try {
+            VitalHealthWorkerLease.openFor(expectedMemberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return HealthSyncAttemptResult.NotStarted
+        }
+
+        var launchRejected = false
+        var syncInvocationBegan = false
+        var manualGateOpened = false
+        var outcome: HealthSyncAttemptResult = HealthSyncAttemptResult.NotStarted
+        var cleanupFailure: Throwable? = null
+        try {
+            try {
+                setManualSyncPaused(false)
+                manualGateOpened = true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                outcome = HealthSyncAttemptResult.NotStarted
+            }
+
+            if (manualGateOpened) {
+                // Only enter the SDK after the manual gate is durably open.
+                syncInvocationBegan = true
+                outcome = try {
+                    manager.syncData(resources = preparation.resources)
+                    launchRejected =
+                        VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+                    syncResultFromCurrentStarterWork(preparation)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    launchRejected =
+                        VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+                    if (launchRejected) {
+                        HealthSyncAttemptResult.NotStarted
+                    } else {
+                        syncResultFromCurrentStarterWork(preparation)
+                    }
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
         } finally {
             withContext(NonCancellable) {
-                ForegroundVitalSyncAdmission.close(admission)
-                withContext(Dispatchers.Main.immediate) {
-                    manager.pauseSynchronization = true
+                try {
+                    cancelAndAwaitVitalWork()
+                } catch (error: Exception) {
+                    cleanupFailure = error
+                } finally {
+                    VitalHealthWorkerLease.closeFor(expectedMemberKey)
                 }
-                cancelAndAwaitSyncWorkers()
             }
         }
+        cleanupFailure?.let { error ->
+            if (error is CancellationException) throw error
+            outcome = if (syncInvocationBegan) {
+                HealthSyncAttemptResult.ReconnectRequired
+            } else {
+                HealthSyncAttemptResult.NotStarted
+            }
+        }
+        if (launchRejected) throw HealthSyncForegroundLaunchRejectedException()
+        return outcome
     }
 
-    private fun cancelSyncWorkers(): List<Operation> =
-        syncWorkNames(requestedReadResources).map(workManager::cancelUniqueWork)
+    override fun grantSnapshot(): HealthGrantSnapshot = try {
+        val resources = configuredHealthConnectReadResources(
+            manager.resourcesWithReadPermission(),
+        )
+        HealthGrantSnapshot.Available(
+            resourceCount = resources.size,
+            resourceKeys = resources.mapTo(linkedSetOf(), ::backendFailureOwnerKeyFor),
+        )
+    } catch (_: Exception) {
+        HealthGrantSnapshot.Unavailable
+    }
 
-    override fun grantedResourceCount(): Int =
-        configuredGrantedResources(manager.resourcesWithReadPermission()).size
+    override fun revokeUnpromotedSyncLaunch() {
+        VitalHealthWorkerLease.rejectUnpromoted()
+    }
+
+    override suspend fun revokeActiveSyncAuthorization() {
+        VitalHealthWorkerLease.close()
+        cancelAndAwaitVitalWork()
+    }
 
     override suspend fun signOutSdk() {
-        pauseAndAwaitSyncWorkers()
+        revokeActiveSyncAuthorization()
         VitalClient.getOrCreate(appContext).signOut()
     }
 
-    private suspend fun pauseAndAwaitSyncWorkers() {
-        ForegroundVitalSyncAdmission.revoke()
-        withContext(Dispatchers.Main.immediate) {
-            manager.pauseSynchronization = true
+    /**
+     * Vital 5.0.2's public pause setter starts an all-granted automatic worker
+     * when unpaused. The pinned preference is the narrower manual-sync gate:
+     * changing it directly lets syncData() enqueue only the supplied set.
+     */
+    private suspend fun setManualSyncPaused(paused: Boolean) {
+        val committed = withContext(Dispatchers.IO) {
+            manager.sharedPreferences.edit()
+                .putBoolean(vitalPausePreference, paused)
+                .commit()
         }
-        cancelAndAwaitSyncWorkers()
+        check(committed) { "Could not durably update the Vital manual-sync gate" }
     }
 
-    private suspend fun cancelAndAwaitSyncWorkers() {
-        cancelSyncWorkerHandoff(
-            resourceWorkNames = resourceSyncWorkNames(requestedReadResources),
-            cancelAndAwait = ::cancelAndAwaitWorkNames,
-        )
-    }
-
-    private suspend fun cancelAndAwaitWorkNames(workNames: Set<String>) {
-        workNames.map(workManager::cancelUniqueWork).forEach { operation ->
-            val state = operation.state.asFlow().first {
-                it is Operation.State.SUCCESS || it is Operation.State.FAILURE
+    /**
+     * Cancel every pinned Vital foreground worker and drain the actual delegated
+     * resource bodies. WorkInfo cancellation alone is not execution quiescence.
+     */
+    private suspend fun cancelAndAwaitVitalWork() {
+        setManualSyncPaused(true)
+        val workManager = WorkManager.getInstance(appContext)
+        val resourceWorkNames =
+            healthConnectReadResources.mapTo(linkedSetOf(), ::vitalResourceSyncWorkerName)
+        cancelSyncWorkerHandoff(resourceWorkNames) { workNames ->
+            workNames.forEach { workName ->
+                workManager.cancelUniqueWork(workName).result.await()
             }
-            if (state is Operation.State.FAILURE) throw state.throwable
+            val wave = workNames.flatMap { workName ->
+                workManager.getWorkInfosForUniqueWork(workName).await()
+            }
+            check(wave.all { it.state.isFinished }) {
+                "Vital health workers were not terminal before the next cancellation wave"
+            }
         }
-        awaitSyncWorkersTerminal(workNames) { workName ->
-            workManager.getWorkInfosForUniqueWorkLiveData(workName).asFlow()
+        val workNames = listOf(vitalResourceSyncStarter) + resourceWorkNames
+        val remaining = workNames.flatMap { workName ->
+            workManager.getWorkInfosForUniqueWork(workName).await()
         }
+        check(remaining.all { it.state.isFinished }) {
+            "Vital health workers were not terminal before identity teardown"
+        }
+        VitalHealthWorkerLease.awaitNoActiveExecutions()
     }
 
     companion object {
-        /**
-         * The complete app-owned Junction scope. Keep this set aligned with the
-         * read-only Health Connect permissions in AndroidManifest.xml.
-         *
-         * Heart rate remains outside this set because Vital cannot request it
-         * only as sleep/workout enrichment, while Murph intentionally excludes
-         * the unbounded standalone stream from default ingestion.
-         *
-         * Vital 5.0.2 discovers granted resources by scanning every SDK
-         * resource. Murph keeps the SDK paused across permission and connect
-         * flows, then briefly unpauses only inside syncAllGrantedResources so
-         * this configured, post-commit call owns the resource chain. Vital's
-         * resource remapping is an identity operation in this version, so
-         * Activity, Steps, and ActiveEnergyBurned remain separate sync owners.
-         * Keep all three explicit here so manual sync and resource counts match
-         * the already-shipped manifest grants. Murph's current default intake
-         * admits the Activity summary but not the two standalone timeseries;
-         * preserving their client upload behavior avoids a silent mobile
-         * regression while that backend boundary remains explicit.
-         */
-        internal val requestedReadResources = setOf(
-            VitalResource.Sleep,
-            VitalResource.Workout,
-            VitalResource.Activity,
-            VitalResource.Steps,
-            VitalResource.ActiveEnergyBurned,
-            VitalResource.HeartRateVariability,
-            VitalResource.RespiratoryRate,
-            VitalResource.BloodOxygen,
-            VitalResource.Body,
-            VitalResource.Profile,
-            VitalResource.Vo2Max,
-        )
+        internal const val RESOURCE_SYNC_STARTER_WORK_NAME = vitalResourceSyncStarter
+        internal val requestedReadResources: Set<VitalResource>
+            get() = healthConnectReadResources
 
-        internal fun configuredGrantedResources(
-            grantedResources: Set<VitalResource>,
-        ): Set<VitalResource> = requestedReadResources.intersect(grantedResources)
+        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> = buildSet {
+            add(RESOURCE_SYNC_STARTER_WORK_NAME)
+            resources.mapTo(this, ::vitalResourceSyncWorkerName)
+        }
 
-        /**
-         * Vital 5.0.2 exposes no public cancellation API. These are its exact
-         * unique WorkManager names for the umbrella worker and every app-owned
-         * resource worker. Keep this mapping pinned to the reviewed SDK source.
-         */
-        internal const val RESOURCE_SYNC_STARTER_WORK_NAME = "HC.ResourceSyncStarter"
-
-        internal fun resourceSyncWorkNames(resources: Set<VitalResource>): Set<String> =
-            resources.mapTo(mutableSetOf()) { resource ->
-                "HC.ResourceSyncWorker.$resource"
-            }
-
-        internal fun syncWorkNames(resources: Set<VitalResource>): Set<String> =
-            resourceSyncWorkNames(resources) + RESOURCE_SYNC_STARTER_WORK_NAME
-
-        /**
-         * Stop the only producer before issuing the definitive resource-worker
-         * cancellation wave. Once the starter is terminal, the second pass
-         * cannot miss a resource worker enqueued after an earlier empty lookup.
-         */
         internal suspend fun cancelSyncWorkerHandoff(
             resourceWorkNames: Set<String>,
             cancelAndAwait: suspend (Set<String>) -> Unit,
@@ -234,6 +463,37 @@ class JunctionHealthSyncService(
             }
         }
     }
+
+    private suspend fun syncResultFromCurrentStarterWork(
+        preparation: PreparedHealthSync,
+    ): HealthSyncAttemptResult = try {
+        healthSyncResultForNewStarterWork(
+            workInfos = preparation.workManager
+                .getWorkInfosForUniqueWork(vitalResourceSyncStarter)
+                .await(),
+            existingStarterIds = preparation.existingStarterIds,
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        HealthSyncAttemptResult.ReconnectRequired
+    }
+
+    private data class PreparedHealthSync(
+        val workManager: WorkManager,
+        val existingStarterIds: Set<java.util.UUID>,
+        val resources: Set<VitalResource>,
+    )
+}
+
+private fun createVitalManagerAfterGuardedWorkManager(
+    appContext: Context,
+): VitalHealthConnectManager {
+    // Vital 5.0.2's Startup initializer depends on WorkManagerInitializer and is
+    // removed from the manifest. This on-demand call must install the
+    // MurphApplication Configuration.Provider before the Vital manager exists.
+    WorkManager.getInstance(appContext)
+    return VitalHealthConnectManager.getOrCreate(appContext)
 }
 
 internal fun ProviderAvailability.toAppAvailability(): HealthConnectAvailability = when (this) {

@@ -16,8 +16,10 @@ import ai.withmurph.companion.core.CompanionApi
 import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthGrantSnapshot
 import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.HealthSyncing
+import ai.withmurph.companion.core.HealthSyncAttemptResult
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.InitialOnboarding
@@ -29,6 +31,7 @@ import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
+import ai.withmurph.companion.core.PendingExternalHandoff
 import ai.withmurph.companion.core.LoginMethod
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
@@ -2196,7 +2199,9 @@ class AddressBookSessionTest {
         override fun pauseAutomaticSync() = Unit
         override fun cancelActiveSync() = Unit
         override fun configure() = Unit
-        override fun grantedResourceCount(): Int = grantedCount
+        override fun grantSnapshot(): HealthGrantSnapshot =
+            HealthGrantSnapshot.Available(grantedCount, emptySet())
+        override fun revokeUnpromotedSyncLaunch() = Unit
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             authenticate()
             identifyEntered.complete(Unit)
@@ -2207,11 +2212,15 @@ class AddressBookSessionTest {
             grantedCount = totalResourceCount
         }
         override suspend fun refreshPermissionState() = Unit
-        override suspend fun syncAllGrantedResources() {
+        override suspend fun syncAllGrantedResources(
+            expectedMemberKey: String,
+        ): HealthSyncAttemptResult {
             syncCalls += 1
             syncEntered.complete(Unit)
             syncGate?.await()
+            return HealthSyncAttemptResult.Complete
         }
+        override suspend fun revokeActiveSyncAuthorization() = Unit
         override suspend fun signOutSdk() {
             signOutCalls += 1
             signedIn = false
@@ -2380,6 +2389,7 @@ class AddressBookSessionTest {
             expectedMemberKey: String?,
             privySignOutMemberKey: String?,
             preserveMemberState: Boolean,
+            pendingExternalHandoff: PendingExternalHandoff?,
         ): Boolean {
             if (memberKey != expectedMemberKey) return false
             signOutPending = true

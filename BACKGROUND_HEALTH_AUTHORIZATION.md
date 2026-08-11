@@ -2,7 +2,7 @@
 
 Status: **blocked for Junction/Vital Android 5.0.2**
 
-Reviewed: 2026-08-05
+Reviewed: 2026-08-10
 
 Scope: unattended Health Connect reads and uploads only
 
@@ -21,9 +21,12 @@ worker can read or upload, that:
 3. the backend still recognizes that member and current launch consent; and
 4. the worker belongs to the current health-setup generation.
 
-Vital 5.0.2 does not expose a callback or worker factory where those checks can
-be inserted for its unattended worker chain. Local Vital sign-in state is not
-a substitute for Murph member and consent authorization.
+Vital 5.0.2 does not expose a callback where Murph can revalidate backend
+authority for unattended work. Murph's WorkManager factory can intercept the
+pinned worker classes, but it deliberately requires a process-local lease that
+starts closed and opens only after a live foreground preflight. Local Vital
+sign-in state and durable preferences are not substitutes for Murph member and
+consent authorization.
 
 ## Evidence
 
@@ -57,51 +60,59 @@ Android also recommends WorkManager, rather than exact alarms, for ordinary
 scheduled background work
 ([exact-alarm guidance](https://developer.android.com/about/versions/14/changes/schedule-exact-alarms#use-cases)).
 
-## Why a wrapper around `syncData()` is insufficient
+## Why the foreground wrapper does not unlock unattended sync
 
-An app-owned worker could validate the member once and then call the public
-`syncData()` API. That API still hands execution to the internal starter and
-its later per-resource workers. Murph cannot recheck its durable tombstone,
-member owner, consent, and setup generation at those worker boundaries. Server
-member or consent authority can therefore change after the wrapper's single
-preflight while a later resource worker is still eligible to begin.
+For explicit foreground transfer, Murph replaces Vital's umbrella starter,
+requires the exact member's process-local lease before each resource enqueue,
+and keeps teardown behind the same session mutex until every exact delegated
+worker body has exited. The factory requires that lease again when constructing
+Vital's real per-resource worker, wraps its `doWork()` in a process-local active
+execution count, and decrements only from the actual delegated `finally`.
+WorkInfo cancellation can therefore stop scheduling but cannot authorize an
+identity change by itself. Process death resets both the lease and count closed,
+so WorkManager reconstruction rejects the durable request.
 
-This is the same missing seam behind the vendor exact-alarm path and any app
-worker that merely preflights `syncData()`. Changing the scheduler does not
-change the authorization boundary. The current release instead interposes at
-WorkManager's construction boundary for Vital's exact starter and resource
-worker classes: without the live in-process foreground lease, those workers
-fail closed before their vendor implementation starts.
+Vital's discoverable Startup initializer is also excluded: it declares
+`WorkManagerInitializer` as a dependency and would otherwise initialize the
+default factory before `MurphApplication`'s configuration could take effect.
+The adapter obtains the on-demand WorkManager instance through that guarded
+configuration before creating the Vital manager. The lease starts in a
+launch-authorized state, becomes promoted only after `setForeground` succeeds,
+and is rejected if the Activity backgrounds first. Foreground loss closes either
+lease stage, cancels the registered operation child, drains the starter first,
+then issues the definitive resource-worker cancellation wave. No new resource
+reader may start after that boundary.
+
+That design intentionally cannot authorize an alarm, boot, or other unattended
+entry point: no live foreground member/backend preflight exists to open the
+lease. Making the lease durable would recreate the stale-authority gap this
+boundary is designed to close.
 
 ## Current enforcement
 
 The application manifest removes Vital's `SyncBroadcastReceiver`,
-`SyncOnExactAlarmService`, its eager AndroidX Startup initializer, WorkManager's
-default initializer, and the inherited `RECEIVE_BOOT_COMPLETED` permission.
-WorkManager instead initializes on demand from `MurphApplication`'s app-owned
-configuration, while the foreground Activity remains the only owner that
-constructs Junction through the lazy `AppGraph`. The app does not request
-`READ_HEALTH_DATA_IN_BACKGROUND`. `scripts/verify.sh` builds both variants,
-inspects each merged manifest, and fails if prohibited entry points or
-permissions reappear.
+`SyncOnExactAlarmService`, discoverable Startup initializer, and inherited
+`RECEIVE_BOOT_COMPLETED` permission, as well as WorkManager's default
+initializer. It does not request `READ_HEALTH_DATA_IN_BACKGROUND`.
+`scripts/verify.sh` builds both variants, inspects each merged manifest, and
+fails if those entry points, initializers, or permissions reappear.
 
 Foreground app entry, foreground return, and **Sync now** remain the only sync
 owners. They use `AppSession`'s existing member, backend-consent, setup-owner,
-and sign-out checks before calling the Junction adapter. The adapter keeps
+and sign-out checks before calling the Junction adapter with the validated
+member key. The adapter keeps
 Vital synchronization paused across permission and connect flows and unpauses
-only inside an explicit foreground call. A process-local WorkManager admission
-lease defaults closed in every fresh process and intercepts Vital's exact
-starter and resource-worker classes before construction; only the app-owned
-foreground call opens it. Foreground loss revokes the lease, cancels the
-registered app operation, stops the starter to terminality, then issues a fresh
-cancellation wave for every Vital 5.0.2 resource-worker name. Cancellation
-acceptance is not execution proof, so each wave also waits until every matching
-work item is absent or terminal before it releases the session's health mutex.
-Sign-out requests that cancellation immediately after the durable tombstone
-commits, and Junction teardown repeats the same terminal check before changing
-SDK identity. Teardown therefore closes the current foreground chain before
-crossing the Junction identity, member, or consent boundary, including after
-process reconstruction.
+only inside an explicit foreground call. Its default-closed process lease and
+authorization-aware factory reject reconstructed work, while its `dataSync`
+starter preserves Vital's real per-resource readers and uploaders. An ordinary
+failed child does not starve later authorized resources; the starter attempts
+them in order and reports aggregate failure after the loop, while cancellation
+or lease revocation stops immediately. Teardown fences new app-owned health
+work, cancels the current foreground chain, waits for zero actual delegated
+executions, and only then crosses the Junction identity, member, or consent
+boundary. Backgrounding invalidates the foreground claim and cancels the chain
+whether it happens before or after foreground-service promotion; a later
+foreground return owns any retry.
 
 ## Smallest future unlock
 

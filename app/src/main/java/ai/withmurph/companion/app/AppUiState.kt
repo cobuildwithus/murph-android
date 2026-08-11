@@ -61,6 +61,7 @@ data class AppUiState(
     val initialOnboardingCompletedNow: Boolean = false,
     val initialOnboardingMessage: String? = null,
     val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
+    val accountDeletionHandoffPending: Boolean = false,
     val pendingHealthPermissionRequestId: Int? = null,
     val pendingAddressBookPermissionRequestId: Int? = null,
 )

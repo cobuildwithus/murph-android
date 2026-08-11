@@ -121,7 +121,8 @@ interface HealthSyncing {
     fun pauseAutomaticSync()
     fun cancelActiveSync()
     fun configure()
-    fun grantedResourceCount(): Int
+    fun grantSnapshot(): HealthGrantSnapshot
+    fun revokeUnpromotedSyncLaunch()
 
     suspend fun identify(
         memberKey: String,
@@ -130,8 +131,19 @@ interface HealthSyncing {
 
     suspend fun connectAfterPermissionRequest()
     suspend fun refreshPermissionState()
-    suspend fun syncAllGrantedResources()
+    suspend fun syncAllGrantedResources(expectedMemberKey: String): HealthSyncAttemptResult
+    suspend fun revokeActiveSyncAuthorization()
     suspend fun signOutSdk()
+}
+
+class HealthSyncForegroundLaunchRejectedException : Exception()
+
+enum class HealthPermissionRequestResult {
+    Ready,
+    NoActiveResource,
+    MissingWorkoutBase,
+    MissingMenstrualBase,
+    MissingWorkoutAndMenstrualBases,
 }
 
 interface LocalState {
@@ -143,10 +155,14 @@ interface LocalState {
     var lastKnownDataReceivedAt: InstantValue?
     var lastKnownStatusObservedAt: InstantValue?
     var healthReconnectRequired: Boolean
+    val pendingHealthSyncFailure: PendingHealthSyncFailure?
+        get() = null
     val healthSyncReminderDeadline: HealthSyncReminderDeadline?
         get() = null
     val signOutPending: Boolean
     val pendingPrivySignOutMemberKey: String?
+    val pendingExternalHandoff: PendingExternalHandoff?
+        get() = null
     val addressBookRevision: Int?
         get() = null
     val pendingAddressBookReplacement: AddressBookMutation?
@@ -169,6 +185,9 @@ interface LocalState {
         memberKey: String,
         deadline: HealthSyncReminderDeadline,
     ): Boolean = false
+    fun recordPendingHealthSyncFailure(failure: PendingHealthSyncFailure): Boolean = false
+    fun replacePendingHealthSyncFailure(failure: PendingHealthSyncFailure?): Boolean = false
+    fun clearPendingHealthSyncFailure(): Boolean = pendingHealthSyncFailure == null
 
     fun recordAddressBookRevision(revision: Int): Boolean = false
     fun recordDisabledAddressBookRevision(revision: Int): Boolean = false
@@ -200,8 +219,10 @@ interface LocalState {
         expectedMemberKey: String?,
         privySignOutMemberKey: String? = null,
         preserveMemberState: Boolean = false,
+        pendingExternalHandoff: PendingExternalHandoff? = this.pendingExternalHandoff,
     ): Boolean
     fun completeSignOut(expectedMemberKey: String?): Boolean
+    fun completeExternalHandoff(expected: PendingExternalHandoff): Boolean = false
     fun clearMemberScopedState()
 }
 

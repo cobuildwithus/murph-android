@@ -8,6 +8,9 @@ import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.core.LocalState
+import ai.withmurph.companion.core.PendingHealthSyncFailure
+import ai.withmurph.companion.core.PendingExternalHandoff
+import ai.withmurph.companion.core.UNKNOWN_HEALTH_RESOURCE_KEY
 import java.util.UUID
 
 class SharedPreferencesLocalState internal constructor(
@@ -76,6 +79,45 @@ class SharedPreferencesLocalState internal constructor(
             preferences.edit().putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, value).apply()
         }
 
+    override val pendingHealthSyncFailure: PendingHealthSyncFailure?
+        get() {
+            preferences.getStringSet(
+                KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCE_FLOORS,
+                null,
+            )?.let { encodedFloors ->
+                val decodedFloors = encodedFloors
+                    .map(::decodePendingHealthSyncFailureFloor)
+                if (decodedFloors.any { it == null }) {
+                    return invalidPendingHealthSyncFailure()
+                }
+                val receiptFloorsByResource = decodedFloors.filterNotNull().toMap()
+                if (receiptFloorsByResource.size != encodedFloors.size) {
+                    return invalidPendingHealthSyncFailure()
+                }
+                return runCatching {
+                    PendingHealthSyncFailure(receiptFloorsByResource)
+                }.getOrElse { invalidPendingHealthSyncFailure() }
+            }
+            val resourceKeys = preferences
+                .getStringSet(KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCES, null)
+                ?.toSet()
+                ?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val receiptFloorAt = preferences.readInstant(
+                KEY_PENDING_HEALTH_SYNC_FAILURE_RECEIPT_FLOOR,
+            ) ?: return null
+            return runCatching {
+                PendingHealthSyncFailure(
+                    resourceKeys = if (UNKNOWN_HEALTH_RESOURCE_KEY in resourceKeys) {
+                        setOf(UNKNOWN_HEALTH_RESOURCE_KEY)
+                    } else {
+                        resourceKeys
+                    },
+                    receiptFloorAt = receiptFloorAt,
+                )
+            }.getOrElse { invalidPendingHealthSyncFailure() }
+        }
+
     override val healthSyncReminderDeadline: HealthSyncReminderDeadline?
         get() {
             val basisToken = preferences.getString(
@@ -108,6 +150,13 @@ class SharedPreferencesLocalState internal constructor(
 
     override val pendingPrivySignOutMemberKey: String?
         get() = preferences.getString(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY, null)
+
+    override val pendingExternalHandoff: PendingExternalHandoff?
+        get() = when (preferences.getString(KEY_PENDING_EXTERNAL_HANDOFF, null)) {
+            PENDING_EXTERNAL_HANDOFF_ACCOUNT_DELETION ->
+                PendingExternalHandoff.AccountDeletion
+            else -> null
+        }
 
     override val addressBookRevision: Int?
         get() = preferences.readNonNegativeInt(KEY_ADDRESS_BOOK_REVISION)
@@ -286,6 +335,34 @@ class SharedPreferencesLocalState internal constructor(
     }
 
     @SuppressLint("ApplySharedPref")
+    override fun recordPendingHealthSyncFailure(failure: PendingHealthSyncFailure): Boolean {
+        if (healthAccessRequestedAt == null || signOutPending) return false
+        val merged = pendingHealthSyncFailure?.mergedWith(failure) ?: failure
+        return replacePendingHealthSyncFailure(merged)
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun replacePendingHealthSyncFailure(
+        failure: PendingHealthSyncFailure?,
+    ): Boolean {
+        if (failure != null && (healthAccessRequestedAt == null || signOutPending)) return false
+        val previous = pendingHealthSyncFailure
+        if (previous == failure) return true
+        val committed = preferences.edit()
+            .writePendingHealthSyncFailure(failure)
+            .commit()
+        if (!committed) {
+            preferences.edit().writePendingHealthSyncFailure(previous).commit()
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun clearPendingHealthSyncFailure(): Boolean {
+        return replacePendingHealthSyncFailure(null)
+    }
+
+    @SuppressLint("ApplySharedPref")
     override fun completeHealthSetupAuthorization(
         requestedAt: InstantValue,
         receiptBaselineAt: InstantValue?,
@@ -298,6 +375,7 @@ class SharedPreferencesLocalState internal constructor(
         val previousReceivedAt = lastKnownDataReceivedAt
         val previousStatusObservedAt = lastKnownStatusObservedAt
         val previousReconnectRequired = healthReconnectRequired
+        val previousPendingHealthSyncFailure = pendingHealthSyncFailure
         val previousReminderDeadline = healthSyncReminderDeadline
         val previousSetupStep = initialSetupStep
         val reminderEnabled = currentReminderPreference()
@@ -311,6 +389,7 @@ class SharedPreferencesLocalState internal constructor(
             remove(KEY_LAST_DATA_RECEIVED_AT)
             writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
             remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            removePendingHealthSyncFailure()
             writeHealthSyncReminderDeadline(
                 if (reminderEnabled) reminderDeadline else null,
             )
@@ -327,6 +406,7 @@ class SharedPreferencesLocalState internal constructor(
                 previousReconnectRequired,
                 previousReminderDeadline,
                 setupStep = previousSetupStep,
+                pendingHealthSyncFailure = previousPendingHealthSyncFailure,
             )
         }
         return committed
@@ -339,6 +419,7 @@ class SharedPreferencesLocalState internal constructor(
         val receivedAt = lastKnownDataReceivedAt
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
+        val previousPendingHealthSyncFailure = pendingHealthSyncFailure
         val reminderDeadline = healthSyncReminderDeadline
         val committed = preferences.edit()
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
@@ -346,6 +427,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, true)
+            .removePendingHealthSyncFailure()
             .removeHealthSyncReminderDeadline()
             .commit()
         if (!committed) {
@@ -356,6 +438,7 @@ class SharedPreferencesLocalState internal constructor(
                 statusObservedAt,
                 reconnectRequired,
                 reminderDeadline,
+                pendingHealthSyncFailure = previousPendingHealthSyncFailure,
             )
         }
         return committed
@@ -368,6 +451,7 @@ class SharedPreferencesLocalState internal constructor(
         val receivedAt = lastKnownDataReceivedAt
         val statusObservedAt = lastKnownStatusObservedAt
         val reconnectRequired = healthReconnectRequired
+        val previousPendingHealthSyncFailure = pendingHealthSyncFailure
         val reminderDeadline = healthSyncReminderDeadline
         val committed = preferences.edit()
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
@@ -375,6 +459,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .removePendingHealthSyncFailure()
             .removeHealthSyncReminderDeadline()
             .commit()
         if (!committed) {
@@ -385,6 +470,7 @@ class SharedPreferencesLocalState internal constructor(
                 statusObservedAt,
                 reconnectRequired,
                 reminderDeadline,
+                pendingHealthSyncFailure = previousPendingHealthSyncFailure,
             )
         }
         return committed
@@ -395,6 +481,7 @@ class SharedPreferencesLocalState internal constructor(
         expectedMemberKey: String?,
         privySignOutMemberKey: String?,
         preserveMemberState: Boolean,
+        pendingExternalHandoff: PendingExternalHandoff?,
     ): Boolean {
         if (memberKey != expectedMemberKey) return false
         val requestedAt = healthAccessRequestedAt
@@ -406,9 +493,13 @@ class SharedPreferencesLocalState internal constructor(
         val reminderDeadline = healthSyncReminderDeadline
         val wasSignOutPending = signOutPending
         val previousPrivySignOutMemberKey = pendingPrivySignOutMemberKey
+        val previousExternalHandoff = this.pendingExternalHandoff
+        val previousPendingHealthSyncFailure = pendingHealthSyncFailure
         val setupStep = initialSetupStep
         val addressBookSnapshot = readAddressBookSnapshot()
-        // One durable boundary records the request and revokes member-scoped restoration.
+        // Persist the teardown request and revoke reconstructible health authority
+        // before SDK work is cancelled. The member key and address-book mutation
+        // metadata remain only so teardown can settle their exact old-owner state.
         val editor = preferences.edit()
             .putBoolean(KEY_SIGN_OUT_PENDING, true)
             .remove(KEY_HEALTH_ACCESS_REQUESTED_AT)
@@ -416,6 +507,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .removePendingHealthSyncFailure()
             .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
             .removeHealthSyncReminderDeadline()
         if (privySignOutMemberKey == null) {
@@ -423,6 +515,7 @@ class SharedPreferencesLocalState internal constructor(
         } else {
             editor.putString(KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY, privySignOutMemberKey)
         }
+        editor.writePendingExternalHandoff(pendingExternalHandoff)
         if (!preserveMemberState) {
             editor
                 .remove(KEY_INITIAL_SETUP_STEP)
@@ -440,9 +533,23 @@ class SharedPreferencesLocalState internal constructor(
                 reminderEnabled,
                 wasSignOutPending,
                 previousPrivySignOutMemberKey,
+                previousExternalHandoff,
                 setupStep,
                 addressBookSnapshot,
+                pendingHealthSyncFailure = previousPendingHealthSyncFailure,
             )
+        }
+        return committed
+    }
+
+    @SuppressLint("ApplySharedPref")
+    override fun completeExternalHandoff(expected: PendingExternalHandoff): Boolean {
+        if (pendingExternalHandoff != expected || signOutPending) return false
+        val committed = preferences.edit()
+            .remove(KEY_PENDING_EXTERNAL_HANDOFF)
+            .commit()
+        if (!committed) {
+            preferences.edit().writePendingExternalHandoff(expected).commit()
         }
         return committed
     }
@@ -458,6 +565,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .removePendingHealthSyncFailure()
             .remove(KEY_INITIAL_SETUP_STEP)
             .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
             .removeHealthSyncReminderDeadline()
@@ -493,6 +601,7 @@ class SharedPreferencesLocalState internal constructor(
             .remove(KEY_LAST_DATA_RECEIVED_AT)
             .remove(KEY_LAST_STATUS_OBSERVED_AT)
             .remove(KEY_HEALTH_RECONNECT_REQUIRED)
+            .removePendingHealthSyncFailure()
             .remove(KEY_INITIAL_SETUP_STEP)
             .remove(KEY_HEALTH_SYNC_REMINDER_ENABLED)
             .removeHealthSyncReminderDeadline()
@@ -520,8 +629,10 @@ class SharedPreferencesLocalState internal constructor(
         reminderEnabled: Boolean? = null,
         pendingSignOut: Boolean? = null,
         pendingPrivySignOutMemberKey: String? = null,
+        pendingExternalHandoff: PendingExternalHandoff? = this.pendingExternalHandoff,
         setupStep: InitialSetupStep? = initialSetupStep,
         addressBookSnapshot: AddressBookSnapshot? = null,
+        pendingHealthSyncFailure: PendingHealthSyncFailure? = this.pendingHealthSyncFailure,
     ) {
         preferences.edit().apply {
             writeInstant(KEY_HEALTH_ACCESS_REQUESTED_AT, requestedAt)
@@ -529,6 +640,7 @@ class SharedPreferencesLocalState internal constructor(
             writeInstant(KEY_LAST_DATA_RECEIVED_AT, receivedAt)
             writeInstant(KEY_LAST_STATUS_OBSERVED_AT, statusObservedAt)
             putBoolean(KEY_HEALTH_RECONNECT_REQUIRED, reconnectRequired)
+            writePendingHealthSyncFailure(pendingHealthSyncFailure)
             writeHealthSyncReminderDeadline(reminderDeadline)
             writeInitialSetupStep(setupStep)
             if (reminderEnabled != null) {
@@ -552,6 +664,7 @@ class SharedPreferencesLocalState internal constructor(
                         pendingPrivySignOutMemberKey,
                     )
                 }
+                writePendingExternalHandoff(pendingExternalHandoff)
             }
             addressBookSnapshot?.let { writeAddressBookSnapshot(it) }
         }.commit()
@@ -652,6 +765,56 @@ class SharedPreferencesLocalState internal constructor(
         else putString(KEY_INITIAL_SETUP_STEP, value.wireValue)
     }
 
+    private fun SharedPreferences.Editor.writePendingHealthSyncFailure(
+        failure: PendingHealthSyncFailure?,
+    ): SharedPreferences.Editor {
+        removePendingHealthSyncFailure()
+        if (failure != null) {
+            putStringSet(
+                KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCE_FLOORS,
+                failure.receiptFloorsByResource.mapTo(linkedSetOf()) {
+                    (resourceKey, receiptFloorAt) ->
+                    resourceKey + ":" + receiptFloorAt.epochMilliseconds
+                },
+            )
+        }
+        return this
+    }
+
+    private fun SharedPreferences.Editor.removePendingHealthSyncFailure():
+        SharedPreferences.Editor = remove(KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCE_FLOORS)
+            .remove(KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCES)
+            .remove(KEY_PENDING_HEALTH_SYNC_FAILURE_RECEIPT_FLOOR)
+
+    private fun SharedPreferences.Editor.writePendingExternalHandoff(
+        pending: PendingExternalHandoff?,
+    ): SharedPreferences.Editor {
+        if (pending == PendingExternalHandoff.AccountDeletion) {
+            putString(
+                KEY_PENDING_EXTERNAL_HANDOFF,
+                PENDING_EXTERNAL_HANDOFF_ACCOUNT_DELETION,
+            )
+        } else {
+            remove(KEY_PENDING_EXTERNAL_HANDOFF)
+        }
+        return this
+    }
+
+    private fun decodePendingHealthSyncFailureFloor(
+        encoded: String,
+    ): Pair<String, InstantValue>? {
+        val separator = encoded.lastIndexOf(':')
+        if (separator <= 0 || separator == encoded.lastIndex) return null
+        val resourceKey = encoded.substring(0, separator)
+        val floor = encoded.substring(separator + 1).toLongOrNull() ?: return null
+        return resourceKey to InstantValue(floor)
+    }
+
+    private fun invalidPendingHealthSyncFailure() = PendingHealthSyncFailure(
+        setOf(UNKNOWN_HEALTH_RESOURCE_KEY),
+        InstantValue(Long.MAX_VALUE),
+    )
+
     private fun currentReminderPreference(): Boolean =
         preferences.getBoolean(KEY_HEALTH_SYNC_REMINDER_ENABLED, false)
 
@@ -664,6 +827,12 @@ class SharedPreferencesLocalState internal constructor(
         const val KEY_LAST_DATA_RECEIVED_AT = "last_data_received_at"
         const val KEY_LAST_STATUS_OBSERVED_AT = "last_status_observed_at"
         const val KEY_HEALTH_RECONNECT_REQUIRED = "health_reconnect_required"
+        const val KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCE_FLOORS =
+            "pending_health_sync_failure_resource_floors"
+        const val KEY_PENDING_HEALTH_SYNC_FAILURE_RESOURCES =
+            "pending_health_sync_failure_resources"
+        const val KEY_PENDING_HEALTH_SYNC_FAILURE_RECEIPT_FLOOR =
+            "pending_health_sync_failure_receipt_floor"
         const val KEY_HEALTH_SYNC_REMINDER_ENABLED = "health_sync_reminder_enabled"
         const val KEY_HEALTH_SYNC_REMINDER_DEADLINE_BASIS =
             "health_sync_reminder_deadline_basis"
@@ -674,6 +843,8 @@ class SharedPreferencesLocalState internal constructor(
         const val KEY_SIGN_OUT_PENDING = "sign_out_pending"
         const val KEY_PENDING_PRIVY_SIGN_OUT_MEMBER_KEY =
             "pending_privy_sign_out_member_key"
+        const val KEY_PENDING_EXTERNAL_HANDOFF = "pending_external_handoff"
+        const val PENDING_EXTERNAL_HANDOFF_ACCOUNT_DELETION = "account_deletion"
         const val KEY_ADDRESS_BOOK_REVISION = "address_book_revision"
         const val KEY_ADDRESS_BOOK_REPLACEMENT_BASE_REVISION =
             "address_book_replacement_base_revision"

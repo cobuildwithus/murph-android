@@ -14,6 +14,10 @@ import ai.withmurph.companion.core.CompanionApiException
 import ai.withmurph.companion.core.CompanionSyncStatus
 import ai.withmurph.companion.core.ConnectionIntent
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthGrantSnapshot
+import ai.withmurph.companion.core.HealthPermissionRequestResult
+import ai.withmurph.companion.core.HealthSyncAttemptResult
+import ai.withmurph.companion.core.HealthSyncForegroundLaunchRejectedException
 import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.HealthSyncReminderLifecycle
 import ai.withmurph.companion.core.HealthSyncState
@@ -43,8 +47,11 @@ import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.LoginMethod
+import ai.withmurph.companion.core.PendingHealthSyncFailure
+import ai.withmurph.companion.core.PendingExternalHandoff
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
+import ai.withmurph.companion.core.TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -61,6 +68,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -890,7 +898,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun establishedTerminalAdmissionRevokesHealthBeforeTearingDownJunction() = runTest {
+    fun establishedTerminalAdmissionFencesWorkersBeforeTearingDownJunction() = runTest {
         val requestedAt = InstantValue(1)
         val receiptBaselineAt = InstantValue(2)
         val receivedAt = InstantValue(3)
@@ -996,7 +1004,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun terminalAdmissionTeardownFailureLeavesHealthAuthorizationRevoked() = runTest {
+    fun terminalAdmissionTeardownFailureKeepsHealthAuthorityFencedForRetry() = runTest {
         val fixture = fixture()
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(1)
@@ -1061,10 +1069,10 @@ class AppSessionTest {
         val blockedReplacement = recreatedSession(fixture, replacementHealth)
         blockedReplacement.start()
 
-        assertTrue(blockedReplacement.state.value.phase is AppPhase.Failed)
-        assertTrue(fixture.localState.signOutPending)
-        assertNull(fixture.localState.healthAccessRequestedAt)
-        assertEquals(1, replacementHealth.signOutCalls)
+            assertTrue(blockedReplacement.state.value.phase is AppPhase.Failed)
+            assertTrue(fixture.localState.signOutPending)
+            assertNull(fixture.localState.healthAccessRequestedAt)
+            assertEquals(1, replacementHealth.signOutCalls)
         assertEquals(0, replacementHealth.syncCalls)
 
         replacementHealth.signOutError = null
@@ -1187,7 +1195,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun accountConflictRevokesHealthAuthorizationBeforeCancelableTeardownAndReconstruction() =
+    fun accountConflictFencesHealthWorkersBeforeCancelableTeardownAndReconstruction() =
         runTest {
             val fixture = completedHealthFixture()
             fixture.api.statusError = CompanionApiException.AccountConflict
@@ -1262,7 +1270,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun accountConflictTeardownFailureLeavesHealthAuthorizationRevoked() = runTest {
+    fun accountConflictTeardownFailureKeepsHealthAuthorityFencedForRetry() = runTest {
         val fixture = completedHealthFixture()
         val signOutCalls = fixture.health.signOutCalls
         fixture.health.signOutError = IllegalStateException("teardown failed")
@@ -2394,6 +2402,7 @@ class AppSessionTest {
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(1, fixture.health.syncCalls)
+        assertEquals(listOf(MEMBER_KEY), fixture.health.syncMemberKeys)
     }
 
     @Test
@@ -2848,6 +2857,7 @@ class AppSessionTest {
         assertEquals(InitialSetupStep.FriendlyNames, fixture.session.state.value.initialSetupStep)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+        assertNull(fixture.session.state.value.healthMessage)
         assertEquals(1, fixture.health.syncCalls)
         assertEquals(
             listOf(
@@ -2886,6 +2896,7 @@ class AppSessionTest {
         assertEquals(InitialSetupStep.FriendlyNames, fixture.session.state.value.initialSetupStep)
         assertFalse(fixture.session.state.value.isConnectingHealth)
         assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+        assertNull(fixture.session.state.value.healthMessage)
         assertEquals(0, fixture.health.syncCalls)
         assertEquals(statusCallsBeforeCompletion, fixture.api.statusSources.size)
         fixture.session.didBecomeActive()
@@ -3417,7 +3428,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun backgroundWhilePostCommitSyncWaitsForHealthOwnerDefersItUntilForeground() = runTest {
+    fun backgroundCancelsQueuedPostCommitSyncUntilForeground() = runTest {
         val fixture = fixture()
         fixture.session.start()
         assertTrue(fixture.session.prepareHealthConnection())
@@ -3554,6 +3565,30 @@ class AppSessionTest {
             "Choose at least one Health Connect category to connect Murph.",
             fixture.session.state.value.healthMessage,
         )
+    }
+
+    @Test
+    fun incompleteAggregateHealthGrantsNameTheRequiredBaseCategories() = runTest {
+        val cases = listOf(
+            HealthPermissionRequestResult.MissingWorkoutBase to
+                "Power, speed, and elevation require Workouts. Allow Workouts in Health Connect, then try again.",
+            HealthPermissionRequestResult.MissingMenstrualBase to
+                "Reproductive details require Menstruation. Allow Menstruation in Health Connect, then try again.",
+            HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases to
+                "Power, speed, and elevation require Workouts; reproductive details require Menstruation. Update Health Connect permissions, then try again.",
+        )
+
+        cases.forEach { (result, message) ->
+            val fixture = fixture()
+            fixture.session.start()
+            assertTrue(fixture.session.prepareHealthConnection())
+
+            assertFalse(fixture.session.completeHealthPermissionFlow(result))
+
+            assertEquals(message, fixture.session.state.value.healthMessage)
+            assertEquals(null, fixture.localState.healthAccessRequestedAt)
+            assertEquals(0, fixture.health.connectCalls)
+        }
     }
 
     @Test
@@ -3711,7 +3746,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun failedSignedOutLocalAuthTeardownLeavesHealthAuthorizationRevokedUntilRetry() = runTest {
+    fun failedSignedOutLocalAuthTeardownKeepsHealthAuthorityFencedUntilRetry() = runTest {
         val fixture = pendingOnboardingHealthFixture()
         fixture.session.selectInitialOnboardingMainPersona("coach")
         val onboarding = fixture.session.state.value.initialOnboarding
@@ -3719,6 +3754,9 @@ class AppSessionTest {
         val memberKey = fixture.localState.memberKey
         val initialSetupStep = fixture.localState.initialSetupStep
         val addressBookRevision = fixture.localState.addressBookRevision
+        val healthRequestedAt = fixture.localState.healthAccessRequestedAt
+        val healthBaselineAt = fixture.localState.healthReceiptBaselineAt
+        val healthObservedAt = fixture.localState.lastKnownStatusObservedAt
         val signOutCalls = fixture.health.signOutCalls
         fixture.health.signOutError = IllegalStateException("teardown failed")
         fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
@@ -3756,7 +3794,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun failedChangedMemberLocalAuthTeardownLeavesHealthAuthorizationRevokedUntilRetry() =
+    fun failedChangedMemberLocalAuthTeardownKeepsHealthAuthorityFencedUntilRetry() =
         runTest {
             val fixture = pendingOnboardingHealthFixture()
             val changedMemberKey = "member-b"
@@ -3765,6 +3803,7 @@ class AppSessionTest {
             val draft = fixture.session.state.value.initialOnboardingDraft
             val initialSetupStep = fixture.localState.initialSetupStep
             val addressBookRevision = fixture.localState.addressBookRevision
+            val healthRequestedAt = fixture.localState.healthAccessRequestedAt
             val signOutCalls = fixture.health.signOutCalls
             fixture.health.signOutError = IllegalStateException("teardown failed")
             fixture.api.statusError = CompanionApiException.LocalAuthUnavailable(
@@ -3852,7 +3891,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun changedMemberRevokesHealthAuthorizationBeforeCancelableTeardownAndReconstruction() =
+    fun changedMemberFencesHealthWorkersBeforeCancelableTeardownAndReconstruction() =
         runTest {
             val fixture = pendingOnboardingHealthFixture()
             fixture.auth.state = AuthSessionState.SignedIn(
@@ -4855,6 +4894,33 @@ class AppSessionTest {
         assertEquals(2, fixture.health.syncCalls)
         assertEquals(3, fixture.api.statusSources.size)
         assertFalse(fixture.session.state.value.healthStatusIsStale)
+    }
+
+    @Test
+    fun backgroundBeforeWorkerPromotionCancelsAndForegroundReturnRetries() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.syncResourceCount = 2
+        fixture.health.syncResourceStarts = 0
+        fixture.health.syncGate = CompletableDeferred()
+        fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.rejectSyncLaunchOnBackground = true
+
+        val sync = async { fixture.session.syncNow() }
+        fixture.health.syncEntered.await()
+        fixture.session.didEnterBackground()
+        sync.await()
+
+        assertEquals(1, fixture.health.revokeUnpromotedSyncLaunchCalls)
+        assertEquals(1, fixture.health.syncResourceStarts)
+        assertNull(fixture.session.state.value.healthMessage)
+
+        val syncCallsAfterRejection = fixture.health.syncCalls
+        fixture.health.rejectSyncLaunchOnBackground = false
+        fixture.health.syncError = null
+        fixture.session.didBecomeActive()
+
+        assertEquals(syncCallsAfterRejection + 1, fixture.health.syncCalls)
+        assertNull(fixture.session.state.value.healthMessage)
     }
 
     @Test
@@ -5942,8 +6008,8 @@ class AppSessionTest {
         runCurrent()
 
         assertTrue(fixture.localState.signOutPending)
-        assertEquals(null, fixture.localState.healthAccessRequestedAt)
-        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
         assertEquals(AppPhase.Launching, fixture.session.state.value.phase)
         assertEquals(0, fixture.health.syncCalls)
 
@@ -5967,8 +6033,8 @@ class AppSessionTest {
 
         fixture.session.signOut()
 
-        assertEquals(null, fixture.localState.healthAccessRequestedAt)
-        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
         assertTrue(fixture.localState.signOutPending)
         assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
         assertTrue(fixture.session.state.value.phase is AppPhase.Failed)
@@ -6022,8 +6088,8 @@ class AppSessionTest {
 
         fixture.session.signOut()
 
-        assertEquals(null, fixture.localState.healthAccessRequestedAt)
-        assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.lastKnownDataReceivedAt)
         assertFalse(fixture.health.signedIn)
         assertTrue(fixture.localState.signOutPending)
         assertEquals(MEMBER_KEY, fixture.localState.pendingPrivySignOutMemberKey)
@@ -6275,8 +6341,7 @@ class AppSessionTest {
         assertTrue(fixture.session.prepareHealthConnection())
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
-        val syncGate = CompletableDeferred<Unit>()
-        fixture.health.syncGate = syncGate
+        fixture.health.syncGate = CompletableDeferred()
         fixture.health.syncEntered = CompletableDeferred()
         fixture.health.cancelActiveSyncHook = {
             assertTrue(fixture.localState.signOutPending)
@@ -6288,16 +6353,16 @@ class AppSessionTest {
         }
         fixture.health.syncEntered.await()
         val signOut = async { fixture.session.signOut() }
-        runCurrent()
+        fixture.health.revokeActiveSyncEntered.await()
 
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertEquals(1, fixture.health.syncResourceStarts)
-
         assertTrue(setup.await())
         signOut.await()
 
         assertEquals(1, fixture.health.syncResourceStarts)
         assertEquals(2, fixture.health.cancelActiveSyncCalls)
+        assertEquals(1, fixture.health.revokeActiveSyncCalls)
         assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertEquals(listOf("sign-out", "privy-sign-out"), fixture.events.takeLast(2))
@@ -6313,14 +6378,15 @@ class AppSessionTest {
         fixture.session.start()
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
         fixture.health.syncResourceStarts = 0
-        val syncGate = CompletableDeferred<Unit>()
-        fixture.health.syncGate = syncGate
+        fixture.health.syncGate = CompletableDeferred()
         fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.revokeActiveSyncEntered = CompletableDeferred()
         fixture.api.addressStatusError = CompanionApiException.ConsentRequired
 
         val sync = async { fixture.session.syncNow() }
         fixture.health.syncEntered.await()
         val addressBook = async { fixture.session.prepareAddressBookSharing() }
+        fixture.health.revokeActiveSyncEntered.await()
         runCurrent()
 
         assertTrue(addressBook.isCompleted)
@@ -6336,6 +6402,7 @@ class AppSessionTest {
         assertFalse(addressBook.await())
 
         assertEquals(1, fixture.health.syncResourceStarts)
+        assertEquals(1, fixture.health.revokeActiveSyncCalls)
         assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(
             LaunchConsentRecoveryPhase.Required,
@@ -6348,8 +6415,7 @@ class AppSessionTest {
         val fixture = completedHealthFixture()
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
         fixture.health.syncResourceStarts = 0
-        val syncGate = CompletableDeferred<Unit>()
-        fixture.health.syncGate = syncGate
+        fixture.health.syncGate = CompletableDeferred()
         fixture.health.syncEntered = CompletableDeferred()
         fixture.health.cancelActiveSyncHook = {
             assertTrue(fixture.localState.signOutPending)
@@ -6359,7 +6425,7 @@ class AppSessionTest {
         val sync = async { fixture.session.syncNow() }
         fixture.health.syncEntered.await()
         val signOut = async { fixture.session.signOut() }
-        runCurrent()
+        fixture.health.revokeActiveSyncEntered.await()
 
         assertEquals(1, fixture.health.syncResourceStarts)
 
@@ -6368,6 +6434,7 @@ class AppSessionTest {
 
         assertEquals(1, fixture.health.syncResourceStarts)
         assertEquals(2, fixture.health.cancelActiveSyncCalls)
+        assertEquals(1, fixture.health.revokeActiveSyncCalls)
         assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals(AppPhase.NeedsLogin, fixture.session.state.value.phase)
         assertEquals(listOf("sign-out", "privy-sign-out"), fixture.events.takeLast(2))
@@ -6378,8 +6445,7 @@ class AppSessionTest {
         val fixture = completedHealthFixture()
         fixture.health.syncResourceCount = fixture.health.totalResourceCount
         fixture.health.syncResourceStarts = 0
-        val syncGate = CompletableDeferred<Unit>()
-        fixture.health.syncGate = syncGate
+        fixture.health.syncGate = CompletableDeferred()
         fixture.health.syncEntered = CompletableDeferred()
 
         val sync = async { fixture.session.syncNow() }
@@ -6396,6 +6462,7 @@ class AppSessionTest {
         foreground.await()
 
         assertEquals(1, fixture.health.cancelActiveSyncCalls)
+        assertEquals(1, fixture.health.revokeActiveSyncCalls)
         assertTrue(fixture.health.signOutEntered.isCompleted)
         assertEquals("did:privy:replacement-member", fixture.localState.memberKey)
         assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
@@ -6998,6 +7065,142 @@ class AppSessionTest {
     }
 
     @Test
+    fun accountDeletionHandoffCancelsActiveHealthWorkBeforeOpeningItsBoundary() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.health.syncResourceCount = 3
+        fixture.health.syncResourceStarts = 0
+        fixture.health.syncGate = CompletableDeferred()
+        fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.revokeActiveSyncGate = CompletableDeferred()
+        fixture.health.revokeActiveSyncEntered = CompletableDeferred()
+        val signOutCallsAtStart = fixture.health.signOutCalls
+
+        val sync = async { fixture.session.syncNow() }
+        fixture.health.syncEntered.await()
+        val statusCallsBeforeHandoff = fixture.api.statusSources.size
+        val handoff = async { fixture.session.prepareAccountDeletionHandoff() }
+        fixture.health.revokeActiveSyncEntered.await()
+
+        assertTrue(fixture.localState.signOutPending)
+        assertFalse(handoff.isCompleted)
+        assertFalse(fixture.health.signOutEntered.isCompleted)
+        assertEquals(1, fixture.health.syncResourceStarts)
+
+        fixture.health.revokeActiveSyncGate?.complete(Unit)
+        assertTrue(handoff.await())
+        sync.await()
+
+        assertEquals(1, fixture.health.syncResourceStarts)
+        assertEquals(1, fixture.health.revokeActiveSyncCalls)
+        assertEquals(signOutCallsAtStart + 1, fixture.health.signOutCalls)
+        assertEquals(statusCallsBeforeHandoff, fixture.api.statusSources.size)
+        assertFalse(fixture.health.signedIn)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertTrue(fixture.auth.state is AuthSessionState.SignedIn)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertEquals(
+            PendingExternalHandoff.AccountDeletion,
+            fixture.localState.pendingExternalHandoff,
+        )
+        assertTrue(fixture.session.state.value.accountDeletionHandoffPending)
+
+        val admissionCalls = fixture.api.admissionMemberKeys.size
+        val syncCalls = fixture.health.syncCalls
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(admissionCalls, fixture.api.admissionMemberKeys.size)
+        assertNull(fixture.localState.memberKey)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(admissionCalls, fixture.api.admissionMemberKeys.size)
+        assertTrue(replacement.state.value.accountDeletionHandoffPending)
+        assertFalse(replacement.launchAccountDeletionHandoff { false })
+        assertEquals(
+            PendingExternalHandoff.AccountDeletion,
+            fixture.localState.pendingExternalHandoff,
+        )
+        assertTrue(replacement.state.value.accountDeletionHandoffPending)
+
+        val launchedUrls = mutableListOf<String>()
+        assertTrue(
+            replacement.launchAccountDeletionHandoff { url ->
+                launchedUrls += url
+                true
+            },
+        )
+        assertEquals(listOf(AppLinks.AccountDeletion), launchedUrls)
+        assertNull(fixture.localState.pendingExternalHandoff)
+        assertFalse(replacement.state.value.accountDeletionHandoffPending)
+        assertFalse(
+            replacement.launchAccountDeletionHandoff { url ->
+                launchedUrls += url
+                true
+            },
+        )
+        assertEquals(listOf(AppLinks.AccountDeletion), launchedUrls)
+
+        replacement.didEnterBackground()
+        replacement.didBecomeActive()
+
+        assertEquals(admissionCalls + 1, fixture.api.admissionMemberKeys.size)
+        assertEquals(MEMBER_KEY, fixture.localState.memberKey)
+    }
+
+    @Test
+    fun accountDeletionHandoffAlsoTearsDownAnUnmountedJunctionSession() = runTest {
+        val fixture = fixture()
+        fixture.health.signedIn = true
+
+        assertTrue(fixture.session.prepareAccountDeletionHandoff())
+
+        assertEquals(1, fixture.health.revokeActiveSyncCalls)
+        assertEquals(1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertNull(fixture.localState.memberKey)
+        assertTrue(fixture.auth.state is AuthSessionState.SignedIn)
+        assertEquals(0, fixture.auth.signOutCalls)
+        assertEquals(
+            PendingExternalHandoff.AccountDeletion,
+            fixture.localState.pendingExternalHandoff,
+        )
+        assertTrue(fixture.session.state.value.accountDeletionHandoffPending)
+    }
+
+    @Test
+    fun processRecreationFinishesDeletionTeardownWithoutSigningOutOrReadmitting() = runTest {
+        val fixture = completedHealthFixture()
+        val admissionCalls = fixture.api.admissionMemberKeys.size
+        val authSignOutCalls = fixture.auth.signOutCalls
+        assertTrue(
+            fixture.localState.beginSignOut(
+                expectedMemberKey = MEMBER_KEY,
+                privySignOutMemberKey = null,
+                preserveMemberState = true,
+                pendingExternalHandoff = PendingExternalHandoff.AccountDeletion,
+            ),
+        )
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertFalse(fixture.localState.signOutPending)
+        assertNull(fixture.localState.memberKey)
+        assertEquals(authSignOutCalls, fixture.auth.signOutCalls)
+        assertEquals(admissionCalls, fixture.api.admissionMemberKeys.size)
+        assertEquals(
+            PendingExternalHandoff.AccountDeletion,
+            fixture.localState.pendingExternalHandoff,
+        )
+        assertTrue(replacement.state.value.accountDeletionHandoffPending)
+    }
+
+    @Test
     fun initialSetupRevalidatesBackendAuthorityBeforeSystemPermissions() = runTest {
         listOf(
             CompanionApiException.NoAccount,
@@ -7468,6 +7671,7 @@ class AppSessionTest {
         val fixture = fixture(now = now)
         fixture.api.status = CompanionSyncStatus(oldReceipt, now, emptyMap())
         fixture.session.start()
+        fixture.health.grantedKeys = setOf("activity")
         fixture.api.statusHandler = { call ->
             if (call == 2) {
                 CompanionSyncStatus(oldReceipt, now, emptyMap())
@@ -7480,10 +7684,14 @@ class AppSessionTest {
             }
         }
         assertTrue(fixture.session.prepareHealthConnection())
-        fixture.health.syncError = IllegalStateException("vendor sync failed")
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
         assertTrue(fixture.session.completeHealthPermissionFlow(true))
 
-        assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+        assertEquals(
+            HealthSyncState.NeedsAttention(lastDataReceivedAt = null),
+            fixture.session.state.value.healthSync,
+        )
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, fixture.session.state.value.healthMessage)
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
         assertEquals(
             InstantValue(finalPreConnectReceipt.toEpochMilli()),
@@ -7499,8 +7707,11 @@ class AppSessionTest {
         fixture.api.status = CompanionSyncStatus(
             advancedReceipt,
             finalPreConnectObservation.plusSeconds(60),
-            emptyMap(),
+            mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(advancedReceipt),
+            ),
         )
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
         fixture.session.syncNow()
 
         assertEquals(
@@ -7527,6 +7738,7 @@ class AppSessionTest {
         val setupBoundary = initialObservation.plusSeconds(60)
         val fixture = fixture(now = initialObservation)
         fixture.session.start()
+        fixture.health.grantedKeys = setOf("activity")
         fixture.api.statusHandler = { call ->
             when (call) {
                 2 -> CompanionSyncStatus(null, initialObservation, emptyMap())
@@ -7539,7 +7751,7 @@ class AppSessionTest {
             }
         }
         assertTrue(fixture.session.prepareHealthConnection())
-        fixture.health.syncError = IllegalStateException("vendor sync failed")
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
         assertTrue(fixture.session.completeHealthPermissionFlow(true))
 
         assertEquals(null, fixture.localState.healthReceiptBaselineAt)
@@ -7548,28 +7760,588 @@ class AppSessionTest {
             fixture.localState.healthAccessRequestedAt,
         )
         assertEquals(null, fixture.localState.lastKnownDataReceivedAt)
-        assertEquals(HealthSyncState.AwaitingFirstData, fixture.session.state.value.healthSync)
+        assertEquals(
+            HealthSyncState.NeedsAttention(lastDataReceivedAt = null),
+            fixture.session.state.value.healthSync,
+        )
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, fixture.session.state.value.healthMessage)
 
         fixture.localState.lastKnownDataReceivedAt = InstantValue(setupBoundary.toEpochMilli())
         fixture.auth.state = AuthSessionState.TemporarilyUnavailable
         val replacement = recreatedSession(fixture)
         replacement.start()
-        assertEquals(HealthSyncState.AwaitingFirstData, replacement.state.value.healthSync)
+        assertEquals(
+            HealthSyncState.NeedsAttention(lastDataReceivedAt = null),
+            replacement.state.value.healthSync,
+        )
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, replacement.state.value.healthMessage)
 
         fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
         fixture.api.statusHandler = null
-        val qualifyingReceipt = setupBoundary.plusSeconds(1)
+        // The generic vendor failure falls back to the current granted owner,
+        // whose receipt must advance past the pre-sync status observation.
+        val qualifyingReceipt = setupBoundary.plusSeconds(61)
         fixture.api.status = CompanionSyncStatus(
             qualifyingReceipt,
             setupBoundary.plusSeconds(120),
-            emptyMap(),
+            mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(qualifyingReceipt),
+            ),
         )
-        fixture.health.syncError = null
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
         replacement.retry()
         assertEquals(
             HealthSyncState.Synced(qualifyingReceipt),
             replacement.state.value.healthSync,
         )
+    }
+
+    @Test
+    fun partialResourceFailureRemainsActionableUntilItsBackendReceiptAdvances() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val unrelatedReceipt = now.plusSeconds(60)
+        val postSyncObservation = now.plusSeconds(120)
+        val confirmedReceipt = now.plusSeconds(180)
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
+        fixture.api.statusHandler = { call ->
+            if (call == 1) {
+                CompanionSyncStatus(
+                    lastDataReceivedAt = now.minusSeconds(600),
+                    observedAt = now,
+                    resources = mapOf(
+                        "activity" to CompanionSyncStatus.ResourceStatus(now.minusSeconds(600)),
+                    ),
+                )
+            } else {
+                CompanionSyncStatus(
+                    lastDataReceivedAt = unrelatedReceipt,
+                    observedAt = postSyncObservation,
+                    resources = mapOf(
+                        "sleep" to CompanionSyncStatus.ResourceStatus(unrelatedReceipt),
+                    ),
+                )
+            }
+        }
+
+        fixture.session.start()
+
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(2, fixture.api.statusSources.size)
+        assertEquals(
+            HealthSyncState.NeedsAttention(unrelatedReceipt),
+            fixture.session.state.value.healthSync,
+        )
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, fixture.session.state.value.healthMessage)
+        assertEquals(
+            setOf("activity"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertTrue(replacement.state.value.healthSync is HealthSyncState.NeedsAttention)
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, replacement.state.value.healthMessage)
+        assertEquals(setOf("activity"), fixture.localState.pendingHealthSyncFailure?.resourceKeys)
+
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        replacement.syncNow()
+
+        assertEquals(
+            HealthSyncState.NeedsAttention(unrelatedReceipt),
+            replacement.state.value.healthSync,
+        )
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, replacement.state.value.healthMessage)
+        assertEquals(setOf("activity"), fixture.localState.pendingHealthSyncFailure?.resourceKeys)
+
+        val afterCompletePass = recreatedSession(fixture)
+        afterCompletePass.start()
+
+        assertEquals(
+            HealthSyncState.NeedsAttention(unrelatedReceipt),
+            afterCompletePass.state.value.healthSync,
+        )
+        assertEquals(HEALTH_PARTIAL_SYNC_MESSAGE, afterCompletePass.state.value.healthMessage)
+
+        fixture.api.statusHandler = {
+            CompanionSyncStatus(
+                lastDataReceivedAt = confirmedReceipt,
+                observedAt = now.plusSeconds(240),
+                resources = mapOf(
+                    "activity" to CompanionSyncStatus.ResourceStatus(confirmedReceipt),
+                ),
+            )
+        }
+        afterCompletePass.syncNow()
+
+        assertEquals(
+            HealthSyncState.Synced(confirmedReceipt),
+            afterCompletePass.state.value.healthSync,
+        )
+        assertNull(afterCompletePass.state.value.healthMessage)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+    }
+
+    @Test
+    fun sequentialPartialFailuresUnionUntilEveryBackendReceiptAdvances() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val observation = now.plusSeconds(120)
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(600),
+            observedAt = observation,
+            resources = emptyMap(),
+        )
+
+        fixture.session.start()
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("sleep"))
+        fixture.session.syncNow()
+
+        assertEquals(
+            setOf("activity", "sleep"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+        assertEquals(
+            mapOf(
+                "activity" to InstantValue(observation.toEpochMilli()),
+                "sleep" to InstantValue(observation.toEpochMilli()),
+            ),
+            fixture.localState.pendingHealthSyncFailure?.receiptFloorsByResource,
+        )
+
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        fixture.session.syncNow()
+
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.NeedsAttention)
+        assertEquals(
+            setOf("activity", "sleep"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+
+        val confirmedReceipt = observation.plusSeconds(60)
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = confirmedReceipt,
+            observedAt = confirmedReceipt.plusSeconds(60),
+            resources = mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(confirmedReceipt),
+                "sleep" to CompanionSyncStatus.ResourceStatus(confirmedReceipt),
+            ),
+        )
+        fixture.session.syncNow()
+
+        assertEquals(
+            HealthSyncState.Synced(confirmedReceipt),
+            fixture.session.state.value.healthSync,
+        )
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+    }
+
+    @Test
+    fun confirmedOwnerIsNotResurrectedByLaterFailuresAcrossRecreationAndRevocation() = runTest {
+        val firstFloor = Instant.parse("2026-07-25T18:00:00Z")
+        val bodyReceipt = firstFloor.plusSeconds(60)
+        val sleepFloor = firstFloor.plusSeconds(120)
+        val stepsFloor = firstFloor.plusSeconds(180)
+        val sleepReceipt = firstFloor.plusSeconds(240)
+        val fixture = completedHealthFixture()
+        fixture.health.grantedKeys = setOf("body", "sleep", "steps")
+        fixture.health.grantedCount = 3
+        assertTrue(
+            fixture.localState.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(
+                    setOf("body", "sleep"),
+                    InstantValue(firstFloor.toEpochMilli()),
+                ),
+            ),
+        )
+        fixture.api.status = CompanionSyncStatus(
+            bodyReceipt,
+            sleepFloor,
+            mapOf("body" to CompanionSyncStatus.ResourceStatus(bodyReceipt)),
+        )
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+
+        fixture.session.syncNow()
+
+        assertEquals(
+            mapOf("sleep" to InstantValue(firstFloor.toEpochMilli())),
+            fixture.localState.pendingHealthSyncFailure?.receiptFloorsByResource,
+        )
+
+        fixture.api.status = CompanionSyncStatus(
+            bodyReceipt,
+            sleepFloor,
+            mapOf("body" to CompanionSyncStatus.ResourceStatus(bodyReceipt)),
+        )
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("sleep"))
+        fixture.session.syncNow()
+
+        assertEquals(
+            mapOf("sleep" to InstantValue(sleepFloor.toEpochMilli())),
+            fixture.localState.pendingHealthSyncFailure?.receiptFloorsByResource,
+        )
+
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        fixture.api.status = CompanionSyncStatus(
+            bodyReceipt,
+            stepsFloor,
+            mapOf("body" to CompanionSyncStatus.ResourceStatus(bodyReceipt)),
+        )
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("steps"))
+        replacement.syncNow()
+
+        assertEquals(
+            mapOf(
+                "sleep" to InstantValue(sleepFloor.toEpochMilli()),
+                "steps" to InstantValue(stepsFloor.toEpochMilli()),
+            ),
+            fixture.localState.pendingHealthSyncFailure?.receiptFloorsByResource,
+        )
+
+        fixture.health.grantedCount = 1
+        fixture.health.grantedKeys = setOf("sleep")
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+        replacement.didEnterBackground()
+        replacement.didBecomeActive()
+
+        assertEquals(
+            setOf("sleep"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+
+        fixture.api.status = CompanionSyncStatus(
+            sleepReceipt,
+            sleepReceipt.plusSeconds(60),
+            mapOf(
+                "body" to CompanionSyncStatus.ResourceStatus(bodyReceipt),
+                "sleep" to CompanionSyncStatus.ResourceStatus(sleepReceipt),
+            ),
+        )
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        replacement.syncNow()
+
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(
+            HealthSyncState.Synced(sleepReceipt),
+            replacement.state.value.healthSync,
+        )
+    }
+
+    @Test
+    fun cancelledResourceAndUnattemptedTailRemainActionableAfterEarlierReceipt() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val activityReceipt = now.plusSeconds(60)
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.health.grantedCount = 3
+        fixture.health.grantedKeys = setOf("activity", "sleep", "steps")
+        fixture.health.syncResult =
+            HealthSyncAttemptResult.PartialFailure(setOf("sleep", "steps"))
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = activityReceipt,
+            observedAt = now.plusSeconds(120),
+            resources = mapOf(
+                "activity" to CompanionSyncStatus.ResourceStatus(activityReceipt),
+            ),
+        )
+
+        fixture.session.start()
+
+        assertEquals(
+            setOf("sleep", "steps"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+        assertEquals(
+            HealthSyncState.NeedsAttention(activityReceipt),
+            fixture.session.state.value.healthSync,
+        )
+
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(
+            setOf("sleep", "steps"),
+            fixture.localState.pendingHealthSyncFailure?.resourceKeys,
+        )
+        assertEquals(
+            HealthSyncState.NeedsAttention(activityReceipt),
+            replacement.state.value.healthSync,
+        )
+    }
+
+    @Test
+    fun permissionReconciliationDropsOnlyFailuresForRevokedResources() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        assertTrue(
+            fixture.localState.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(
+                    resourceKeys = setOf(TEMPERATURE_HEALTH_RESOURCE_OWNER_KEY, "sleep"),
+                    receiptFloorAt = InstantValue(now.toEpochMilli()),
+                ),
+            ),
+        )
+        fixture.health.grantedCount = 1
+        fixture.health.grantedKeys = setOf("sleep")
+        fixture.api.status = CompanionSyncStatus(null, now.plusSeconds(60), emptyMap())
+
+        fixture.session.start()
+
+        assertEquals(setOf("sleep"), fixture.localState.pendingHealthSyncFailure?.resourceKeys)
+        assertTrue(fixture.session.state.value.healthSync is HealthSyncState.NeedsAttention)
+    }
+
+    @Test
+    fun partialFailurePersistenceFailureRequiresReconnectAcrossRestart() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = fixture(now = now)
+        fixture.localState.memberKey = MEMBER_KEY
+        fixture.localState.healthAccessRequestedAt =
+            InstantValue(now.minusSeconds(3_600).toEpochMilli())
+        fixture.localState.recordPendingHealthSyncFailureSucceeds = false
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.health.syncResult = HealthSyncAttemptResult.PartialFailure(setOf("activity"))
+        fixture.api.status = CompanionSyncStatus(
+            lastDataReceivedAt = now.minusSeconds(60),
+            observedAt = now,
+            resources = mapOf(
+                "sleep" to CompanionSyncStatus.ResourceStatus(now.minusSeconds(60)),
+            ),
+        )
+
+        fixture.session.start()
+
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertTrue(fixture.session.state.value.healthMessage.orEmpty().contains("saved safely"))
+
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+        assertTrue(replacement.state.value.healthReconnectRequired)
+        assertFalse(replacement.state.value.healthSync is HealthSyncState.Synced)
+    }
+
+    @Test
+    fun confirmedOwnerRemovalPersistenceFailureRequiresReconnect() = runTest {
+        val floor = Instant.parse("2026-07-25T18:00:00Z")
+        val receipt = floor.plusSeconds(60)
+        val fixture = completedHealthFixture()
+        assertTrue(
+            fixture.localState.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(
+                    setOf("activity"),
+                    InstantValue(floor.toEpochMilli()),
+                ),
+            ),
+        )
+        fixture.localState.replacePendingHealthSyncFailureSucceeds = false
+        fixture.api.status = CompanionSyncStatus(
+            receipt,
+            receipt.plusSeconds(60),
+            mapOf("activity" to CompanionSyncStatus.ResourceStatus(receipt)),
+        )
+
+        fixture.session.syncNow()
+
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertFalse(fixture.session.state.value.healthSync is HealthSyncState.Synced)
+    }
+
+    @Test
+    fun unavailableGrantSnapshotStopsExplicitSyncBeforeNotStartedAdapterWork() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = completedHealthFixture()
+        val grantedKeyCalls = fixture.health.grantedResourceKeyCalls
+        val syncCalls = fixture.health.syncCalls
+        fixture.health.grantedResourceKeysError = IllegalStateException("grant discovery failed")
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+
+        fixture.session.syncNow()
+
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(grantedKeyCalls + 1, fixture.health.grantedResourceKeyCalls)
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        fixture.health.grantedResourceKeysError = null
+        fixture.session.syncNow()
+
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        val sleepReceipt = now.plusSeconds(60)
+        fixture.api.status = CompanionSyncStatus(
+            sleepReceipt,
+            now.plusSeconds(120),
+            mapOf("sleep" to CompanionSyncStatus.ResourceStatus(sleepReceipt)),
+        )
+        fixture.health.syncResult = HealthSyncAttemptResult.Complete
+        fixture.session.syncNow()
+
+        assertEquals(HealthSyncState.Synced(sleepReceipt), fixture.session.state.value.healthSync)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+    }
+
+    @Test
+    fun unavailableGrantSnapshotDuringRestoredStartupKeepsCachedStateStale() = runTest {
+        val fixture = offlineRestoredFixture()
+        fixture.health.grantedResourceKeysError =
+            IllegalStateException("grant discovery failed")
+
+        fixture.session.start()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertEquals(
+            HealthSyncState.AwaitingFirstData,
+            fixture.session.state.value.healthSync,
+        )
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+            fixture.session.state.value.healthMessage,
+        )
+        assertEquals(0, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun unavailableGrantSnapshotOnForegroundKeepsProjectionAndStartsNoWorker() = runTest {
+        val fixture = completedHealthFixture()
+        val healthSyncBefore = fixture.session.state.value.healthSync
+        val syncCalls = fixture.health.syncCalls
+        fixture.health.grantedResourceKeysError =
+            IllegalStateException("grant discovery failed")
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(healthSyncBefore, fixture.session.state.value.healthSync)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+            fixture.session.state.value.healthMessage,
+        )
+    }
+
+    @Test
+    fun backendFailureProjectionSurvivesUnavailableGrantSnapshotAndLaterRecovers() = runTest {
+        val now = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = completedHealthFixture()
+        val healthSyncBefore = fixture.session.state.value.healthSync
+        val syncCalls = fixture.health.syncCalls
+        fixture.api.statusError = CompanionApiException.Network
+        fixture.health.grantSnapshotUnavailableOnCall =
+            fixture.health.grantedResourceKeyCalls + 2
+
+        fixture.session.syncNow()
+
+        assertEquals(syncCalls, fixture.health.syncCalls)
+        assertEquals(healthSyncBefore, fixture.session.state.value.healthSync)
+        assertTrue(fixture.session.state.value.healthStatusIsStale)
+        assertEquals(
+            "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        val receipt = now.plusSeconds(60)
+        fixture.api.statusError = null
+        fixture.api.status = CompanionSyncStatus(
+            receipt,
+            receipt.plusSeconds(60),
+            mapOf("sleep" to CompanionSyncStatus.ResourceStatus(receipt)),
+        )
+        fixture.health.grantSnapshotUnavailableOnCall = null
+        fixture.session.syncNow()
+
+        assertEquals(HealthSyncState.Synced(receipt), fixture.session.state.value.healthSync)
+        assertFalse(fixture.session.state.value.healthStatusIsStale)
+    }
+
+    @Test
+    fun notStartedPostSetupAndForegroundAttemptsStayTransient() = runTest {
+        val fixture = fixture()
+        fixture.session.start()
+        assertTrue(fixture.session.prepareHealthConnection())
+        fixture.health.syncResult = HealthSyncAttemptResult.NotStarted
+
+        assertTrue(fixture.session.completeHealthPermissionFlow(true))
+
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        val syncCalls = fixture.health.syncCalls
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(
+            "Health sync couldn't start. Keep Murph open and tap Sync now to retry.",
+            fixture.session.state.value.healthMessage,
+        )
+    }
+
+    @Test
+    fun unclassifiedPostEnqueueFailureDurablyRequiresReconnect() = runTest {
+        val fixture = completedHealthFixture()
+        val signOutCalls = fixture.health.signOutCalls
+        fixture.health.syncResult = HealthSyncAttemptResult.ReconnectRequired
+
+        fixture.session.syncNow()
+
+        assertTrue(fixture.localState.healthReconnectRequired)
+        assertNull(fixture.localState.healthAccessRequestedAt)
+        assertNull(fixture.localState.pendingHealthSyncFailure)
+        assertEquals(signOutCalls + 1, fixture.health.signOutCalls)
+        assertFalse(fixture.health.signedIn)
+        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        assertEquals(
+            "Health Connect needs to reconnect before syncing can resume.",
+            fixture.session.state.value.healthMessage,
+        )
+
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(HealthSyncState.NotConnected, replacement.state.value.healthSync)
+        assertTrue(replacement.state.value.healthReconnectRequired)
     }
 
     private suspend fun assertPermissionRecoveryFailureRollsBack(configureFails: Boolean) {
@@ -8404,12 +9176,26 @@ class AppSessionTest {
         var automaticConnectSyncAttempts = 0
         var automaticConnectResourceStarts = 0
         var syncCalls = 0
+        val syncMemberKeys = mutableListOf<String>()
         var syncResourceCount = 1
         var syncResourceStarts = 0
+        var revokeUnpromotedSyncLaunchCalls = 0
+        var rejectSyncLaunchOnBackground = false
+        var revokeActiveSyncCalls = 0
         var refreshCalls = 0
         var signOutCalls = 0
         var grantedCount = 0
         var actualGrantedCount: Int? = null
+        var grantedResourceKeyCalls = 0
+        var grantedResourceKeysError: Throwable? = null
+        var grantSnapshotUnavailableOnCall: Int? = null
+        var grantedKeys = setOf(
+            "activity",
+            "sleep",
+            "body",
+            "profile",
+            "workouts",
+        )
         var identifyGate: CompletableDeferred<Unit>? = null
         val identifyEntered = CompletableDeferred<Unit>()
         var signOutGate: CompletableDeferred<Unit>? = null
@@ -8419,6 +9205,7 @@ class AppSessionTest {
         var configureError: Throwable? = null
         var connectError: Throwable? = null
         var syncError: Throwable? = null
+        var syncResult: HealthSyncAttemptResult = HealthSyncAttemptResult.Complete
         var refreshError: Throwable? = null
         var syncErrorOnCall: Int? = null
         var loseSessionOnSyncError = false
@@ -8428,6 +9215,8 @@ class AppSessionTest {
         val connectEntered = CompletableDeferred<Unit>()
         var syncGate: CompletableDeferred<Unit>? = null
         var syncEntered = CompletableDeferred<Unit>()
+        var revokeActiveSyncGate: CompletableDeferred<Unit>? = null
+        var revokeActiveSyncEntered = CompletableDeferred<Unit>()
         var refreshGate: CompletableDeferred<Unit>? = null
         var refreshGateOnCall: Int? = null
         val refreshEntered = CompletableDeferred<Unit>()
@@ -8437,6 +9226,7 @@ class AppSessionTest {
         private var identifiedInCurrentProcess = false
         private var configuredInCurrentProcess = false
         private var automaticSyncPaused = false
+        private var activeSyncAuthorized = false
         private var identifiedMemberKey: String? = null
 
         override fun availability(): HealthConnectAvailability {
@@ -8461,7 +9251,32 @@ class AppSessionTest {
             events += "configure"
             configureError?.let { throw it }
         }
-        override fun grantedResourceCount(): Int = grantedCount
+        override fun grantSnapshot(): HealthGrantSnapshot {
+            grantedResourceKeyCalls += 1
+            if (
+                grantedResourceKeysError != null ||
+                grantedResourceKeyCalls == grantSnapshotUnavailableOnCall
+            ) {
+                return HealthGrantSnapshot.Unavailable
+            }
+            return HealthGrantSnapshot.Available(
+                grantedCount,
+                if (grantedCount == 0) {
+                    emptySet()
+                } else {
+                    grantedKeys.take(grantedCount).toSet()
+                },
+            )
+        }
+
+        override fun revokeUnpromotedSyncLaunch() {
+            revokeUnpromotedSyncLaunchCalls += 1
+            if (rejectSyncLaunchOnBackground && activeSyncAuthorized) {
+                activeSyncAuthorized = false
+                syncError = HealthSyncForegroundLaunchRejectedException()
+                syncGate?.complete(Unit)
+            }
+        }
 
         override suspend fun identify(memberKey: String, authenticate: suspend () -> String) {
             assertTrue(memberKey.isNotBlank())
@@ -8514,7 +9329,10 @@ class AppSessionTest {
             actualGrantedCount?.let { grantedCount = it }
         }
 
-        override suspend fun syncAllGrantedResources() {
+        override suspend fun syncAllGrantedResources(
+            expectedMemberKey: String,
+        ): HealthSyncAttemptResult {
+            syncMemberKeys += expectedMemberKey
             if (requireCurrentProcessSetupBeforeSync) {
                 check(signedIn) {
                     "Junction sync started while the live session was signed out."
@@ -8528,13 +9346,18 @@ class AppSessionTest {
             }
             syncCalls += 1
             events += "sync"
-            repeat(syncResourceCount) { resourceIndex ->
-                if (!signedIn) return
-                syncResourceStarts += 1
-                if (resourceIndex == 0) {
-                    syncEntered.complete(Unit)
-                    syncGate?.await()
+            activeSyncAuthorized = true
+            try {
+                for (resourceIndex in 0 until syncResourceCount) {
+                    if (!signedIn || !activeSyncAuthorized) break
+                    syncResourceStarts += 1
+                    if (resourceIndex == 0) {
+                        syncEntered.complete(Unit)
+                        syncGate?.await()
+                    }
                 }
+            } finally {
+                activeSyncAuthorized = false
             }
             syncError?.takeIf {
                 syncErrorOnCall == null || syncErrorOnCall == syncCalls
@@ -8542,6 +9365,15 @@ class AppSessionTest {
                 if (loseSessionOnSyncError) loseLiveSession()
                 throw error
             }
+            return syncResult
+        }
+
+        override suspend fun revokeActiveSyncAuthorization() {
+            revokeActiveSyncCalls += 1
+            activeSyncAuthorized = false
+            syncGate?.complete(Unit)
+            revokeActiveSyncEntered.complete(Unit)
+            revokeActiveSyncGate?.await()
         }
 
         fun loseLiveSession() {
@@ -8584,9 +9416,15 @@ class AppSessionTest {
         override var lastKnownDataReceivedAt: InstantValue? = null
         override var lastKnownStatusObservedAt: InstantValue? = null
         override var healthReconnectRequired = false
+        override var pendingHealthSyncFailure: PendingHealthSyncFailure? = null
+            private set
+        var recordPendingHealthSyncFailureSucceeds = true
+        var replacePendingHealthSyncFailureSucceeds = true
         override var signOutPending = false
             private set
         override var pendingPrivySignOutMemberKey: String? = null
+            private set
+        override var pendingExternalHandoff: PendingExternalHandoff? = null
             private set
         var revokeHealthAuthorizationSucceeds = true
         var completeHealthAuthorizationSucceeds = true
@@ -8612,6 +9450,31 @@ class AppSessionTest {
 
         override fun isHealthSyncReminderEnabled(memberKey: String): Boolean =
             !signOutPending && memberKey == this.memberKey && reminderEnabled
+
+        override fun recordPendingHealthSyncFailure(
+            failure: PendingHealthSyncFailure,
+        ): Boolean {
+            if (
+                !recordPendingHealthSyncFailureSucceeds ||
+                healthAccessRequestedAt == null ||
+                signOutPending
+            ) return false
+            pendingHealthSyncFailure = pendingHealthSyncFailure?.mergedWith(failure) ?: failure
+            return true
+        }
+
+        override fun replacePendingHealthSyncFailure(
+            failure: PendingHealthSyncFailure?,
+        ): Boolean {
+            if (!replacePendingHealthSyncFailureSucceeds) return false
+            pendingHealthSyncFailure = failure
+            return true
+        }
+
+        override fun clearPendingHealthSyncFailure(): Boolean {
+            pendingHealthSyncFailure = null
+            return true
+        }
 
         override fun setHealthSyncReminderEnabled(
             memberKey: String,
@@ -8676,6 +9539,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = statusObservedAt
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             storedHealthSyncReminderDeadline = if (reminderEnabled) {
                 reminderDeadline
             } else {
@@ -8694,6 +9558,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = true
+            pendingHealthSyncFailure = null
             storedHealthSyncReminderDeadline = null
             return true
         }
@@ -8705,6 +9570,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             storedHealthSyncReminderDeadline = null
             return true
         }
@@ -8713,16 +9579,19 @@ class AppSessionTest {
             expectedMemberKey: String?,
             privySignOutMemberKey: String?,
             preserveMemberState: Boolean,
+            pendingExternalHandoff: PendingExternalHandoff?,
         ): Boolean {
             if (memberKey != expectedMemberKey) return false
             if (!beginSignOutSucceeds) return false
             signOutPending = true
             pendingPrivySignOutMemberKey = privySignOutMemberKey
+            this.pendingExternalHandoff = pendingExternalHandoff
             healthAccessRequestedAt = null
             healthReceiptBaselineAt = null
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             reminderEnabled = false
             storedHealthSyncReminderDeadline = null
             if (!preserveMemberState) {
@@ -8743,6 +9612,12 @@ class AppSessionTest {
             return true
         }
 
+        override fun completeExternalHandoff(expected: PendingExternalHandoff): Boolean {
+            if (pendingExternalHandoff != expected || signOutPending) return false
+            pendingExternalHandoff = null
+            return true
+        }
+
         override fun clearMemberScopedState() {
             clearMemberScopedStateCalls += 1
             memberKey = null
@@ -8751,6 +9626,7 @@ class AppSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             reminderEnabled = false
             storedHealthSyncReminderDeadline = null
             initialSetupStep = null
@@ -8816,6 +9692,8 @@ class AppSessionTest {
             "Health Connect access is off. Reconnect and choose at least one category."
         const val HEALTH_PERMISSION_VERIFICATION_MESSAGE =
             "Murph couldn't verify current Health Connect permissions. Saved status is still shown."
+        const val HEALTH_PARTIAL_SYNC_MESSAGE =
+            "Some Health Connect categories didn't finish syncing. Keep Murph open and tap Sync now to retry."
 
         fun launchConsentStatus(granted: Boolean): LaunchConsentStatus {
             val legal = LaunchConsentDocument(

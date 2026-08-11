@@ -5,6 +5,8 @@ import ai.withmurph.companion.core.AddressBookMutation
 import ai.withmurph.companion.core.HealthSyncReminderDeadline
 import ai.withmurph.companion.core.InstantValue
 import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.core.PendingHealthSyncFailure
+import ai.withmurph.companion.core.PendingExternalHandoff
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -12,6 +14,116 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SharedPreferencesLocalStateTest {
+    @Test
+    fun partialHealthSyncFailureIsRestartStableAndClearedWithHealthAuthority() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "member-key"
+        state.healthAccessRequestedAt = InstantValue(100)
+        val failure = PendingHealthSyncFailure(
+            resourceKeys = setOf("activity", "sleep"),
+            receiptFloorAt = InstantValue(200),
+        )
+
+        assertTrue(state.recordPendingHealthSyncFailure(failure))
+        assertEquals(
+            failure,
+            SharedPreferencesLocalState(preferences.recreated()).pendingHealthSyncFailure,
+        )
+
+        assertTrue(state.revokeHealthSetupAuthorization())
+        assertNull(
+            SharedPreferencesLocalState(preferences.recreated()).pendingHealthSyncFailure,
+        )
+    }
+
+    @Test
+    fun partialHealthSyncFailuresPersistPerOwnerReceiptFloors() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "member-key"
+        state.healthAccessRequestedAt = InstantValue(100)
+
+        assertTrue(
+            state.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(setOf("activity"), InstantValue(200)),
+            ),
+        )
+        assertTrue(
+            state.recordPendingHealthSyncFailure(
+                PendingHealthSyncFailure(setOf("sleep"), InstantValue(300)),
+            ),
+        )
+
+        assertEquals(
+            PendingHealthSyncFailure(
+                receiptFloorsByResource = mapOf(
+                    "activity" to InstantValue(200),
+                    "sleep" to InstantValue(300),
+                ),
+            ),
+            SharedPreferencesLocalState(preferences.recreated()).pendingHealthSyncFailure,
+        )
+    }
+
+    @Test
+    fun legacyPartialHealthSyncFailureMigratesItsSharedFloorToEveryOwner() {
+        val preferences = FaultInjectedPreferences()
+        preferences.edit()
+            .putStringSet(
+                "pending_health_sync_failure_resources",
+                setOf("activity", "sleep"),
+            )
+            .putLong("pending_health_sync_failure_receipt_floor", 300)
+            .commit()
+
+        assertEquals(
+            PendingHealthSyncFailure(
+                mapOf(
+                    "activity" to InstantValue(300),
+                    "sleep" to InstantValue(300),
+                ),
+            ),
+            SharedPreferencesLocalState(preferences).pendingHealthSyncFailure,
+        )
+    }
+
+    @Test
+    fun accountDeletionHandoffReasonSurvivesCompletedTeardownUntilLaunch() {
+        val preferences = FaultInjectedPreferences()
+        val state = SharedPreferencesLocalState(preferences)
+        state.memberKey = "member-key"
+
+        assertTrue(
+            state.beginSignOut(
+                expectedMemberKey = "member-key",
+                preserveMemberState = true,
+                pendingExternalHandoff = PendingExternalHandoff.AccountDeletion,
+            ),
+        )
+        assertEquals(
+            PendingExternalHandoff.AccountDeletion,
+            SharedPreferencesLocalState(preferences.recreated()).pendingExternalHandoff,
+        )
+        assertTrue(state.completeSignOut("member-key"))
+
+        val afterTeardown = SharedPreferencesLocalState(preferences.recreated())
+        assertFalse(afterTeardown.signOutPending)
+        assertNull(afterTeardown.memberKey)
+        assertEquals(
+            PendingExternalHandoff.AccountDeletion,
+            afterTeardown.pendingExternalHandoff,
+        )
+        assertTrue(
+            afterTeardown.completeExternalHandoff(
+                PendingExternalHandoff.AccountDeletion,
+            ),
+        )
+        assertNull(
+            SharedPreferencesLocalState(preferences.recreated()).pendingExternalHandoff,
+        )
+    }
+
     @Test
     fun initialSetupStepUsesStableValuesAndSurvivesReconstruction() {
         val preferences = FaultInjectedPreferences()
@@ -773,7 +885,7 @@ class SharedPreferencesLocalStateTest {
     }
 
     @Test
-    fun automaticMemberResetFencesRestorationButPreservesMetadataUntilCompletion() {
+    fun automaticMemberResetRevokesHealthAuthorityButPreservesSettlementState() {
         val state = SharedPreferencesLocalState(FaultInjectedPreferences())
         val replacement = AddressBookMutation(12, MUTATION_ONE)
         state.memberKey = "member-a"
@@ -798,6 +910,7 @@ class SharedPreferencesLocalStateTest {
         assertTrue(state.completeSignOut("member-a"))
         assertFalse(state.signOutPending)
         assertNull(state.memberKey)
+        assertNull(state.healthAccessRequestedAt)
         assertNull(state.initialSetupStep)
         assertNull(state.addressBookRevision)
         assertNull(state.pendingAddressBookReplacement)

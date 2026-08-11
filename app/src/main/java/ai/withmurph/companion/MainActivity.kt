@@ -24,6 +24,7 @@ import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
 import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
@@ -91,7 +92,7 @@ class MainActivity : ComponentActivity() {
                     graph.session.cancelHealthPermissionFlow()
                     throw error
                 } catch (_: Exception) {
-                    false
+                    HealthPermissionRequestResult.NoActiveResource
                 }
                 graph.session.completeHealthPermissionFlow(completed)
             }
@@ -142,6 +143,12 @@ class MainActivity : ComponentActivity() {
                         event.id,
                         ::openUri,
                     )
+                }
+            }
+            LaunchedEffect(appState.accountDeletionHandoffPending) {
+                if (!appState.accountDeletionHandoffPending) return@LaunchedEffect
+                lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    graph.session.launchAccountDeletionHandoff(::openUri)
                 }
             }
             MurphTheme {
@@ -298,7 +305,11 @@ class MainActivity : ComponentActivity() {
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
                         onOpenAiSafety = { openUri(AppLinks.AiSafety) },
                         onOpenSupport = { openUri(AppLinks.Support) },
-                        onDeleteAccount = { openUri(AppLinks.AccountDeletion) },
+                        onDeleteAccount = {
+                            graph.applicationScope.launch {
+                                graph.session.prepareAccountDeletionHandoff()
+                            }
+                        },
                         onRetry = {
                             graph.applicationScope.launch { graph.session.retry() }
                         },

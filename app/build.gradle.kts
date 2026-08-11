@@ -240,6 +240,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.health.connect)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(platform(libs.compose.bom))
@@ -247,6 +248,8 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.coroutines.android)
+    implementation(libs.coroutines.guava)
+    implementation(libs.androidx.work.runtime)
 
     implementation(libs.privy.core)
     implementation(libs.vital.client)

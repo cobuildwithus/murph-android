@@ -1,6 +1,8 @@
 package ai.withmurph.companion.health
 
 import ai.withmurph.companion.core.HealthConnectAvailability
+import ai.withmurph.companion.core.HealthPermissionRequestResult
+import io.tryvital.vitalhealthconnect.model.PermissionOutcome
 import androidx.work.Data
 import androidx.work.WorkInfo
 import io.tryvital.vitalhealthcore.model.ProviderAvailability
@@ -19,63 +21,183 @@ import kotlinx.coroutines.test.runTest
 @OptIn(ExperimentalCoroutinesApi::class)
 class JunctionHealthSyncServiceTest {
     @Test
-    fun requestedResourcesMatchTheReviewedShippedClientScope() {
+    fun readResourcesCoverTheCompletePinnedVitalHealthConnectSurface() {
+        val expected = VitalResource.values().map { it.name }.toSet()
+        val actual = healthConnectReadResources.map { it.name }.toSet()
+
+        assertEquals(expected, actual)
+        assertEquals(21, actual.size)
+    }
+
+    @Test
+    fun configuredResourcesPreserveOnlyTheGrantedReviewedSubset() {
+        val granted = setOf(
+            VitalResource.Sleep,
+            VitalResource.BloodPressure,
+            VitalResource.Meal,
+        )
+
+        assertEquals(granted, configuredHealthConnectReadResources(granted))
         assertEquals(
-            setOf(
-                "sleep",
-                "workout",
-                "activity",
-                "steps",
-                "activeEnergyBurned",
-                "heartRateVariability",
-                "respiratoryRate",
-                "bloodOxygen",
-                "body",
-                "profile",
-                "vo2Max",
-            ),
-            JunctionHealthSyncService.requestedReadResources.mapTo(mutableSetOf()) { it.name },
+            emptySet<VitalResource>(),
+            configuredHealthConnectReadResources(emptySet()),
         )
     }
 
     @Test
-    fun configuredGrantsKeepShippedActivityOwnersAndExcludeUnconfiguredResources() {
+    fun orphanWorkoutDetailsDoNotBlockAnUnrelatedActiveResource() {
         assertEquals(
-            setOf(
-                VitalResource.Sleep,
-                VitalResource.Vo2Max,
-                VitalResource.Steps,
-                VitalResource.ActiveEnergyBurned,
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.Sleep),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_SLEEP",
+                    "android.permission.health.READ_POWER",
+                ),
             ),
-            JunctionHealthSyncService.configuredGrantedResources(
-                setOf(
-                    VitalResource.Sleep,
-                    VitalResource.Vo2Max,
-                    VitalResource.HeartRate,
-                    VitalResource.Steps,
-                    VitalResource.ActiveEnergyBurned,
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingWorkoutBase,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf("android.permission.health.READ_POWER"),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.Workout),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_EXERCISE",
+                    "android.permission.health.READ_ELEVATION_GAINED",
+                    "android.permission.health.READ_POWER",
+                    "android.permission.health.READ_SPEED",
                 ),
             ),
         )
     }
 
     @Test
+    fun orphanMenstrualDetailsDoNotBlockAnUnrelatedActiveResource() {
+        assertEquals(
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.Activity),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_STEPS",
+                    "android.permission.health.READ_SEXUAL_ACTIVITY",
+                ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingMenstrualBase,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_SEXUAL_ACTIVITY",
+                ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.MenstrualCycle),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_MENSTRUATION",
+                    "android.permission.health.READ_CERVICAL_MUCUS",
+                    "android.permission.health.READ_INTERMENSTRUAL_BLEEDING",
+                    "android.permission.health.READ_OVULATION_TEST",
+                    "android.permission.health.READ_SEXUAL_ACTIVITY",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun activeResourcesWinWhileDetailOnlySelectionNamesBothMissingBases() {
+        assertEquals(
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.Sleep),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_SLEEP",
+                    "android.permission.health.READ_SPEED",
+                    "android.permission.health.READ_OVULATION_TEST",
+                ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingWorkoutAndMenstrualBases,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf(
+                    "android.permission.health.READ_SPEED",
+                    "android.permission.health.READ_OVULATION_TEST",
+                ),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.NoActiveResource,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun notPromptedRetriesClassifyExistingGrantsWithoutBroadeningConsent() {
+        assertTrue(
+            permissionOutcomeAllowsCurrentGrantClassification(
+                PermissionOutcome.Success,
+            ),
+        )
+        assertTrue(
+            permissionOutcomeAllowsCurrentGrantClassification(
+                PermissionOutcome.NotPrompted,
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.Ready,
+            healthPermissionRequestResult(
+                activeResources = setOf(VitalResource.Sleep),
+                grantedPermissions = setOf("android.permission.health.READ_SLEEP"),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.MissingWorkoutBase,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = setOf("android.permission.health.READ_POWER"),
+            ),
+        )
+        assertEquals(
+            HealthPermissionRequestResult.NoActiveResource,
+            healthPermissionRequestResult(
+                activeResources = emptySet(),
+                grantedPermissions = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun incompletePermissionOutcomesCannotAdvanceSetup() {
+        listOf(
+            PermissionOutcome.Cancelled,
+            PermissionOutcome.HealthConnectUnavailable,
+            PermissionOutcome.UnknownError(IllegalStateException("test failure")),
+        ).forEach { outcome ->
+            assertFalse(permissionOutcomeAllowsCurrentGrantClassification(outcome))
+        }
+    }
+
+    @Test
     fun foregroundCancellationOwnsTheExactPinnedVitalWorkerFamily() {
         assertEquals(
-            setOf(
-                "HC.ResourceSyncStarter",
-                "HC.ResourceSyncWorker.sleep",
-                "HC.ResourceSyncWorker.workout",
-                "HC.ResourceSyncWorker.activity",
-                "HC.ResourceSyncWorker.steps",
-                "HC.ResourceSyncWorker.activeEnergyBurned",
-                "HC.ResourceSyncWorker.heartRateVariability",
-                "HC.ResourceSyncWorker.respiratoryRate",
-                "HC.ResourceSyncWorker.bloodOxygen",
-                "HC.ResourceSyncWorker.body",
-                "HC.ResourceSyncWorker.profile",
-                "HC.ResourceSyncWorker.vo2Max",
-            ),
+            buildSet {
+                add("HC.ResourceSyncStarter")
+                healthConnectReadResources.mapTo(this, ::vitalResourceSyncWorkerName)
+            },
             JunctionHealthSyncService.syncWorkNames(
                 JunctionHealthSyncService.requestedReadResources,
             ),
@@ -128,42 +250,6 @@ class JunctionHealthSyncServiceTest {
     }
 
     @Test
-    fun vitalWorkersDefaultClosedAndAnOldLeaseCannotCloseANewerAdmission() {
-        ForegroundVitalSyncAdmission.revoke()
-        assertFalse(ForegroundVitalSyncAdmission.allowsWorker())
-
-        val first = ForegroundVitalSyncAdmission.open()
-        assertTrue(ForegroundVitalSyncAdmission.allowsWorker())
-        ForegroundVitalSyncAdmission.revoke()
-        assertFalse(ForegroundVitalSyncAdmission.allowsWorker())
-
-        val second = ForegroundVitalSyncAdmission.open()
-        ForegroundVitalSyncAdmission.close(first)
-        assertTrue(ForegroundVitalSyncAdmission.allowsWorker())
-        ForegroundVitalSyncAdmission.close(second)
-        assertFalse(ForegroundVitalSyncAdmission.allowsWorker())
-    }
-
-    @Test
-    fun workerFactoryInterposesOnlyThePinnedVitalWorkerClasses() {
-        assertTrue(
-            ForegroundVitalSyncWorkerFactory.isVitalSyncWorkerClassName(
-                ForegroundVitalSyncWorkerFactory.STARTER_CLASS_NAME,
-            ),
-        )
-        assertTrue(
-            ForegroundVitalSyncWorkerFactory.isVitalSyncWorkerClassName(
-                ForegroundVitalSyncWorkerFactory.RESOURCE_CLASS_NAME,
-            ),
-        )
-        assertFalse(
-            ForegroundVitalSyncWorkerFactory.isVitalSyncWorkerClassName(
-                "ai.withmurph.companion.SomeOtherWorker",
-            ),
-        )
-    }
-
-    @Test
     fun providerAvailabilityPreservesTheRecoveryOwner() {
         val expected = mapOf(
             ProviderAvailability.Installed to HealthConnectAvailability.Available,
@@ -182,8 +268,8 @@ class JunctionHealthSyncServiceTest {
     private fun workInfo(state: WorkInfo.State): WorkInfo = WorkInfo(
         UUID.randomUUID(),
         state,
+        emptySet(),
         Data.EMPTY,
-        emptyList(),
         Data.EMPTY,
         0,
     )

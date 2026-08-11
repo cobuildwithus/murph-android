@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "policySnapshotDate": "2026-08-05",
+  "policySnapshotDate": "2026-08-09",
   "application": {
     "applicationId": "ai.withmurph.app",
     "namespace": "ai.withmurph.companion",
@@ -13,6 +13,10 @@
     {
       "name": "android.permission.ACCESS_NETWORK_STATE",
       "declarationCategory": "network state only; no user-data type"
+    },
+    {
+      "name": "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+      "declarationCategory": "foreground service for explicit device-to-cloud health transfer"
     },
     {
       "name": "android.permission.INTERNET",
@@ -31,12 +35,48 @@
       "declarationCategory": "Fitness info"
     },
     {
+      "name": "android.permission.health.READ_BASAL_METABOLIC_RATE",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_BLOOD_GLUCOSE",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_BLOOD_PRESSURE",
+      "declarationCategory": "Health info"
+    },
+    {
       "name": "android.permission.health.READ_BODY_FAT",
       "declarationCategory": "Health info"
     },
     {
+      "name": "android.permission.health.READ_BODY_TEMPERATURE",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_CERVICAL_MUCUS",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_DISTANCE",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_ELEVATION_GAINED",
+      "declarationCategory": "Fitness info"
+    },
+    {
       "name": "android.permission.health.READ_EXERCISE",
       "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_FLOORS_CLIMBED",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_HEART_RATE",
+      "declarationCategory": "Health info"
     },
     {
       "name": "android.permission.health.READ_HEART_RATE_VARIABILITY",
@@ -47,11 +87,39 @@
       "declarationCategory": "Health info"
     },
     {
+      "name": "android.permission.health.READ_HYDRATION",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_INTERMENSTRUAL_BLEEDING",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_MENSTRUATION",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_NUTRITION",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_OVULATION_TEST",
+      "declarationCategory": "Health info"
+    },
+    {
       "name": "android.permission.health.READ_OXYGEN_SATURATION",
       "declarationCategory": "Health info"
     },
     {
+      "name": "android.permission.health.READ_POWER",
+      "declarationCategory": "Fitness info"
+    },
+    {
       "name": "android.permission.health.READ_RESPIRATORY_RATE",
+      "declarationCategory": "Health info"
+    },
+    {
+      "name": "android.permission.health.READ_SEXUAL_ACTIVITY",
       "declarationCategory": "Health info"
     },
     {
@@ -59,7 +127,15 @@
       "declarationCategory": "Health info"
     },
     {
+      "name": "android.permission.health.READ_SPEED",
+      "declarationCategory": "Fitness info"
+    },
+    {
       "name": "android.permission.health.READ_STEPS",
+      "declarationCategory": "Fitness info"
+    },
+    {
+      "name": "android.permission.health.READ_TOTAL_CALORIES_BURNED",
       "declarationCategory": "Fitness info"
     },
     {
@@ -85,6 +161,9 @@
       "android:name": "android.permission.FOREGROUND_SERVICE"
     },
     {
+      "android:name": "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+    },
+    {
       "android:name": "android.permission.INTERNET"
     },
     {
@@ -106,10 +185,37 @@
       "android:name": "android.permission.health.READ_ACTIVE_CALORIES_BURNED"
     },
     {
+      "android:name": "android.permission.health.READ_BASAL_METABOLIC_RATE"
+    },
+    {
+      "android:name": "android.permission.health.READ_BLOOD_GLUCOSE"
+    },
+    {
+      "android:name": "android.permission.health.READ_BLOOD_PRESSURE"
+    },
+    {
       "android:name": "android.permission.health.READ_BODY_FAT"
     },
     {
+      "android:name": "android.permission.health.READ_BODY_TEMPERATURE"
+    },
+    {
+      "android:name": "android.permission.health.READ_CERVICAL_MUCUS"
+    },
+    {
+      "android:name": "android.permission.health.READ_DISTANCE"
+    },
+    {
+      "android:name": "android.permission.health.READ_ELEVATION_GAINED"
+    },
+    {
       "android:name": "android.permission.health.READ_EXERCISE"
+    },
+    {
+      "android:name": "android.permission.health.READ_FLOORS_CLIMBED"
+    },
+    {
+      "android:name": "android.permission.health.READ_HEART_RATE"
     },
     {
       "android:name": "android.permission.health.READ_HEART_RATE_VARIABILITY"
@@ -118,16 +224,43 @@
       "android:name": "android.permission.health.READ_HEIGHT"
     },
     {
+      "android:name": "android.permission.health.READ_HYDRATION"
+    },
+    {
+      "android:name": "android.permission.health.READ_INTERMENSTRUAL_BLEEDING"
+    },
+    {
+      "android:name": "android.permission.health.READ_MENSTRUATION"
+    },
+    {
+      "android:name": "android.permission.health.READ_NUTRITION"
+    },
+    {
+      "android:name": "android.permission.health.READ_OVULATION_TEST"
+    },
+    {
       "android:name": "android.permission.health.READ_OXYGEN_SATURATION"
+    },
+    {
+      "android:name": "android.permission.health.READ_POWER"
     },
     {
       "android:name": "android.permission.health.READ_RESPIRATORY_RATE"
     },
     {
+      "android:name": "android.permission.health.READ_SEXUAL_ACTIVITY"
+    },
+    {
       "android:name": "android.permission.health.READ_SLEEP"
     },
     {
+      "android:name": "android.permission.health.READ_SPEED"
+    },
+    {
       "android:name": "android.permission.health.READ_STEPS"
+    },
+    {
+      "android:name": "android.permission.health.READ_TOTAL_CALORIES_BURNED"
     },
     {
       "android:name": "android.permission.health.READ_VO2_MAX"
@@ -201,11 +334,6 @@
       },
       {
         "componentType": "services",
-        "component": "androidx.work.impl.background.systemalarm.SystemAlarmService",
-        "value": "false"
-      },
-      {
-        "componentType": "services",
         "component": "androidx.work.impl.background.systemjob.SystemJobService",
         "value": "false"
       },
@@ -217,31 +345,6 @@
       {
         "componentType": "receivers",
         "component": "androidx.profileinstaller.ProfileInstallReceiver",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy",
-        "value": "false"
-      },
-      {
-        "componentType": "receivers",
-        "component": "androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver",
         "value": "false"
       },
       {
@@ -296,22 +399,32 @@
   },
   "healthConnect": {
     "resourceOwner": "app/src/main/java/ai/withmurph/companion/health/JunctionHealthSyncService.kt",
-    "resourceSetSymbol": "requestedReadResources",
+    "resourceSetSymbol": "healthConnectReadResources",
     "readResources": [
       "ActiveEnergyBurned",
       "Activity",
+      "BasalEnergyBurned",
       "BloodOxygen",
+      "BloodPressure",
       "Body",
+      "DistanceWalkingRunning",
+      "FloorsClimbed",
+      "Glucose",
+      "HeartRate",
       "HeartRateVariability",
+      "Meal",
+      "MenstrualCycle",
       "Profile",
       "RespiratoryRate",
       "Sleep",
       "Steps",
+      "Temperature",
       "Vo2Max",
+      "Water",
       "Workout"
     ],
-    "readResourceCount": 11,
-    "readDataPermissionCount": 11,
+    "readResourceCount": 21,
+    "readDataPermissionCount": 29,
     "backfillDays": 30,
     "historyPermissionRequested": false,
     "syncOnAppStart": false,
