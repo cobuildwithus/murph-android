@@ -1,6 +1,6 @@
 Murph is a private health companion. Sign in or create your Murph account with a phone or email one-time code, then choose Murph's contact-card look, personality, voice, and tone.
 
-Connect Health Connect so Murph can use the categories you choose: sleep, exercise, steps, and active calories. Category availability depends on the device, membership, and apps writing to Health Connect. The app shows backend-confirmed connection status, helps you recover when permissions change, and lets you start a sync while the app is open.
+Connect Health Connect so Murph can use the categories you choose across activity and fitness, exercise, sleep, body measurements and vital signs, nutrition and hydration, and menstrual and reproductive health. Category availability depends on the device, membership, and apps writing to Health Connect. The app shows backend-confirmed connection status, helps you recover when permissions change, and lets you start a sync while the app is open.
 
 You can also choose to share privacy-minimized Friendly Names from your Android contacts. Murph reads contacts only after you tap Share, Update, or Retry. This optional feature helps group conversations use familiar names; it does not send invitations or messages to your contacts.
 
