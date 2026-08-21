@@ -126,6 +126,14 @@ internal enum class NativeHostedE2EFailureCode(
     ),
     LaunchLiveAppFailed("launch_live_app_failed", NativeHostedE2EStage.LaunchLiveApp),
     InitialPrivyOtpFailed("initial_privy_otp_failed", NativeHostedE2EStage.InitialPrivyOtp),
+    InitialPrivyOtpRequestRejected(
+        "initial_privy_otp_request_rejected",
+        NativeHostedE2EStage.InitialPrivyOtp,
+    ),
+    InitialPrivyOtpCodeRejected(
+        "initial_privy_otp_code_rejected",
+        NativeHostedE2EStage.InitialPrivyOtp,
+    ),
     CanonicalAdmissionFailed(
         "canonical_admission_failed",
         NativeHostedE2EStage.CanonicalAdmission,
@@ -158,6 +166,14 @@ internal enum class NativeHostedE2EFailureCode(
     SignOutFailed("sign_out_failed", NativeHostedE2EStage.SignOut),
     ReturningPrivyOtpFailed(
         "returning_privy_otp_failed",
+        NativeHostedE2EStage.ReturningPrivyOtp,
+    ),
+    ReturningPrivyOtpRequestRejected(
+        "returning_privy_otp_request_rejected",
+        NativeHostedE2EStage.ReturningPrivyOtp,
+    ),
+    ReturningPrivyOtpCodeRejected(
+        "returning_privy_otp_code_rejected",
         NativeHostedE2EStage.ReturningPrivyOtp,
     ),
     ReturningMemberStateFailed(

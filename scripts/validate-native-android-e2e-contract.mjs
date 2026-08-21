@@ -63,7 +63,14 @@ const FAILURE_CODES_BY_STAGE = new Map([
   ["contract_validation", new Set(["invalid_dispatch_contract"])],
   ["infrastructure", INFRASTRUCTURE_FAILURE_CODES],
   ["launch_live_app", new Set(["launch_live_app_failed"])],
-  ["initial_privy_otp", new Set(["initial_privy_otp_failed"])],
+  [
+    "initial_privy_otp",
+    new Set([
+      "initial_privy_otp_failed",
+      "initial_privy_otp_request_rejected",
+      "initial_privy_otp_code_rejected",
+    ]),
+  ],
   ["canonical_admission", new Set(["canonical_admission_failed"])],
   [
     "launch_consent_recovery",
@@ -87,7 +94,14 @@ const FAILURE_CODES_BY_STAGE = new Map([
   ],
   ["connected_state", new Set(["connected_state_failed"])],
   ["sign_out", new Set(["sign_out_failed"])],
-  ["returning_privy_otp", new Set(["returning_privy_otp_failed"])],
+  [
+    "returning_privy_otp",
+    new Set([
+      "returning_privy_otp_failed",
+      "returning_privy_otp_request_rejected",
+      "returning_privy_otp_code_rejected",
+    ]),
+  ],
   [
     "returning_member_state",
     new Set(["returning_member_state_failed"]),
