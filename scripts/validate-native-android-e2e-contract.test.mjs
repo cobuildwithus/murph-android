@@ -236,6 +236,10 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   assert.match(workflow, /timeout-minutes: 55/u);
   assert.match(workflow, /NativeHostedE2EContractTest,ai\.withmurph\.companion\.e2e\.NativeHostedE2ETest/u);
   assert.match(workflow, /ANDROID_USER_HOME/u);
+  assert.match(
+    workflow,
+    /privacy-safe summary finalizer below\.\n\s+set \+e\n\s+set -uo pipefail/u,
+  );
   assert.doesNotMatch(workflow, /upload-artifact|download-artifact|\btee\b/u);
   assert.match(workflow, /rm -rf "\$\{RAW_LOG\}"/u);
   for (const line of workflow.split("\n").filter((value) => /^\s*uses:/u.test(value))) {

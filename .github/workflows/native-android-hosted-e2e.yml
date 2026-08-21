@@ -158,6 +158,9 @@ jobs:
           PRIVY_LOGIN_IDENTIFIER: ${{ secrets.NATIVE_ANDROID_E2E_PRIVY_LOGIN_IDENTIFIER }}
         shell: bash
         run: |
+          # GitHub's bash wrapper starts with `-e`; disable it so every live
+          # command status reaches the privacy-safe summary finalizer below.
+          set +e
           set -uo pipefail
           umask 077
           RAW_LOG="${RUNNER_TEMP}/native-android-hosted-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
