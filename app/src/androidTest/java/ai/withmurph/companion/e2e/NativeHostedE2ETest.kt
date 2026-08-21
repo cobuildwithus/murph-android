@@ -611,10 +611,8 @@ class NativeHostedE2ETest {
         throw JourneyFailure(NativeHostedE2EFailureCode.ReturningMemberStateFailed)
     }
 
-    private fun isLaunchConsentSheet(): Boolean = hasAnyText(
-        "Use your health data",
-        "Review Murph’s terms",
-    )
+    private fun isLaunchConsentSheet(): Boolean =
+        nativeHostedE2EHasLaunchConsentSurface(::hasVisibleText)
 
     private fun isOnboardingSurface(): Boolean = hasAnyText(
         "Add Murph to your contacts",

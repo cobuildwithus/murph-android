@@ -68,6 +68,18 @@ internal fun nativeHostedE2ECodeSubmissionDecision(
     else -> NativeHostedE2ECodeSubmissionDecision.Wait
 }
 
+private val NativeHostedE2ELaunchConsentSurfaceMarkers = listOf(
+    "Pausing health sync…",
+    "Loading consent…",
+    "Saving consent…",
+    "Use your health data",
+    "Review Murph’s terms",
+)
+
+internal fun nativeHostedE2EHasLaunchConsentSurface(
+    hasVisibleText: (String) -> Boolean,
+): Boolean = NativeHostedE2ELaunchConsentSurfaceMarkers.any(hasVisibleText)
+
 internal class NativeHostedE2EOnboardingProgress {
     private var lastObservedIndex: Int? = null
 

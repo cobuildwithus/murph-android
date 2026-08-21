@@ -157,6 +157,20 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
+    fun launchConsentSurfaceIncludesProgressBeforeInteractiveContent() {
+        listOf(
+            "Pausing health sync…",
+            "Loading consent…",
+            "Saving consent…",
+            "Use your health data",
+            "Review Murph’s terms",
+        ).forEach { visible ->
+            assertTrue(nativeHostedE2EHasLaunchConsentSurface { it == visible })
+        }
+        assertFalse(nativeHostedE2EHasLaunchConsentSurface { it == "Welcome to Murph" })
+    }
+
+    @Test
     fun onboardingProgressSupportsServerContinuationAndRejectsSkippedStages() {
         NativeHostedE2EOnboardingProgress().apply {
             observe("Choose a voice")
