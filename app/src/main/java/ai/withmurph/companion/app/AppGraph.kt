@@ -48,7 +48,7 @@ class AppGraph private constructor(
             val health = JunctionHealthSyncService(
                 context = context,
                 environment = config.environment,
-                backfillDays = 30,
+                backfillDays = 365,
             )
             val session = AppSession(
                 auth = auth,

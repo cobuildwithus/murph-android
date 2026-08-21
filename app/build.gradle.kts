@@ -60,6 +60,22 @@ val developmentBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_DEV")
     .orElse("https://linq-webhook-dev.ourrevolution.wtf")
 val productionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
     .orElse("https://www.withmurph.ai")
+val instrumentationBuildType = providers.gradleProperty("MURPH_ANDROID_TEST_BUILD_TYPE")
+    .orElse("synthetic")
+val hostedE2EInstrumentationArguments = mapOf(
+    "murphHostedE2eEnabled" to "NATIVE_ANDROID_E2E_ENABLED",
+    "murphHostedE2eContractVersion" to "NATIVE_ANDROID_E2E_CONTRACT_VERSION",
+    "murphHostedE2eCorrelationId" to "NATIVE_ANDROID_E2E_CORRELATION_ID",
+    "murphHostedE2eDispatchExpiresAt" to "NATIVE_ANDROID_E2E_DISPATCH_EXPIRES_AT",
+    "murphHostedE2eMode" to "NATIVE_ANDROID_E2E_MODE",
+    "murphHostedE2eWebBaseUrl" to "NATIVE_ANDROID_E2E_WEB_BASE_URL",
+    "murphHostedE2eWebSha" to "NATIVE_ANDROID_E2E_WEB_SHA",
+    "murphHostedE2eAndroidSha" to "NATIVE_ANDROID_E2E_ANDROID_SHA",
+    "murphHostedE2eAndroidTag" to "NATIVE_ANDROID_E2E_ANDROID_TAG",
+    "murphHostedE2eIdentityLifecycle" to "NATIVE_ANDROID_E2E_IDENTITY_LIFECYCLE",
+    "murphHostedE2eLoginIdentifier" to "NATIVE_ANDROID_E2E_LOGIN_IDENTIFIER",
+    "murphHostedE2eFixedOtp" to "NATIVE_ANDROID_E2E_FIXED_OTP",
+)
 
 fun publicReleaseConfigurationSha256(
     appId: String,
@@ -111,6 +127,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        hostedE2EInstrumentationArguments.forEach { (argument, environmentName) ->
+            providers.environmentVariable(environmentName).orNull?.let { value ->
+                testInstrumentationRunnerArguments[argument] = value
+            }
+        }
 
         buildConfigField("String", "PRIVY_APP_ID", privyAppId.get().asBuildConfigString())
         buildConfigField("String", "PRIVY_APP_CLIENT_ID", privyAppClientId.get().asBuildConfigString())
@@ -150,8 +171,25 @@ android {
                 "proguard-rules.pro",
             )
         }
+        create("hostedE2E") {
+            initWith(getByName("debug"))
+            signingConfig = signingConfigs.getByName("debug")
+            versionNameSuffix = "-hosted-e2e"
+            matchingFallbacks += listOf("debug")
+        }
+        create("productionCanary") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = true
+            versionNameSuffix = "-production-canary"
+            matchingFallbacks += listOf("release")
+        }
     }
-    testBuildType = "synthetic"
+    testBuildType = instrumentationBuildType.get().also { buildType ->
+        require(buildType in setOf("synthetic", "hostedE2E", "productionCanary")) {
+            "MURPH_ANDROID_TEST_BUILD_TYPE must be synthetic, hostedE2E, or productionCanary."
+        }
+    }
 
     sourceSets {
         getByName("synthetic") {
@@ -193,6 +231,11 @@ android {
                     device = "Pixel 2"
                     apiLevel = 30
                     systemImageSource = "aosp-atd"
+                }
+                create("pixel6Api35") {
+                    device = "Pixel 6"
+                    apiLevel = 35
+                    systemImageSource = "google"
                 }
             }
         }
@@ -264,5 +307,6 @@ dependencies {
     androidTestImplementation(libs.androidx.test.core.ktx)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(libs.compose.ui.test.junit4)
 }

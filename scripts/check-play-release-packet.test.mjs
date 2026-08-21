@@ -13,6 +13,7 @@ import {
   releaseManifestContract,
   validateArtifactManifest,
   validateArtifactSourceMetadata,
+  validateHealthConnectBackfillContract,
   validateOperatorAssertions,
   validateReleasePacket,
   verifyAndroidBundleSigners,
@@ -20,6 +21,43 @@ import {
 
 test("the checked-in source packet matches the app", () => {
   assert.doesNotThrow(() => validateReleasePacket());
+});
+
+test("Health Connect release verification rejects backfill drift", () => {
+  assert.doesNotThrow(() =>
+    validateHealthConnectBackfillContract(
+      "private val backfillDays: Int = 365,",
+      "backfillDays = 365,",
+      365,
+    ),
+  );
+  assert.throws(
+    () =>
+      validateHealthConnectBackfillContract(
+        "private val backfillDays: Int = 30,",
+        "backfillDays = 30,",
+        30,
+      ),
+    /Health Connect release backfill days drifted/,
+  );
+  assert.throws(
+    () =>
+      validateHealthConnectBackfillContract(
+        "private val backfillDays: Int = 30,",
+        "backfillDays = 365,",
+        365,
+      ),
+    /Health Connect default backfill days drifted/,
+  );
+  assert.throws(
+    () =>
+      validateHealthConnectBackfillContract(
+        "private val backfillDays: Int = 365,",
+        "backfillDays = 30,",
+        365,
+      ),
+    /Health Connect composition-root backfill days drifted/,
+  );
 });
 
 test("manifest extraction distinguishes requested and explicitly removed permissions", () => {

@@ -227,6 +227,36 @@ function requiredMatch(source, expression, label) {
   return match[1];
 }
 
+export function validateHealthConnectBackfillContract(
+  healthSource,
+  appGraphSource,
+  releaseBackfillDays,
+) {
+  assertEqual(
+    releaseBackfillDays,
+    365,
+    "Health Connect release backfill days",
+  );
+  assertEqual(
+    Number(requiredMatch(
+      healthSource,
+      /backfillDays:\s*Int\s*=\s*(\d+)/,
+      "default backfill days",
+    )),
+    releaseBackfillDays,
+    "Health Connect default backfill days",
+  );
+  assertEqual(
+    Number(requiredMatch(
+      appGraphSource,
+      /backfillDays\s*=\s*(\d+)/,
+      "composition-root backfill days",
+    )),
+    releaseBackfillDays,
+    "Health Connect composition-root backfill days",
+  );
+}
+
 function escapeRegularExpression(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -605,10 +635,14 @@ export function validateReleasePacket(options = {}) {
     facts.healthConnect.historyPermissionRequested,
     "Health Connect history permission",
   );
-  assertEqual(
-    Number(requiredMatch(healthSource, /backfillDays:\s*Int\s*=\s*(\d+)/, "backfill days")),
+  const appGraphSource = readText(
+    rootDir,
+    "app/src/main/java/ai/withmurph/companion/app/AppGraph.kt",
+  );
+  validateHealthConnectBackfillContract(
+    healthSource,
+    appGraphSource,
     facts.healthConnect.backfillDays,
-    "Health Connect backfill days",
   );
   const syncOnAppStart = requiredMatch(
     healthSource,

@@ -12,6 +12,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 node --test scripts/check-android-visual-proof.test.mjs
+node --test scripts/validate-native-android-e2e-contract.test.mjs
 
 if grep -Fq 'LaunchedEffect(value)' app/src/main/java/ai/withmurph/companion/ui/login/LoginScreen.kt; then
     echo "OTP submission must not run from composition." >&2

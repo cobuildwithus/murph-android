@@ -100,7 +100,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun foregroundStatusUnauthorizedResetsMemberBeforeHealthCanSyncAgain() = runTest {
+    fun slowFailingForegroundAddressBookCannotGateHealthRefreshOrSync() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = true,
@@ -113,10 +113,68 @@ class AddressBookSessionTest {
         fixture.health.signedIn = true
         fixture.health.grantedCount = fixture.health.totalResourceCount
         fixture.session.start()
-        val syncCallsBeforeRejection = fixture.health.syncCalls
-        val signOutCallsBeforeRejection = fixture.health.signOutCalls
-        fixture.api.beforeStatusReturn = { _, _ ->
-            throw CompanionApiException.Unauthorized
+        val permissionRefreshesBeforeForeground = fixture.health.refreshPermissionCalls
+        val syncCallsBeforeForeground = fixture.health.syncCalls
+        val addressCallsBeforeForeground = fixture.api.addressStatusMembers.size
+        val addressEntered = CompletableDeferred<Unit>()
+        val releaseAddressStatus = CompletableDeferred<Unit>()
+        fixture.api.beforeStatusReturn = { call, _ ->
+            if (call == addressCallsBeforeForeground + 1) {
+                addressEntered.complete(Unit)
+                releaseAddressStatus.await()
+                throw CompanionApiException.Network
+            }
+        }
+        fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.syncGate = CompletableDeferred()
+
+        fixture.session.didEnterBackground()
+        val foregroundRefresh = async { fixture.session.didBecomeActive() }
+
+        fixture.health.syncEntered.await()
+        assertEquals(
+            permissionRefreshesBeforeForeground + 1,
+            fixture.health.refreshPermissionCalls,
+        )
+        assertEquals(syncCallsBeforeForeground + 1, fixture.health.syncCalls)
+        assertEquals(addressCallsBeforeForeground, fixture.api.addressStatusMembers.size)
+
+        fixture.health.syncGate?.complete(Unit)
+        addressEntered.await()
+        assertFalse(foregroundRefresh.isCompleted)
+        releaseAddressStatus.complete(Unit)
+        foregroundRefresh.await()
+
+        assertEquals(
+            addressCallsBeforeForeground + 1,
+            fixture.api.addressStatusMembers.size,
+        )
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
+    fun authoritativeHealthBoundaryPreventsLaterForegroundAddressBookWork() = runTest {
+        val fixture = fixture(
+            initialStatus = enabledStatus(revision = 5, count = 2),
+            permissionGranted = true,
+            initializeLocal = {
+                memberKey = MEMBER_ONE
+                revision = 5
+                healthAccessRequestedAt = InstantValue(1)
+            },
+        )
+        fixture.health.signedIn = true
+        fixture.health.grantedCount = fixture.health.totalResourceCount
+        fixture.session.start()
+        val permissionRefreshesBeforeBoundary = fixture.health.refreshPermissionCalls
+        val syncCallsBeforeBoundary = fixture.health.syncCalls
+        val addressCallsBeforeBoundary = fixture.api.addressStatusMembers.size
+        val nextSyncStatusCall = fixture.api.syncStatusMembers.size + 1
+        val signOutCallsBeforeBoundary = fixture.health.signOutCalls
+        fixture.api.beforeSyncStatusReturn = { call, _ ->
+            if (call == nextSyncStatusCall) {
+                throw CompanionApiException.Unauthorized
+            }
         }
 
         fixture.session.didEnterBackground()
@@ -124,13 +182,16 @@ class AddressBookSessionTest {
 
         val failure = fixture.session.state.value.phase as AppPhase.Failed
         assertFalse(failure.canRetry)
+        assertEquals(
+            permissionRefreshesBeforeBoundary + 1,
+            fixture.health.refreshPermissionCalls,
+        )
+        assertEquals(syncCallsBeforeBoundary, fixture.health.syncCalls)
+        assertEquals(addressCallsBeforeBoundary, fixture.api.addressStatusMembers.size)
         assertFalse(fixture.health.signedIn)
-        assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
-        assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
+        assertEquals(signOutCallsBeforeBoundary + 1, fixture.health.signOutCalls)
         assertNull(fixture.localState.memberKey)
         assertNull(fixture.localState.addressBookRevision)
-        assertNull(fixture.localState.pendingAddressBookReplacement)
-        assertNull(fixture.localState.pendingAddressBookDeletion)
         assertTrue(fixture.api.replacements.isEmpty())
         assertTrue(fixture.api.deletions.isEmpty())
     }
@@ -269,7 +330,7 @@ class AddressBookSessionTest {
     }
 
     @Test
-    fun automaticForegroundDeletionUnauthorizedResetsMemberBeforeHealthSync() = runTest {
+    fun automaticForegroundDeletionUnauthorizedResetsMemberAfterHealthSync() = runTest {
         val fixture = fixture(
             initialStatus = enabledStatus(revision = 5, count = 2),
             permissionGranted = true,
@@ -304,7 +365,7 @@ class AddressBookSessionTest {
         assertTrue(fixture.session.state.value.contactsPermissionDenied)
         assertFalse(fixture.health.signedIn)
         assertEquals(signOutCallsBeforeRejection + 1, fixture.health.signOutCalls)
-        assertEquals(syncCallsBeforeRejection, fixture.health.syncCalls)
+        assertEquals(syncCallsBeforeRejection + 1, fixture.health.syncCalls)
     }
 
     @Test
@@ -2061,6 +2122,7 @@ class AddressBookSessionTest {
     ) : CompanionApi {
         val statuses = mutableMapOf<String, AddressBookServerStatus>()
         val addressStatusMembers = mutableListOf<String>()
+        val syncStatusMembers = mutableListOf<String>()
         val replacements = mutableListOf<Pair<String, AddressBookReplacementRequest>>()
         val deletions = mutableListOf<Pair<String, AddressBookDeletionRequest>>()
         val launchConsentFetches = mutableListOf<String>()
@@ -2072,6 +2134,7 @@ class AddressBookSessionTest {
             LaunchConsentAcceptanceRequest,
             LaunchConsentStatus,
         ) -> LaunchConsentStatus)? = null
+        var beforeSyncStatusReturn: suspend (Int, String) -> Unit = { _, _ -> }
         var beforeStatusReturn: suspend (Int, String) -> Unit = { _, _ -> }
         var replaceHandler: suspend (
             String,
@@ -2099,7 +2162,11 @@ class AddressBookSessionTest {
         override suspend fun fetchSyncStatus(
             memberKey: String,
             sourceProviderSlug: String,
-        ): CompanionSyncStatus = CompanionSyncStatus(null, Instant.EPOCH, emptyMap())
+        ): CompanionSyncStatus {
+            syncStatusMembers += memberKey
+            beforeSyncStatusReturn(syncStatusMembers.size, memberKey)
+            return CompanionSyncStatus(null, Instant.EPOCH, emptyMap())
+        }
 
         override suspend fun fetchInitialOnboarding(memberKey: String) = InitialOnboarding(
             status = InitialOnboardingStatus.Completed,
@@ -2187,12 +2254,13 @@ class AddressBookSessionTest {
         override val totalResourceCount = 4
         var signedIn = false
         var grantedCount = 0
+        var refreshPermissionCalls = 0
         var syncCalls = 0
         var signOutCalls = 0
         var identifyGate: CompletableDeferred<Unit>? = null
         val identifyEntered = CompletableDeferred<Unit>()
         var syncGate: CompletableDeferred<Unit>? = null
-        val syncEntered = CompletableDeferred<Unit>()
+        var syncEntered = CompletableDeferred<Unit>()
         override fun availability() = HealthConnectAvailability.Available
         override fun openHealthConnectIntent(): Intent? = null
         override fun isSignedIn(): Boolean = signedIn
@@ -2211,7 +2279,9 @@ class AddressBookSessionTest {
         override suspend fun connectAfterPermissionRequest() {
             grantedCount = totalResourceCount
         }
-        override suspend fun refreshPermissionState() = Unit
+        override suspend fun refreshPermissionState() {
+            refreshPermissionCalls += 1
+        }
         override suspend fun syncAllGrantedResources(
             expectedMemberKey: String,
         ): HealthSyncAttemptResult {

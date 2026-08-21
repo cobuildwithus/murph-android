@@ -2218,18 +2218,6 @@ class AppSession(
             ) {
                 return@withLock
             }
-            if (
-                authAllowsSync &&
-                _state.value.phase == AppPhase.Ready &&
-                _state.value.authVerifiedOnline
-            ) {
-                reconcileAddressBookForeground(
-                    showBusy = false,
-                    onSessionBoundary = { deferredBoundary = deferredBoundary ?: it },
-                )
-                if (deferredBoundary != null) return@withLock
-                if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
-            }
             if (_state.value.phase != AppPhase.Ready) return@withLock
             val grantSnapshot = refreshHealthPermissionState()
             if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
@@ -2281,6 +2269,26 @@ class AppSession(
                             ?: DeferredSessionBoundary.LocalAuth(it)
                     },
                 )
+            }
+            if (
+                deferredBoundary != null ||
+                hasActiveLaunchConsentRecovery() ||
+                ownsPendingHealthConnection()
+            ) {
+                return@withLock
+            }
+            if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
+            if (
+                authAllowsSync &&
+                _state.value.phase == AppPhase.Ready &&
+                _state.value.authVerifiedOnline
+            ) {
+                reconcileAddressBookForeground(
+                    showBusy = false,
+                    onSessionBoundary = { deferredBoundary = deferredBoundary ?: it },
+                )
+                if (deferredBoundary != null) return@withLock
+                if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             }
         }
         deferredBoundary?.let { handleDeferredSessionBoundary(it) }

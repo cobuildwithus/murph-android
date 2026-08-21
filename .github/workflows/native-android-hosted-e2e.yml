@@ -1,0 +1,274 @@
+name: Native Android Hosted E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract_version:
+        description: Exact native Android hosted E2E contract version
+        required: true
+        type: string
+      mode:
+        description: Protected identity and hosted deployment mode
+        required: true
+        type: choice
+        options:
+          - pr
+          - production_canary
+      web_base_url:
+        description: Exact hosted Web HTTPS origin
+        required: true
+        type: string
+      web_sha:
+        description: Exact hosted Web source SHA deployed at web_base_url
+        required: true
+        type: string
+      correlation_id:
+        description: Privacy-safe run correlation identifier
+        required: true
+        type: string
+      dispatch_expires_at:
+        description: Epoch-second expiry for the protected dispatch lease
+        required: true
+        type: string
+      identity_lifecycle:
+        description: Explicit protected identity lifecycle owner
+        required: true
+        type: choice
+        options:
+          - orchestrator_owned_reset
+          - non_destructive_existing_identity
+      android_sha:
+        description: Exact Android source SHA under test
+        required: true
+        type: string
+      android_tag:
+        description: Immutable private tag resolving to android_sha
+        required: true
+        type: string
+
+# The workflow is dispatch-only and accepts live credentials solely through its
+# selected GitHub Environment. It never uploads logs, reports, screenshots, or
+# test results.
+permissions:
+  contents: read
+
+concurrency:
+  group: native-android-hosted-e2e-${{ inputs.mode }}
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Real hosted Web + native Android
+    environment: native-android-hosted-e2e-${{ inputs.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Reject an unbound dispatch before checkout
+        env:
+          INPUT_ANDROID_SHA: ${{ inputs.android_sha }}
+          INPUT_ANDROID_TAG: ${{ inputs.android_tag }}
+          INPUT_DISPATCH_EXPIRES_AT: ${{ inputs.dispatch_expires_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${INPUT_ANDROID_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Android SHA is malformed."; exit 1; }
+          [[ "${INPUT_ANDROID_TAG}" =~ ^[A-Za-z0-9._/-]{1,180}$ ]] || { echo "::error::Android tag is malformed."; exit 1; }
+          [[ "${INPUT_DISPATCH_EXPIRES_AT}" =~ ^[1-9][0-9]{9}$ ]] || { echo "::error::Dispatch lease is malformed."; exit 1; }
+          now_epoch="$(date -u +%s)"
+          (( INPUT_DISPATCH_EXPIRES_AT > now_epoch && INPUT_DISPATCH_EXPIRES_AT <= now_epoch + 2100 )) || { echo "::error::Dispatch lease is expired or unbounded."; exit 1; }
+          [[ "${INPUT_ANDROID_TAG}" != refs/* && "${INPUT_ANDROID_TAG}" != /* && "${INPUT_ANDROID_TAG}" != */ &&
+             "${INPUT_ANDROID_TAG}" != *..* && "${INPUT_ANDROID_TAG}" != *//* &&
+             "${INPUT_ANDROID_TAG}" != *@\{* && "${INPUT_ANDROID_TAG}" != *.lock ]] || { echo "::error::Android tag is unsafe."; exit 1; }
+          [[ "${GITHUB_REF_TYPE}" == tag ]] || { echo "::error::Dispatch must run from the immutable Android tag."; exit 1; }
+          [[ "${GITHUB_REF_NAME}" == "${INPUT_ANDROID_TAG}" ]] || { echo "::error::Dispatch tag does not match the contract."; exit 1; }
+          [[ "${GITHUB_SHA}" == "${INPUT_ANDROID_SHA}" ]] || { echo "::error::Dispatch source does not match the Android SHA."; exit 1; }
+
+      - name: Checkout exact Android source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.android_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate tag and checkout source
+        env:
+          INPUT_ANDROID_SHA: ${{ inputs.android_sha }}
+          INPUT_ANDROID_TAG: ${{ inputs.android_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${INPUT_ANDROID_SHA}" ]] || { echo "::error::Checked-out Android SHA changed."; exit 1; }
+          [[ "$(git rev-parse "refs/tags/${INPUT_ANDROID_TAG}^{commit}")" == "${INPUT_ANDROID_SHA}" ]] || { echo "::error::Android tag no longer resolves to the expected SHA."; exit 1; }
+          [[ -z "$(git status --porcelain=v1)" ]] || { echo "::error::Exact Android checkout is not clean."; exit 1; }
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.14.1
+
+      - name: Verify deterministic dispatch and summary contracts
+        env:
+          INPUT_ANDROID_SHA: ${{ inputs.android_sha }}
+          INPUT_ANDROID_TAG: ${{ inputs.android_tag }}
+          INPUT_CONTRACT_VERSION: ${{ inputs.contract_version }}
+          INPUT_CORRELATION_ID: ${{ inputs.correlation_id }}
+          INPUT_DISPATCH_EXPIRES_AT: ${{ inputs.dispatch_expires_at }}
+          INPUT_IDENTITY_LIFECYCLE: ${{ inputs.identity_lifecycle }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_WEB_BASE_URL: ${{ inputs.web_base_url }}
+          INPUT_WEB_SHA: ${{ inputs.web_sha }}
+        run: |
+          set -euo pipefail
+          node --test scripts/validate-native-android-e2e-contract.test.mjs
+          node scripts/validate-native-android-e2e-contract.mjs validate-dispatch
+
+      - name: Setup Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+
+      - name: Enable emulator acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 0666 /dev/kvm
+          fi
+
+      - name: Run protected live instrumentation and publish closed summary
+        id: live-instrumentation
+        continue-on-error: true
+        env:
+          INPUT_ANDROID_SHA: ${{ inputs.android_sha }}
+          INPUT_ANDROID_TAG: ${{ inputs.android_tag }}
+          INPUT_CONTRACT_VERSION: ${{ inputs.contract_version }}
+          INPUT_CORRELATION_ID: ${{ inputs.correlation_id }}
+          INPUT_DISPATCH_EXPIRES_AT: ${{ inputs.dispatch_expires_at }}
+          INPUT_IDENTITY_LIFECYCLE: ${{ inputs.identity_lifecycle }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_WEB_BASE_URL: ${{ inputs.web_base_url }}
+          INPUT_WEB_SHA: ${{ inputs.web_sha }}
+          PRIVY_APP_CLIENT_ID: ${{ vars.NATIVE_ANDROID_E2E_PRIVY_APP_CLIENT_ID }}
+          PRIVY_APP_ID: ${{ vars.NATIVE_ANDROID_E2E_PRIVY_APP_ID }}
+          PRIVY_FIXED_OTP: ${{ secrets.NATIVE_ANDROID_E2E_PRIVY_FIXED_OTP }}
+          PRIVY_LOGIN_IDENTIFIER: ${{ secrets.NATIVE_ANDROID_E2E_PRIVY_LOGIN_IDENTIFIER }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          umask 077
+          RAW_LOG="${RUNNER_TEMP}/native-android-hosted-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+          SUMMARY="${RUNNER_TEMP}/native-android-hosted-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          export GRADLE_USER_HOME="${RUNNER_TEMP}/native-android-hosted-e2e-gradle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export ANDROID_USER_HOME="${RUNNER_TEMP}/native-android-hosted-e2e-android-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export ANDROID_EMULATOR_HOME="${ANDROID_USER_HOME}/emulator"
+          export ANDROID_AVD_HOME="${ANDROID_USER_HOME}/avd"
+          mkdir -p "${ANDROID_EMULATOR_HOME}" "${ANDROID_AVD_HOME}"
+
+          cleanup() {
+            rm -rf "${RAW_LOG}"
+            rm -rf "${SUMMARY}"
+            rm -rf "${GRADLE_USER_HOME}"
+            rm -rf "${ANDROID_USER_HOME}"
+            rm -rf app/build build .gradle
+          }
+          trap cleanup EXIT
+
+          write_missing_configuration() {
+            node scripts/validate-native-android-e2e-contract.mjs \
+              write-infrastructure-failure \
+              --mode "${INPUT_MODE}" \
+              --code missing_protected_configuration \
+              --output "${SUMMARY}"
+            node scripts/validate-native-android-e2e-contract.mjs \
+              finalize-run \
+              --mode "${INPUT_MODE}" \
+              --summary "${SUMMARY}" \
+              --gradle-status 1
+          }
+
+          if [[ -z "${PRIVY_APP_ID}" || -z "${PRIVY_APP_CLIENT_ID}" ||
+                ! "${PRIVY_LOGIN_IDENTIFIER}" =~ ^\+[1-9][0-9]{7,14}$ ||
+                ! "${PRIVY_FIXED_OTP}" =~ ^[0-9]{6}$ ]]; then
+            write_missing_configuration
+            exit $?
+          fi
+
+          export NATIVE_ANDROID_E2E_ENABLED=true
+          export NATIVE_ANDROID_E2E_CONTRACT_VERSION="${INPUT_CONTRACT_VERSION}"
+          export NATIVE_ANDROID_E2E_CORRELATION_ID="${INPUT_CORRELATION_ID}"
+          export NATIVE_ANDROID_E2E_DISPATCH_EXPIRES_AT="${INPUT_DISPATCH_EXPIRES_AT}"
+          export NATIVE_ANDROID_E2E_MODE="${INPUT_MODE}"
+          export NATIVE_ANDROID_E2E_WEB_BASE_URL="${INPUT_WEB_BASE_URL}"
+          export NATIVE_ANDROID_E2E_WEB_SHA="${INPUT_WEB_SHA}"
+          export NATIVE_ANDROID_E2E_ANDROID_SHA="${INPUT_ANDROID_SHA}"
+          export NATIVE_ANDROID_E2E_ANDROID_TAG="${INPUT_ANDROID_TAG}"
+          export NATIVE_ANDROID_E2E_IDENTITY_LIFECYCLE="${INPUT_IDENTITY_LIFECYCLE}"
+          export NATIVE_ANDROID_E2E_LOGIN_IDENTIFIER="${PRIVY_LOGIN_IDENTIFIER}"
+          export NATIVE_ANDROID_E2E_FIXED_OTP="${PRIVY_FIXED_OTP}"
+          export ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_ID="${PRIVY_APP_ID}"
+          export ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_CLIENT_ID="${PRIVY_APP_CLIENT_ID}"
+
+          if [[ "${INPUT_MODE}" == pr ]]; then
+            export ORG_GRADLE_PROJECT_MURPH_BACKEND_BASE_URL_DEV="${INPUT_WEB_BASE_URL}"
+            BUILD_TYPE=hostedE2E
+            TEST_TASK=pixel6Api35HostedE2EAndroidTest
+          else
+            export ORG_GRADLE_PROJECT_MURPH_BACKEND_BASE_URL_PROD="${INPUT_WEB_BASE_URL}"
+            BUILD_TYPE=productionCanary
+            TEST_TASK=pixel6Api35ProductionCanaryAndroidTest
+          fi
+
+          : > "${RAW_LOG}"
+          yes | sdkmanager --licenses >>"${RAW_LOG}" 2>&1 || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "system-images;android-35;google_apis;x86_64" \
+            >>"${RAW_LOG}" 2>&1
+          SDK_STATUS=$?
+
+          GRADLE_STATUS=${SDK_STATUS}
+          if [[ ${SDK_STATUS} -eq 0 ]]; then
+            ./gradlew --no-daemon --stacktrace \
+              "${TEST_TASK}" \
+              -PMURPH_ANDROID_TEST_BUILD_TYPE="${BUILD_TYPE}" \
+              -Pandroid.testInstrumentationRunnerArguments.class=ai.withmurph.companion.e2e.NativeHostedE2EContractTest,ai.withmurph.companion.e2e.NativeHostedE2ETest \
+              -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect \
+              >>"${RAW_LOG}" 2>&1
+            GRADLE_STATUS=$?
+          fi
+
+          unset PRIVY_FIXED_OTP PRIVY_LOGIN_IDENTIFIER
+          unset NATIVE_ANDROID_E2E_FIXED_OTP NATIVE_ANDROID_E2E_LOGIN_IDENTIFIER
+
+          node scripts/validate-native-android-e2e-contract.mjs \
+            extract-stage-summary \
+            --mode "${INPUT_MODE}" \
+            --log "${RAW_LOG}" \
+            --output "${SUMMARY}"
+          EXTRACT_STATUS=$?
+
+          rm -rf "${RAW_LOG}"
+          rm -rf app/build build .gradle "${GRADLE_USER_HOME}" "${ANDROID_USER_HOME}"
+
+          if [[ ${EXTRACT_STATUS} -ne 0 ]]; then
+            rm -f "${SUMMARY}"
+          fi
+
+          node scripts/validate-native-android-e2e-contract.mjs \
+            finalize-run \
+            --mode "${INPUT_MODE}" \
+            --summary "${SUMMARY}" \
+            --gradle-status "${GRADLE_STATUS}"
+
+      - name: Require a passing closed summary
+        if: ${{ always() }}
+        env:
+          LIVE_OUTCOME: ${{ steps.live-instrumentation.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${LIVE_OUTCOME}" == success ]] || { echo "::error::Protected native Android hosted E2E did not produce passing terminal proof."; exit 1; }
