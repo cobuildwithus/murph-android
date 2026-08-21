@@ -171,6 +171,42 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
+    fun healthPermissionTimeoutReportsTheFirstUnfinishedSafeMilestone() {
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionSurfaceMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = false,
+                didActivateAllowAll = false,
+                authorizationSelected = false,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionSelectionMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = false,
+                authorizationSelected = false,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionApprovalMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = false,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+            ),
+        )
+    }
+
+    @Test
     fun onboardingProgressSupportsServerContinuationAndRejectsSkippedStages() {
         NativeHostedE2EOnboardingProgress().apply {
             observe("Choose a voice")
