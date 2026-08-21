@@ -237,6 +237,9 @@ export function extractStageSummaryFromInstrumentationLog(rawLog, expectedMode) 
     }
   }
 
+  if (payloads.length === 0) {
+    return inferStageSummaryFromAllowlistedFailure(rawLog, expectedMode);
+  }
   if (
     payloads.length !== 1
     || payloads[0].length === 0
@@ -252,6 +255,49 @@ export function extractStageSummaryFromInstrumentationLog(rawLog, expectedMode) 
     throw new Error("Invalid native Android hosted E2E instrumentation log.");
   }
   return validateStageSummary(rawSummary, expectedMode);
+}
+
+/** @param {string} rawLog @param {string} expectedMode */
+function inferStageSummaryFromAllowlistedFailure(rawLog, expectedMode) {
+  const matches = [];
+  for (const [stage, codes] of FAILURE_CODES_BY_STAGE) {
+    for (const code of codes) {
+      const pattern = new RegExp(`(^|[^a-z0-9_])${code}([^a-z0-9_]|$)`, "u");
+      if (pattern.test(rawLog)) matches.push({ code, stage });
+    }
+  }
+  if (matches.length !== 1 || !(expectedMode in STAGES_BY_MODE)) {
+    throw new Error("Invalid native Android hosted E2E instrumentation log.");
+  }
+
+  const [{ code, stage }] = matches;
+  if (stage === "infrastructure") {
+    return validateStageSummary({
+      contractVersion: Number(CONTRACT_VERSION),
+      mode: expectedMode,
+      result: "failed",
+      stages: [
+        { name: "contract_validation", status: "passed" },
+        { code, name: stage, status: "failed" },
+      ],
+    }, expectedMode);
+  }
+
+  const failedIndex = STAGES_BY_MODE[expectedMode].indexOf(stage);
+  if (failedIndex < 0) {
+    throw new Error("Invalid native Android hosted E2E instrumentation log.");
+  }
+  return validateStageSummary({
+    contractVersion: Number(CONTRACT_VERSION),
+    mode: expectedMode,
+    result: "failed",
+    stages: [
+      ...STAGES_BY_MODE[expectedMode]
+        .slice(0, failedIndex)
+        .map((name) => ({ name, status: "passed" })),
+      { code, name: stage, status: "failed" },
+    ],
+  }, expectedMode);
 }
 
 /** @param {string} mode @param {string} code */

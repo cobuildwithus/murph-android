@@ -3,6 +3,7 @@ package ai.withmurph.companion.e2e
 import ai.withmurph.companion.BuildConfig
 import ai.withmurph.companion.MainActivity
 import android.content.Context
+import android.os.Bundle
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasClickAction
@@ -53,7 +54,11 @@ class NativeHostedE2ETest {
             fail(NativeHostedE2EFailureCode.InvalidDispatchContract.rawValue)
             return
         }
-        val reporter = NativeHostedE2EStageReporter(dispatch.mode)
+        val reporter = NativeHostedE2EStageReporter(
+            mode = dispatch.mode,
+            output = null,
+            statusPublisher = ::publishStageSummary,
+        )
 
         perform(
             stage = NativeHostedE2EStage.ContractValidation,
@@ -204,6 +209,13 @@ class NativeHostedE2ETest {
             reporter.failed(stage, fallback)
             fail(fallback.rawValue)
         }
+    }
+
+    private fun publishStageSummary(summary: String) {
+        instrumentation.sendStatus(
+            0,
+            Bundle().apply { putString("stream", "$summary\n") },
+        )
     }
 
     private fun signIn(identity: NativeHostedE2EProtectedIdentity) {

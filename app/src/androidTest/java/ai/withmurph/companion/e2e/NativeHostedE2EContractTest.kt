@@ -175,11 +175,17 @@ class NativeHostedE2EContractTest {
     @Test
     fun stageReporterEmitsExactlyOneOrderedPrivacySafeSummary() {
         val bytes = ByteArrayOutputStream()
+        var publishedStatus: String? = null
         val reporter = NativeHostedE2EStageReporter(
             NativeHostedE2EMode.ProductionCanary,
             PrintStream(bytes, true, Charsets.UTF_8.name()),
         )
-        listOf(
+        val statusReporter = NativeHostedE2EStageReporter(
+            mode = NativeHostedE2EMode.ProductionCanary,
+            output = null,
+            statusPublisher = { publishedStatus = it },
+        )
+        val stages = listOf(
             NativeHostedE2EStage.ContractValidation,
             NativeHostedE2EStage.LaunchLiveApp,
             NativeHostedE2EStage.InitialPrivyOtp,
@@ -191,12 +197,18 @@ class NativeHostedE2EContractTest {
             NativeHostedE2EStage.SignOut,
             NativeHostedE2EStage.ReturningPrivyOtp,
             NativeHostedE2EStage.ReturningMemberState,
-        ).forEach(reporter::passed)
+        )
+        stages.forEach {
+            reporter.passed(it)
+            statusReporter.passed(it)
+        }
         reporter.finishPassed()
+        statusReporter.finishPassed()
 
         val output = bytes.toString(Charsets.UTF_8.name()).trim()
         assertTrue(output.startsWith(NATIVE_ANDROID_STAGE_SUMMARY_PREFIX))
         assertTrue(output.contains("\"result\":\"passed\""))
+        assertEquals(output, publishedStatus)
         assertFalse(output.contains("+12025550142"))
         assertFalse(output.contains("123456"))
         assertThrows(IllegalArgumentException::class.java) {
