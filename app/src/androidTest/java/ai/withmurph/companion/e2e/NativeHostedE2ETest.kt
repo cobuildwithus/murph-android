@@ -562,7 +562,11 @@ class NativeHostedE2ETest {
             sleepBriefly()
         }
         throw JourneyFailure(
-            NativeHostedE2EFailureCode.HealthConnectPermissionStateFailed,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = sawPermissionSurface,
+                didActivateAllowAll = didActivateAllowAll,
+                authorizationSelected = authorizationSelected,
+            ),
         )
     }
 

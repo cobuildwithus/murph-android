@@ -90,7 +90,13 @@ const FAILURE_CODES_BY_STAGE = new Map([
   ],
   [
     "health_connect_permission_state",
-    new Set(["health_connect_permission_state_failed"]),
+    new Set([
+      "health_connect_permission_state_failed",
+      "health_connect_permission_surface_missing",
+      "health_connect_permission_selection_missing",
+      "health_connect_permission_approval_missing",
+      "health_connect_permission_completion_failed",
+    ]),
   ],
   ["connected_state", new Set(["connected_state_failed"])],
   ["sign_out", new Set(["sign_out_failed"])],

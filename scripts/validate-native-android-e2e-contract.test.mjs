@@ -165,20 +165,28 @@ test("stage summaries require complete ordered terminal proof for each mode", ()
 });
 
 test("a failed journey contains only the passed prefix and one allowlisted terminal failure", () => {
-  const failed = {
+  const failureCodes = [
+    "health_connect_permission_state_failed",
+    "health_connect_permission_surface_missing",
+    "health_connect_permission_selection_missing",
+    "health_connect_permission_approval_missing",
+    "health_connect_permission_completion_failed",
+  ];
+  const failedFor = (code) => ({
     contractVersion: 1,
     mode: "pr",
     result: "failed",
     stages: [
       ...PR_STAGES.slice(0, 7).map((name) => ({ name, status: "passed" })),
-      {
-        code: "health_connect_permission_state_failed",
-        name: "health_connect_permission_state",
-        status: "failed",
-      },
+      { code, name: "health_connect_permission_state", status: "failed" },
     ],
-  };
-  assert.deepEqual(validateStageSummary(failed, "pr"), failed);
+  });
+  failureCodes.forEach((code) => {
+    const failed = failedFor(code);
+    assert.deepEqual(validateStageSummary(failed, "pr"), failed);
+  });
+
+  const failed = failedFor("health_connect_permission_state_failed");
 
   assert.throws(() => validateStageSummary({
     ...failed,

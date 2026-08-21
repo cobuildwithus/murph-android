@@ -174,6 +174,22 @@ internal enum class NativeHostedE2EFailureCode(
         "health_connect_permission_state_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
     ),
+    HealthConnectPermissionSurfaceMissing(
+        "health_connect_permission_surface_missing",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionSelectionMissing(
+        "health_connect_permission_selection_missing",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionApprovalMissing(
+        "health_connect_permission_approval_missing",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionCompletionFailed(
+        "health_connect_permission_completion_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
     ConnectedStateFailed("connected_state_failed", NativeHostedE2EStage.ConnectedState),
     SignOutFailed("sign_out_failed", NativeHostedE2EStage.SignOut),
     ReturningPrivyOtpFailed(
@@ -192,6 +208,17 @@ internal enum class NativeHostedE2EFailureCode(
         "returning_member_state_failed",
         NativeHostedE2EStage.ReturningMemberState,
     ),
+}
+
+internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
+    sawPermissionSurface: Boolean,
+    didActivateAllowAll: Boolean,
+    authorizationSelected: Boolean,
+): NativeHostedE2EFailureCode = when {
+    !sawPermissionSurface -> NativeHostedE2EFailureCode.HealthConnectPermissionSurfaceMissing
+    !didActivateAllowAll -> NativeHostedE2EFailureCode.HealthConnectPermissionSelectionMissing
+    !authorizationSelected -> NativeHostedE2EFailureCode.HealthConnectPermissionApprovalMissing
+    else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
 
 internal data class NativeHostedE2EDispatchConfiguration(
