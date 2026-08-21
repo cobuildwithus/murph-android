@@ -345,6 +345,10 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
     liveDriver,
     /waitForClickableText\("Send code", (?:45_000|60_000)\)/u,
   );
+  assert.match(
+    liveDriver,
+    /while \(System\.currentTimeMillis\(\) < deadline\) \{[\s\S]*?if \(isLaunchConsentSheet\(\)\)[\s\S]*?if \(hasVisibleText\("Consent needed"\)\)/u,
+  );
   assert.doesNotMatch(liveDriver, /ScreenshotActivity/u);
 
   const verify = await readFile(path.join(ROOT, "scripts", "verify.sh"), "utf8");

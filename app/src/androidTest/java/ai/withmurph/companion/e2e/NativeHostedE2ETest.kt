@@ -324,11 +324,6 @@ class NativeHostedE2ETest {
         var retried = false
 
         while (System.currentTimeMillis() < deadline) {
-            if (hasVisibleText("Consent needed")) {
-                clickText("Consent needed", 20_000)
-                continue
-            }
-
             if (isLaunchConsentSheet()) {
                 when {
                     hasClickableText("I Consent") -> {
@@ -351,6 +346,11 @@ class NativeHostedE2ETest {
                         continue
                     }
                 }
+            }
+
+            if (hasVisibleText("Consent needed")) {
+                clickText("Consent needed", 20_000)
+                continue
             }
 
             if (isOnboardingSurface() || isReadyShell()) {
