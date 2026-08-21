@@ -3301,14 +3301,14 @@ class AppSessionTest {
             fixture.session.state.value.launchConsentRecovery?.phase,
         )
         assertFalse(fixture.health.signedIn)
-        assertEquals(syncCallsBeforeRecovery, fixture.health.syncCalls)
+        assertEquals(syncCallsBeforeRecovery + 1, fixture.health.syncCalls)
 
         fixture.api.addressStatusError = null
         fixture.session.acceptLaunchConsent()
 
         assertNull(fixture.session.state.value.launchConsentRecovery)
         assertTrue(fixture.health.signedIn)
-        assertEquals(syncCallsBeforeRecovery + 1, fixture.health.syncCalls)
+        assertEquals(syncCallsBeforeRecovery + 2, fixture.health.syncCalls)
     }
 
     @Test
@@ -3338,7 +3338,7 @@ class AppSessionTest {
     }
 
     @Test
-    fun reconnectDuringAddressBookRefreshRunsTheReplacementSyncOnce() = runTest {
+    fun reconnectDuringAddressBookRefreshRunsOneSyncAfterForegroundHealthSync() = runTest {
         val fixture = fixture(contacts = SupportedContacts)
         fixture.localState.memberKey = MEMBER_KEY
         fixture.localState.healthAccessRequestedAt = InstantValue(1)
@@ -3354,6 +3354,7 @@ class AppSessionTest {
         val foreground = async { fixture.session.didBecomeActive() }
         fixture.api.addressStatusEntered.await()
         fixture.api.addressStatusGate = null
+        assertEquals(syncCallsBeforeReconnect + 1, fixture.health.syncCalls)
 
         assertTrue(fixture.session.prepareHealthConnection())
         val connectGate = CompletableDeferred<Unit>()
@@ -3364,13 +3365,13 @@ class AppSessionTest {
         fixture.health.connectEntered.await()
         connectGate.complete(Unit)
         assertTrue(completion.await())
-        assertEquals(syncCallsBeforeReconnect + 1, fixture.health.syncCalls)
+        assertEquals(syncCallsBeforeReconnect + 2, fixture.health.syncCalls)
 
         addressStatusGate.complete(Unit)
         foreground.await()
 
         assertEquals(1, fixture.health.connectCalls)
-        assertEquals(syncCallsBeforeReconnect + 1, fixture.health.syncCalls)
+        assertEquals(syncCallsBeforeReconnect + 2, fixture.health.syncCalls)
     }
 
     @Test

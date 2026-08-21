@@ -425,7 +425,7 @@
     ],
     "readResourceCount": 21,
     "readDataPermissionCount": 29,
-    "backfillDays": 30,
+    "backfillDays": 365,
     "historyPermissionRequested": false,
     "syncOnAppStart": false,
     "backgroundPermissionRequested": false

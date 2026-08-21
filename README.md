@@ -11,7 +11,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
 - The complete pinned Vital 5.0.2 Health Connect read surface: 21 centralized resources backed by 29 data-type read permissions.
-- Thirty-day foreground backfill within ordinary Health Connect read access.
+- A 365-day foreground backfill configuration; pinned Vital 5.0.2 currently caps its effective local sync-state request at 30 days, and ordinary Health Connect access still governs availability.
 - Visible `dataSync` foreground transfer on app entry, foreground return, and explicit **Sync now**.
 - Backend-confirmed, Health Connect-scoped sync status.
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
@@ -224,10 +224,13 @@ availability and backend receipt remain physical-device release gates; this
 permission surface does not claim that every source exports or Murph ingests
 every requested category.
 
-Junction/Vital Android 5.0.2 hard-clamps backfill to the ordinary 30-day Health
-Connect read window, so the app does not request broader history access with no
-reachable benefit. Background reads, boot receivers, and exact-alarm
-synchronization are intentionally excluded from this release. See
+Murph configures Junction/Vital Android 5.0.2 for a 365-day foreground backfill
+request, matching the iOS configuration. Pinned Vital 5.0.2 currently caps its
+effective local sync-state request at 30 days, and ordinary Health Connect access
+may further limit older records. The app does not request extended-history
+permission. Background reads, boot receivers, and exact-alarm synchronization are
+intentionally excluded from this release; provider support and backend intake
+remain separate physical-device checks. See
 [`BACKGROUND_HEALTH_AUTHORIZATION.md`](BACKGROUND_HEALTH_AUTHORIZATION.md) for
 the durable authorization requirements blocking unattended health work.
 
@@ -277,9 +280,10 @@ message.
   lease for the exact backend-validated member. Vital's Startup initializer is
   also removed because it depends on the default WorkManager initializer; the
   adapter obtains the guarded on-demand WorkManager instance before creating the
-  Vital manager. A failed commit rolls back the live Junction identity. The SDK's reachable
-  backfill is already limited to 30 days, so setup does not request an
-  extended-history grant.
+  Vital manager. A failed commit rolls back the live Junction identity. The
+  explicit SDK backfill request is 365 days. Pinned Vital 5.0.2 currently caps
+  its effective local sync-state request at 30 days, and ordinary Health Connect
+  access remains authoritative, so setup does not request an extended-history grant.
 - Later launches use `connectionIntent: "resume"` only after local setup was completed.
 - If omitted or passive `resume` receives
   `SDK_SIGN_IN_RECONNECT_REQUIRED`, Android preserves that typed reason and

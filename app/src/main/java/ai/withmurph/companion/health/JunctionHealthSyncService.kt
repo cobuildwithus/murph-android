@@ -187,7 +187,7 @@ internal fun permissionOutcomeAllowsCurrentGrantClassification(
 class JunctionHealthSyncService(
     context: Context,
     private val environment: AppEnvironment,
-    private val backfillDays: Int = 30,
+    private val backfillDays: Int = 365,
 ) : HealthSyncing {
     private val appContext = context.applicationContext
     private val manager = createVitalManagerAfterGuardedWorkManager(appContext)

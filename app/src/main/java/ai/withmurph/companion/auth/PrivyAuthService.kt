@@ -59,17 +59,35 @@ class PrivyAuthService private constructor(private val privy: Privy) : AuthProvi
         }
     }
 
-    override suspend fun identityToken(): String {
-        val token = privy.getUser()?.identityToken
-        return token?.takeIf(String::isNotBlank)
-            ?: throw IllegalStateException("Privy identity token is unavailable")
-    }
+    override suspend fun identityToken(): String = refreshedIdentityToken(
+        currentUser = { privy.getUser() },
+        refreshSession = { user ->
+            user.getAccessToken().getOrThrow()
+        },
+        currentIdentityToken = { user -> user.identityToken },
+    )
 
     override suspend fun signOut() {
         privy.logout()
     }
 
     companion object {
+        internal suspend fun <User> refreshedIdentityToken(
+            currentUser: suspend () -> User?,
+            refreshSession: suspend (User) -> Unit,
+            currentIdentityToken: (User) -> String?,
+        ): String {
+            val user = currentUser()
+                ?: throw IllegalStateException("Privy identity token is unavailable")
+            runAuthCall {
+                refreshSession(user)
+            }
+            return currentUser()
+                ?.let(currentIdentityToken)
+                ?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("Privy identity token is unavailable")
+        }
+
         internal suspend fun runAuthCall(call: suspend () -> Unit) {
             try {
                 call()
