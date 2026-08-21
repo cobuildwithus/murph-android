@@ -98,7 +98,12 @@ class NativeHostedE2ETest {
                 NativeHostedE2EFailureCode.InitialPrivyOtpFailed,
                 reporter,
             ) {
-                signIn(identity)
+                signIn(
+                    identity = identity,
+                    requestRejected =
+                        NativeHostedE2EFailureCode.InitialPrivyOtpRequestRejected,
+                    codeRejected = NativeHostedE2EFailureCode.InitialPrivyOtpCodeRejected,
+                )
             }
 
             perform(
@@ -174,7 +179,12 @@ class NativeHostedE2ETest {
                 NativeHostedE2EFailureCode.ReturningPrivyOtpFailed,
                 reporter,
             ) {
-                signIn(identity)
+                signIn(
+                    identity = identity,
+                    requestRejected =
+                        NativeHostedE2EFailureCode.ReturningPrivyOtpRequestRejected,
+                    codeRejected = NativeHostedE2EFailureCode.ReturningPrivyOtpCodeRejected,
+                )
             }
 
             perform(
@@ -218,7 +228,11 @@ class NativeHostedE2ETest {
         )
     }
 
-    private fun signIn(identity: NativeHostedE2EProtectedIdentity) {
+    private fun signIn(
+        identity: NativeHostedE2EProtectedIdentity,
+        requestRejected: NativeHostedE2EFailureCode,
+        codeRejected: NativeHostedE2EFailureCode,
+    ) {
         waitForText("Send code", 45_000)
         if (hasClickableText("Use phone number instead")) {
             clickText("Use phone number instead", 20_000)
@@ -238,7 +252,12 @@ class NativeHostedE2ETest {
             clickText("Send code", 20_000)
         }
 
-        waitUntil(90_000) { hasVerificationCodeField() }
+        waitUntil(90_000) {
+            hasVerificationCodeField() || hasVisibleText(OTP_REQUEST_ERROR)
+        }
+        if (!hasVerificationCodeField()) {
+            throw JourneyFailure(requestRejected)
+        }
         replaceOnlyEditable(identity.fixedOtp, 20_000)
 
         var submissionDecision = NativeHostedE2ECodeSubmissionDecision.Wait
@@ -252,7 +271,12 @@ class NativeHostedE2ETest {
         if (submissionDecision == NativeHostedE2ECodeSubmissionDecision.TapSignIn) {
             clickText("Sign in", 20_000)
         }
-        waitUntil(180_000, ::isPostAuthenticationSurface)
+        waitUntil(180_000) {
+            isPostAuthenticationSurface() || hasVisibleText(OTP_CODE_ERROR)
+        }
+        if (!isPostAuthenticationSurface()) {
+            throw JourneyFailure(codeRejected)
+        }
     }
 
     private fun selectPhoneCountry(identity: NativeHostedE2EProtectedIdentity) {
@@ -300,11 +324,6 @@ class NativeHostedE2ETest {
         var retried = false
 
         while (System.currentTimeMillis() < deadline) {
-            if (hasVisibleText("Consent needed")) {
-                clickText("Consent needed", 20_000)
-                continue
-            }
-
             if (isLaunchConsentSheet()) {
                 when {
                     hasClickableText("I Consent") -> {
@@ -327,6 +346,11 @@ class NativeHostedE2ETest {
                         continue
                     }
                 }
+            }
+
+            if (hasVisibleText("Consent needed")) {
+                clickText("Consent needed", 20_000)
+                continue
             }
 
             if (isOnboardingSurface() || isReadyShell()) {
@@ -725,6 +749,10 @@ class NativeHostedE2ETest {
     ) : RuntimeException()
 
     companion object {
+        private const val OTP_REQUEST_ERROR =
+            "We couldn't send a code to that number. Check it and try again."
+        private const val OTP_CODE_ERROR =
+            "That code didn't work. Try again or send a new one."
         private val HealthConnectPackages = setOf(
             "com.android.healthconnect.controller",
             "com.google.android.healthconnect.controller",

@@ -232,6 +232,19 @@ test("instrumentation transport recovers one allowlisted journey failure", () =>
     "launch_live_app_failed then initial_privy_otp_failed",
     "production_canary",
   ));
+
+  for (const code of [
+    "initial_privy_otp_request_rejected",
+    "initial_privy_otp_code_rejected",
+  ]) {
+    assert.equal(
+      extractStageSummaryFromInstrumentationLog(
+        `private provider prose\njava.lang.AssertionError: ${code}\n`,
+        "production_canary",
+      ).stages.at(-1)?.code,
+      code,
+    );
+  }
 });
 
 test("infrastructure summaries expose no provider or identity detail", () => {
@@ -331,6 +344,10 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   assert.doesNotMatch(
     liveDriver,
     /waitForClickableText\("Send code", (?:45_000|60_000)\)/u,
+  );
+  assert.match(
+    liveDriver,
+    /while \(System\.currentTimeMillis\(\) < deadline\) \{[\s\S]*?if \(isLaunchConsentSheet\(\)\)[\s\S]*?if \(hasVisibleText\("Consent needed"\)\)/u,
   );
   assert.doesNotMatch(liveDriver, /ScreenshotActivity/u);
 
