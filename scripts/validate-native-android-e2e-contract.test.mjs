@@ -327,6 +327,11 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
     "utf8",
   );
   assert.match(liveDriver, /ActivityScenario\.launch\(MainActivity::class\.java\)/u);
+  assert.match(liveDriver, /waitForText\("Send code", 60_000\)/u);
+  assert.doesNotMatch(
+    liveDriver,
+    /waitForClickableText\("Send code", (?:45_000|60_000)\)/u,
+  );
   assert.doesNotMatch(liveDriver, /ScreenshotActivity/u);
 
   const verify = await readFile(path.join(ROOT, "scripts", "verify.sh"), "utf8");

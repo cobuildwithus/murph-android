@@ -90,7 +90,7 @@ class NativeHostedE2ETest {
                 reporter,
             ) {
                 scenario = ActivityScenario.launch(MainActivity::class.java)
-                waitForClickableText("Send code", 60_000)
+                waitForText("Send code", 60_000)
             }
 
             perform(
@@ -219,7 +219,7 @@ class NativeHostedE2ETest {
     }
 
     private fun signIn(identity: NativeHostedE2EProtectedIdentity) {
-        waitForClickableText("Send code", 45_000)
+        waitForText("Send code", 45_000)
         if (hasClickableText("Use phone number instead")) {
             clickText("Use phone number instead", 20_000)
         }
