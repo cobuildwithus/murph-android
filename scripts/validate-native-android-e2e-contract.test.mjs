@@ -207,6 +207,33 @@ test("instrumentation transport accepts exactly one bounded allowlisted summary"
   ));
 });
 
+test("instrumentation transport recovers one allowlisted journey failure", () => {
+  assert.deepEqual(
+    extractStageSummaryFromInstrumentationLog(
+      "private provider prose\njava.lang.AssertionError: initial_privy_otp_failed\n",
+      "production_canary",
+    ),
+    {
+      contractVersion: 1,
+      mode: "production_canary",
+      result: "failed",
+      stages: [
+        { name: "contract_validation", status: "passed" },
+        { name: "launch_live_app", status: "passed" },
+        {
+          code: "initial_privy_otp_failed",
+          name: "initial_privy_otp",
+          status: "failed",
+        },
+      ],
+    },
+  );
+  assert.throws(() => extractStageSummaryFromInstrumentationLog(
+    "launch_live_app_failed then initial_privy_otp_failed",
+    "production_canary",
+  ));
+});
+
 test("infrastructure summaries expose no provider or identity detail", () => {
   assert.deepEqual(infrastructureFailureSummary("pr", "gradle_failed"), {
     contractVersion: 1,

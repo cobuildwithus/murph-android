@@ -313,7 +313,8 @@ internal data class NativeHostedE2EStageEntry(
 
 internal class NativeHostedE2EStageReporter(
     private val mode: NativeHostedE2EMode,
-    private val output: PrintStream = System.out,
+    private val output: PrintStream? = System.out,
+    private val statusPublisher: ((String) -> Unit)? = null,
 ) {
     private val expectedStages = when (mode) {
         NativeHostedE2EMode.Pr -> listOf(
@@ -388,14 +389,15 @@ internal class NativeHostedE2EStageReporter(
     private fun emit(result: String) {
         if (emitted) return
         val stages = entries.joinToString(separator = ",") { it.json() }
-        output.println(
+        val summary =
             "${NATIVE_ANDROID_STAGE_SUMMARY_PREFIX}{" +
                 "\"contractVersion\":1," +
                 "\"mode\":\"${mode.rawValue}\"," +
                 "\"result\":\"$result\"," +
-                "\"stages\":[$stages]}",
-        )
-        output.flush()
+                "\"stages\":[$stages]}"
+        output?.println(summary)
+        output?.flush()
+        statusPublisher?.invoke(summary)
         emitted = true
     }
 }
