@@ -277,6 +277,18 @@ internal fun nativeHostedE2EHealthPermissionRetryFailure(
     result == NativeHostedE2EHealthPermissionHandoffResult.TimedOut
 }
 
+internal fun nativeHostedE2EHasCompletedHealthSetup(
+    hasVisibleText: (String) -> Boolean,
+): Boolean = listOf(
+    "You're connected",
+    "Synced",
+    "Sync is on its way",
+    "Worth a quick check",
+    // Initial setup advances to this committed next step before the health
+    // status card is guaranteed to remain visible in the reduced viewport.
+    "Friendly Names are optional",
+).any(hasVisibleText)
+
 private val HealthPermissionGrantFailureMarkers = listOf(
     "Choose at least one Health Connect category to connect Murph.",
     "Power, speed, and elevation require Workouts. Allow Workouts in Health Connect, then try again.",
