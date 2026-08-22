@@ -133,8 +133,7 @@ interface HealthSyncing {
     suspend fun refreshPermissionState()
     suspend fun syncAllGrantedResources(
         expectedMemberKey: String,
-        beforeSyncEnqueue: () -> Boolean,
-        onSyncLaunchRejected: () -> Unit,
+        beforeSyncPromotion: () -> Boolean,
     ): HealthSyncAttemptResult
     suspend fun revokeActiveSyncAuthorization()
     suspend fun signOutSdk()

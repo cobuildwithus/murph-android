@@ -2285,11 +2285,10 @@ class AddressBookSessionTest {
         }
         override suspend fun syncAllGrantedResources(
             expectedMemberKey: String,
-            beforeSyncEnqueue: () -> Boolean,
-            onSyncLaunchRejected: () -> Unit,
+            beforeSyncPromotion: () -> Boolean,
         ): HealthSyncAttemptResult {
             syncCalls += 1
-            if (!beforeSyncEnqueue()) return HealthSyncAttemptResult.NotStarted
+            if (!beforeSyncPromotion()) return HealthSyncAttemptResult.NotStarted
             syncEntered.complete(Unit)
             syncGate?.await()
             return HealthSyncAttemptResult.Complete

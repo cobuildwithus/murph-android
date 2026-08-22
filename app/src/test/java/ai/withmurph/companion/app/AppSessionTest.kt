@@ -4920,21 +4920,26 @@ class AppSessionTest {
         val sync = async { fixture.session.syncNow() }
         fixture.health.syncEnqueueEntered.await()
         fixture.session.didEnterBackground()
-        sync.await()
 
         assertEquals(1, fixture.health.revokeUnpromotedSyncLaunchCalls)
         assertEquals(0, fixture.health.syncResourceStarts)
         assertEquals(priorFailure, fixture.localState.pendingHealthSyncFailure)
         assertFalse(fixture.localState.healthReconnectRequired)
 
+        fixture.auth.state = AuthSessionState.TemporarilyUnavailable
+        val replacement = recreatedSession(fixture)
+        replacement.start()
+
+        assertEquals(priorFailure, fixture.localState.pendingHealthSyncFailure)
+        assertFalse(replacement.state.value.healthReconnectRequired)
+        sync.await()
+
         val syncCallsAfterRejection = fixture.health.syncCalls
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
         fixture.health.rejectSyncLaunchOnBackground = false
-        fixture.health.syncError = null
+        fixture.health.syncErrorBeforePromotion = null
         fixture.health.syncEnqueueGate = null
         fixture.session.didBecomeActive()
-
-        assertEquals(syncCallsAfterRejection, fixture.health.syncCalls)
-        fixture.session.syncNow()
 
         assertEquals(syncCallsAfterRejection + 1, fixture.health.syncCalls)
         assertFalse(fixture.localState.healthReconnectRequired)
@@ -4982,7 +4987,8 @@ class AppSessionTest {
         )
         assertTrue(fixture.localState.recordPendingHealthSyncFailure(priorFailure))
         fixture.api.status = CompanionSyncStatus(null, observation, emptyMap())
-        fixture.health.syncError = HealthSyncForegroundLaunchRejectedException()
+        fixture.health.syncErrorBeforePromotion =
+            HealthSyncForegroundLaunchRejectedException()
 
         fixture.session.syncNow()
 
@@ -9335,6 +9341,7 @@ class AppSessionTest {
         var identifyError: Throwable? = null
         var configureError: Throwable? = null
         var connectError: Throwable? = null
+        var syncErrorBeforePromotion: Throwable? = null
         var syncError: Throwable? = null
         var syncResult: HealthSyncAttemptResult = HealthSyncAttemptResult.Complete
         var refreshError: Throwable? = null
@@ -9363,7 +9370,6 @@ class AppSessionTest {
         private var automaticSyncPaused = false
         private var activeSyncAuthorized = false
         private var activeSyncPromoted = false
-        private var activeSyncLaunchRejected: (() -> Unit)? = null
         private var identifiedMemberKey: String? = null
 
         override fun availability(): HealthConnectAvailability {
@@ -9414,8 +9420,7 @@ class AppSessionTest {
                 !activeSyncPromoted
             ) {
                 activeSyncAuthorized = false
-                activeSyncLaunchRejected?.invoke()
-                syncError = HealthSyncForegroundLaunchRejectedException()
+                syncErrorBeforePromotion = HealthSyncForegroundLaunchRejectedException()
                 syncEnqueueGate?.complete(Unit)
                 syncGate?.complete(Unit)
             }
@@ -9474,8 +9479,7 @@ class AppSessionTest {
 
         override suspend fun syncAllGrantedResources(
             expectedMemberKey: String,
-            beforeSyncEnqueue: () -> Boolean,
-            onSyncLaunchRejected: () -> Unit,
+            beforeSyncPromotion: () -> Boolean,
         ): HealthSyncAttemptResult {
             syncMemberKeys += expectedMemberKey
             if (requireCurrentProcessSetupBeforeSync) {
@@ -9493,12 +9497,12 @@ class AppSessionTest {
             events += "sync"
             syncPreparationEntered.complete(Unit)
             syncPreparationGate?.await()
-            if (!beforeSyncEnqueue()) return HealthSyncAttemptResult.NotStarted
             activeSyncAuthorized = true
-            activeSyncLaunchRejected = onSyncLaunchRejected
             try {
                 syncEnqueueEntered.complete(Unit)
                 syncEnqueueGate?.await()
+                syncErrorBeforePromotion?.let { throw it }
+                if (!beforeSyncPromotion()) return HealthSyncAttemptResult.NotStarted
                 activeSyncPromoted = true
                 for (resourceIndex in 0 until syncResourceCount) {
                     if (!signedIn || !activeSyncAuthorized) break
@@ -9511,7 +9515,6 @@ class AppSessionTest {
             } finally {
                 activeSyncAuthorized = false
                 activeSyncPromoted = false
-                activeSyncLaunchRejected = null
             }
             syncError?.takeIf {
                 syncErrorOnCall == null || syncErrorOnCall == syncCalls

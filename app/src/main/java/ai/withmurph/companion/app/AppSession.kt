@@ -3662,29 +3662,26 @@ class AppSession(
             lastStartedHealthSyncSequence += 1
             val syncSequence = lastStartedHealthSyncSequence
             var syncSucceeded = false
-            var provisionalPersistenceFailed = false
-            val launchRejected = AtomicBoolean(false)
+            val provisionalPersistenceFailed = AtomicBoolean(false)
             try {
                 val result = runForegroundHealthSync(
                     foregroundClaim = foregroundClaim,
                     memberKey = syncMemberKey,
-                    beforeSyncEnqueue = {
+                    beforeSyncPromotion = {
                         if (!ownsForegroundRefresh(foregroundClaim)) {
                             false
                         } else {
                             localState.replacePendingHealthSyncFailure(provisionalFailure)
                                 .also { persisted ->
-                                    provisionalPersistenceFailed = !persisted
-                            }
+                                    provisionalPersistenceFailed.set(!persisted)
+                                }
                         }
                     },
-                    onSyncLaunchRejected = { launchRejected.set(true) },
                 )
-                if (provisionalPersistenceFailed) {
+                if (provisionalPersistenceFailed.get()) {
                     requireHealthReconnectAfterUnclassifiedSyncFailure()
                     return false
                 }
-                if (launchRejected.get()) throw HealthSyncForegroundLaunchRejectedException()
                 val completedResult = result ?: return false
                 when (completedResult) {
                     HealthSyncAttemptResult.Complete -> {
@@ -3734,11 +3731,6 @@ class AppSession(
                 throw error
             } catch (_: HealthSyncForegroundLaunchRejectedException) {
                 healthSyncLaunchRejected = true
-                if (
-                    !replacePendingHealthSyncFailureOrReconnect(
-                        previousPendingFailure,
-                    )
-                ) return false
                 _state.update { current ->
                     current.copy(healthMessage = HEALTH_FOREGROUND_SYNC_RETRY_MESSAGE)
                 }
@@ -3784,14 +3776,12 @@ class AppSession(
     private suspend fun runForegroundHealthSync(
         foregroundClaim: ForegroundRefreshClaim,
         memberKey: String,
-        beforeSyncEnqueue: () -> Boolean,
-        onSyncLaunchRejected: () -> Unit,
+        beforeSyncPromotion: () -> Boolean,
     ): HealthSyncAttemptResult? = coroutineScope {
         val sync = async(start = CoroutineStart.LAZY) {
             health.syncAllGrantedResources(
                 memberKey,
-                beforeSyncEnqueue,
-                onSyncLaunchRejected,
+                beforeSyncPromotion,
             )
         }
         val operation = claimForegroundHealthOperation(foregroundClaim, sync)
