@@ -58,6 +58,13 @@ Merge readiness requires a validated `PASS` with zero accepted findings, all
 three hosted checks green on that head, required device evidence recorded, and a
 conflict-free PR.
 
+For a production-path PR, recorded device evidence means the PR body includes
+the required exact-head emulator evidence and names every physical-device-only
+gap. Pixel, Samsung, provider, and signed-candidate exercises remain explicit
+Play release gates; merging code does not claim those gates passed. The review
+prompt reports a device-proof finding only when the candidate falsely claims
+proof, weakens a gate, omits the required gap, or exposes a source-level defect.
+
 ## Review control changes
 
 A PR that changes the ReviewGPT prompt, fixed PR runner, validator,
