@@ -496,7 +496,7 @@ class NativeHostedE2ETest {
             authorizationSelected = authorizationSelected,
             returnedToApp = returnedToApp,
             hasVisibleText = { marker ->
-                runCatching { hasVisibleText(marker) }.getOrDefault(false)
+                hasAppOwnedText(marker)
             },
         )
 
@@ -561,7 +561,11 @@ class NativeHostedE2ETest {
 
             if (sawPermissionSurface && authorizationSelected && (
                     isConnectedHealthState() ||
-                        hasAnyText("Connecting…", "Sync is on its way", "Check for new data")
+                        hasAnyAppOwnedText(
+                            "Connecting…",
+                            "Sync is on its way",
+                            "Check for new data",
+                        )
                     )
             ) {
                 return
@@ -657,7 +661,24 @@ class NativeHostedE2ETest {
         hasClickableText("Home") && hasClickableText("Settings")
 
     private fun isConnectedHealthState(): Boolean =
-        nativeHostedE2EHasCompletedHealthSetup(::hasVisibleText)
+        nativeHostedE2EHasCompletedHealthSetup(::hasAppOwnedText)
+
+    private fun hasAppOwnedText(text: String): Boolean =
+        nativeHostedE2EHasAppOwnedText(
+            text = text,
+            composeHasVisibleText = ::hasVisibleText,
+            hierarchyHasVisibleText = { expected ->
+                device.currentPackageName == targetContext.packageName &&
+                    runCatching {
+                        device.findObject(
+                            By.text(expected).pkg(targetContext.packageName),
+                        ) != null
+                    }.getOrDefault(false)
+            },
+        )
+
+    private fun hasAnyAppOwnedText(vararg texts: String): Boolean =
+        texts.any(::hasAppOwnedText)
 
     private fun waitForExternalHealthSurface(timeout: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeout

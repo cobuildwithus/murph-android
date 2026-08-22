@@ -299,6 +299,31 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
+    fun appOwnedTextSurvivesAComposeBridgeMissAfterExternalReturn() {
+        assertTrue(
+            nativeHostedE2EHasAppOwnedText(
+                text = "Friendly Names are optional",
+                composeHasVisibleText = { false },
+                hierarchyHasVisibleText = { it == "Friendly Names are optional" },
+            ),
+        )
+        assertTrue(
+            nativeHostedE2EHasAppOwnedText(
+                text = "Connecting…",
+                composeHasVisibleText = { it == "Connecting…" },
+                hierarchyHasVisibleText = { false },
+            ),
+        )
+        assertFalse(
+            nativeHostedE2EHasAppOwnedText(
+                text = "You're connected",
+                composeHasVisibleText = { false },
+                hierarchyHasVisibleText = { false },
+            ),
+        )
+    }
+
+    @Test
     fun onboardingProgressSupportsServerContinuationAndRejectsSkippedStages() {
         NativeHostedE2EOnboardingProgress().apply {
             observe("Choose a voice")
