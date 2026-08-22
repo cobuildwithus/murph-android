@@ -238,6 +238,22 @@ internal enum class NativeHostedE2EFailureCode(
         "health_connect_post_permission_setup_save_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
     ),
+    HealthConnectPostPermissionConsentRecovery(
+        "health_connect_post_permission_consent_recovery",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPostPermissionAuthUnverified(
+        "health_connect_post_permission_auth_unverified",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPostPermissionStatusStale(
+        "health_connect_post_permission_status_stale",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPostPermissionUnclassifiedMessage(
+        "health_connect_post_permission_unclassified_message",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
     ConnectedStateFailed("connected_state_failed", NativeHostedE2EStage.ConnectedState),
     SignOutFailed("sign_out_failed", NativeHostedE2EStage.SignOut),
     ReturningPrivyOtpFailed(
@@ -269,6 +285,10 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     appIsConnecting: Boolean = false,
     appSetupAdvanced: Boolean = false,
     appHealthConnected: Boolean = false,
+    appHasConsentRecovery: Boolean = false,
+    appAuthVerifiedOnline: Boolean = true,
+    appHealthStatusIsStale: Boolean = false,
+    appHasHealthMessage: Boolean = false,
     hasAppStateText: (String) -> Boolean = { false },
 ): NativeHostedE2EFailureCode = when {
     !sawPermissionSurface -> NativeHostedE2EFailureCode.HealthConnectPermissionSurfaceMissing
@@ -305,6 +325,14 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     appIsConnecting -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionPending
     appSetupAdvanced || appHealthConnected ->
         NativeHostedE2EFailureCode.HealthConnectPermissionUiProjectionFailed
+    appHasConsentRecovery ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionConsentRecovery
+    !appAuthVerifiedOnline ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionAuthUnverified
+    appHealthStatusIsStale ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionStatusStale
+    appHasHealthMessage ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionUnclassifiedMessage
     else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
 
@@ -362,9 +390,12 @@ private val HealthPostPermissionResetFailureMarkers = listOf(
 
 private val HealthPostPermissionNetworkFailureMarkers = listOf(
     "Murph couldn't reach the network. Check your connection and try again.",
+    "You're offline. Saved sync status is shown until Murph reconnects.",
+    "Murph couldn't verify your account. Saved status is still shown.",
 )
 
 private val HealthPostPermissionConnectionFailureMarkers = listOf(
+    "Health Connect permissions couldn't be opened. Try again.",
     "Murph couldn't finish connecting Health Connect. Try again in a moment.",
     "Reconnect Health Connect to resume syncing.",
 )

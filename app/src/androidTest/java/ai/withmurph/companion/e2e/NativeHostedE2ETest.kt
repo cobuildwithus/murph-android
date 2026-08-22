@@ -512,6 +512,10 @@ class NativeHostedE2ETest {
                 appSetupAdvanced =
                     appState.initialSetupStep != InitialSetupStep.HealthConnect,
                 appHealthConnected = appState.healthSync != HealthSyncState.NotConnected,
+                appHasConsentRecovery = appState.launchConsentRecovery != null,
+                appAuthVerifiedOnline = appState.authVerifiedOnline,
+                appHealthStatusIsStale = appState.healthStatusIsStale,
+                appHasHealthMessage = appState.healthMessage != null,
                 hasAppStateText = { marker -> appState.healthMessage == marker },
             )
         }

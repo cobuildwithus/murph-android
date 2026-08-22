@@ -183,6 +183,10 @@ test("a failed journey contains only the passed prefix and one allowlisted termi
     "health_connect_post_permission_network_failed",
     "health_connect_post_permission_connection_failed",
     "health_connect_post_permission_setup_save_failed",
+    "health_connect_post_permission_consent_recovery",
+    "health_connect_post_permission_auth_unverified",
+    "health_connect_post_permission_status_stale",
+    "health_connect_post_permission_unclassified_message",
   ];
   const failedFor = (code) => ({
     contractVersion: 1,
