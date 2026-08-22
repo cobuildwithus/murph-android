@@ -103,6 +103,10 @@ class MurphHealthWorkerFactoryTest {
         assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
         assertTrue(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
 
+        VitalHealthWorkerLease.closePreservingLaunchRejection()
+
+        assertTrue(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
+
         VitalHealthWorkerLease.closeFor(testMemberKey)
         VitalHealthWorkerLease.openFor(testMemberKey)
         assertTrue(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
@@ -111,6 +115,10 @@ class MurphHealthWorkerFactoryTest {
 
         assertTrue(VitalHealthWorkerLease.isOpenFor(testMemberKey))
         assertFalse(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
+
+        VitalHealthWorkerLease.closePreservingLaunchRejection()
+
+        assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
     }
 
     @Test

@@ -59,6 +59,7 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AppSession(
     private val auth: AuthProvider,
@@ -3658,17 +3659,34 @@ class AppSession(
                 resourceKeys = setOf(UNKNOWN_HEALTH_RESOURCE_KEY),
                 receiptFloorAt = InstantValue(preSyncStatus.observedAt.toEpochMilli()),
             )
-            if (!replacePendingHealthSyncFailureOrReconnect(provisionalFailure)) return false
             lastStartedHealthSyncSequence += 1
             val syncSequence = lastStartedHealthSyncSequence
             var syncSucceeded = false
+            var provisionalPersistenceFailed = false
+            val launchRejected = AtomicBoolean(false)
             try {
-                when (
-                    val result = runForegroundHealthSync(
-                        foregroundClaim = foregroundClaim,
-                        memberKey = syncMemberKey,
-                    ) ?: return false
-                ) {
+                val result = runForegroundHealthSync(
+                    foregroundClaim = foregroundClaim,
+                    memberKey = syncMemberKey,
+                    beforeSyncEnqueue = {
+                        if (!ownsForegroundRefresh(foregroundClaim)) {
+                            false
+                        } else {
+                            localState.replacePendingHealthSyncFailure(provisionalFailure)
+                                .also { persisted ->
+                                    provisionalPersistenceFailed = !persisted
+                            }
+                        }
+                    },
+                    onSyncLaunchRejected = { launchRejected.set(true) },
+                )
+                if (provisionalPersistenceFailed) {
+                    requireHealthReconnectAfterUnclassifiedSyncFailure()
+                    return false
+                }
+                if (launchRejected.get()) throw HealthSyncForegroundLaunchRejectedException()
+                val completedResult = result ?: return false
+                when (completedResult) {
                     HealthSyncAttemptResult.Complete -> {
                         if (
                             !replacePendingHealthSyncFailureOrReconnect(
@@ -3702,7 +3720,7 @@ class AppSession(
                     }
                     is HealthSyncAttemptResult.PartialFailure -> {
                         val exactFailure = PendingHealthSyncFailure(
-                            resourceKeys = result.resourceKeys,
+                            resourceKeys = completedResult.resourceKeys,
                             receiptFloorAt =
                                 InstantValue(preSyncStatus.observedAt.toEpochMilli()),
                         )
@@ -3766,9 +3784,15 @@ class AppSession(
     private suspend fun runForegroundHealthSync(
         foregroundClaim: ForegroundRefreshClaim,
         memberKey: String,
+        beforeSyncEnqueue: () -> Boolean,
+        onSyncLaunchRejected: () -> Unit,
     ): HealthSyncAttemptResult? = coroutineScope {
         val sync = async(start = CoroutineStart.LAZY) {
-            health.syncAllGrantedResources(memberKey)
+            health.syncAllGrantedResources(
+                memberKey,
+                beforeSyncEnqueue,
+                onSyncLaunchRejected,
+            )
         }
         val operation = claimForegroundHealthOperation(foregroundClaim, sync)
         if (operation == null) {

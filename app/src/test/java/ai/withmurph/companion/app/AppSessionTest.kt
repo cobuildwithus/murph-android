@@ -4902,31 +4902,74 @@ class AppSessionTest {
     }
 
     @Test
-    fun backgroundDuringWorkerPromotionRequiresReconnectBeforeRetry() = runTest {
+    fun backgroundBeforeWorkerPromotionRestoresPriorOwnerAndRetries() = runTest {
+        val observation = Instant.parse("2026-07-25T18:00:00Z")
         val fixture = completedHealthFixture()
+        val priorFailure = PendingHealthSyncFailure(
+            resourceKeys = setOf("sleep"),
+            receiptFloorAt = InstantValue(observation.minusSeconds(60).toEpochMilli()),
+        )
+        assertTrue(fixture.localState.recordPendingHealthSyncFailure(priorFailure))
+        fixture.api.status = CompanionSyncStatus(null, observation, emptyMap())
         fixture.health.syncResourceCount = 2
         fixture.health.syncResourceStarts = 0
-        fixture.health.syncGate = CompletableDeferred()
-        fixture.health.syncEntered = CompletableDeferred()
+        fixture.health.syncEnqueueGate = CompletableDeferred()
+        fixture.health.syncEnqueueEntered = CompletableDeferred()
         fixture.health.rejectSyncLaunchOnBackground = true
 
         val sync = async { fixture.session.syncNow() }
-        fixture.health.syncEntered.await()
+        fixture.health.syncEnqueueEntered.await()
         fixture.session.didEnterBackground()
         sync.await()
 
         assertEquals(1, fixture.health.revokeUnpromotedSyncLaunchCalls)
-        assertEquals(1, fixture.health.syncResourceStarts)
-        assertNull(fixture.session.state.value.healthMessage)
+        assertEquals(0, fixture.health.syncResourceStarts)
+        assertEquals(priorFailure, fixture.localState.pendingHealthSyncFailure)
+        assertFalse(fixture.localState.healthReconnectRequired)
 
         val syncCallsAfterRejection = fixture.health.syncCalls
         fixture.health.rejectSyncLaunchOnBackground = false
         fixture.health.syncError = null
+        fixture.health.syncEnqueueGate = null
         fixture.session.didBecomeActive()
 
         assertEquals(syncCallsAfterRejection, fixture.health.syncCalls)
-        assertTrue(fixture.localState.healthReconnectRequired)
-        assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
+        fixture.session.syncNow()
+
+        assertEquals(syncCallsAfterRejection + 1, fixture.health.syncCalls)
+        assertFalse(fixture.localState.healthReconnectRequired)
+        assertEquals(priorFailure, fixture.localState.pendingHealthSyncFailure)
+    }
+
+    @Test
+    fun backgroundDuringPreEnqueuePreparationKeepsPriorOwnerAndRetries() = runTest {
+        val observation = Instant.parse("2026-07-25T18:00:00Z")
+        val fixture = completedHealthFixture()
+        val priorFailure = PendingHealthSyncFailure(
+            resourceKeys = setOf("sleep"),
+            receiptFloorAt = InstantValue(observation.minusSeconds(60).toEpochMilli()),
+        )
+        assertTrue(fixture.localState.recordPendingHealthSyncFailure(priorFailure))
+        fixture.api.status = CompanionSyncStatus(null, observation, emptyMap())
+        fixture.health.syncResourceStarts = 0
+        fixture.health.syncPreparationGate = CompletableDeferred()
+        fixture.health.syncPreparationEntered = CompletableDeferred()
+
+        val sync = async { fixture.session.syncNow() }
+        fixture.health.syncPreparationEntered.await()
+        fixture.session.didEnterBackground()
+        sync.await()
+
+        assertEquals(priorFailure, fixture.localState.pendingHealthSyncFailure)
+        assertFalse(fixture.localState.healthReconnectRequired)
+        assertEquals(0, fixture.health.syncResourceStarts)
+
+        val syncCalls = fixture.health.syncCalls
+        fixture.health.syncPreparationGate = null
+        fixture.session.didBecomeActive()
+
+        assertEquals(syncCalls + 1, fixture.health.syncCalls)
+        assertFalse(fixture.localState.healthReconnectRequired)
     }
 
     @Test
@@ -8213,7 +8256,8 @@ class AppSessionTest {
 
         fixture.session.start()
 
-        assertEquals(0, fixture.health.syncCalls)
+        assertEquals(1, fixture.health.syncCalls)
+        assertEquals(0, fixture.health.syncResourceStarts)
         assertTrue(fixture.localState.healthReconnectRequired)
         assertNull(fixture.localState.healthAccessRequestedAt)
         assertEquals(HealthSyncState.NotConnected, fixture.session.state.value.healthSync)
@@ -9302,6 +9346,10 @@ class AppSessionTest {
         val connectEntered = CompletableDeferred<Unit>()
         var syncGate: CompletableDeferred<Unit>? = null
         var syncEntered = CompletableDeferred<Unit>()
+        var syncPreparationGate: CompletableDeferred<Unit>? = null
+        var syncPreparationEntered = CompletableDeferred<Unit>()
+        var syncEnqueueGate: CompletableDeferred<Unit>? = null
+        var syncEnqueueEntered = CompletableDeferred<Unit>()
         var revokeActiveSyncGate: CompletableDeferred<Unit>? = null
         var revokeActiveSyncEntered = CompletableDeferred<Unit>()
         var refreshGate: CompletableDeferred<Unit>? = null
@@ -9314,6 +9362,8 @@ class AppSessionTest {
         private var configuredInCurrentProcess = false
         private var automaticSyncPaused = false
         private var activeSyncAuthorized = false
+        private var activeSyncPromoted = false
+        private var activeSyncLaunchRejected: (() -> Unit)? = null
         private var identifiedMemberKey: String? = null
 
         override fun availability(): HealthConnectAvailability {
@@ -9358,9 +9408,15 @@ class AppSessionTest {
 
         override fun revokeUnpromotedSyncLaunch() {
             revokeUnpromotedSyncLaunchCalls += 1
-            if (rejectSyncLaunchOnBackground && activeSyncAuthorized) {
+            if (
+                rejectSyncLaunchOnBackground &&
+                activeSyncAuthorized &&
+                !activeSyncPromoted
+            ) {
                 activeSyncAuthorized = false
+                activeSyncLaunchRejected?.invoke()
                 syncError = HealthSyncForegroundLaunchRejectedException()
+                syncEnqueueGate?.complete(Unit)
                 syncGate?.complete(Unit)
             }
         }
@@ -9418,6 +9474,8 @@ class AppSessionTest {
 
         override suspend fun syncAllGrantedResources(
             expectedMemberKey: String,
+            beforeSyncEnqueue: () -> Boolean,
+            onSyncLaunchRejected: () -> Unit,
         ): HealthSyncAttemptResult {
             syncMemberKeys += expectedMemberKey
             if (requireCurrentProcessSetupBeforeSync) {
@@ -9433,8 +9491,15 @@ class AppSessionTest {
             }
             syncCalls += 1
             events += "sync"
+            syncPreparationEntered.complete(Unit)
+            syncPreparationGate?.await()
+            if (!beforeSyncEnqueue()) return HealthSyncAttemptResult.NotStarted
             activeSyncAuthorized = true
+            activeSyncLaunchRejected = onSyncLaunchRejected
             try {
+                syncEnqueueEntered.complete(Unit)
+                syncEnqueueGate?.await()
+                activeSyncPromoted = true
                 for (resourceIndex in 0 until syncResourceCount) {
                     if (!signedIn || !activeSyncAuthorized) break
                     syncResourceStarts += 1
@@ -9445,6 +9510,8 @@ class AppSessionTest {
                 }
             } finally {
                 activeSyncAuthorized = false
+                activeSyncPromoted = false
+                activeSyncLaunchRejected = null
             }
             syncError?.takeIf {
                 syncErrorOnCall == null || syncErrorOnCall == syncCalls

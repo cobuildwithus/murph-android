@@ -103,6 +103,12 @@ internal object VitalHealthWorkerLease {
         }
     }
 
+    fun closePreservingLaunchRejection() = synchronized(lock) {
+        if (lease?.stage != Stage.LaunchRejected) {
+            lease = null
+        }
+    }
+
     fun close() = synchronized(lock) {
         lease = null
     }

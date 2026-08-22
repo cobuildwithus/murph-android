@@ -228,7 +228,9 @@ class JunctionHealthSyncService(
     }
 
     override fun cancelActiveSync() {
-        VitalHealthWorkerLease.close()
+        // A background boundary rejects an authorized-but-unpromoted launch first.
+        // Preserve that proof until the owning attempt can restore its prior state.
+        VitalHealthWorkerLease.closePreservingLaunchRejection()
         manager.pauseSynchronization = true
         val workManager = WorkManager.getInstance(appContext)
         workManager.cancelUniqueWork(vitalResourceSyncStarter)
@@ -274,6 +276,8 @@ class JunctionHealthSyncService(
 
     override suspend fun syncAllGrantedResources(
         expectedMemberKey: String,
+        beforeSyncEnqueue: () -> Boolean,
+        onSyncLaunchRejected: () -> Unit,
     ): HealthSyncAttemptResult {
         // An upgrade can inherit durable all-granted work enqueued by Vital's public
         // unpause setter. Retire every pinned chain before evaluating the exact set,
@@ -319,7 +323,7 @@ class JunctionHealthSyncService(
                 outcome = HealthSyncAttemptResult.NotStarted
             }
 
-            if (manualGateOpened) {
+            if (manualGateOpened && beforeSyncEnqueue()) {
                 // Only enter the SDK after the manual gate is durably open.
                 syncInvocationBegan = true
                 outcome = try {
@@ -340,7 +344,8 @@ class JunctionHealthSyncService(
                 }
             }
         } catch (error: CancellationException) {
-            throw error
+            launchRejected = VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+            if (!launchRejected) throw error
         } finally {
             withContext(NonCancellable) {
                 try {
@@ -360,7 +365,10 @@ class JunctionHealthSyncService(
                 HealthSyncAttemptResult.NotStarted
             }
         }
-        if (launchRejected) throw HealthSyncForegroundLaunchRejectedException()
+        if (launchRejected) {
+            onSyncLaunchRejected()
+            throw HealthSyncForegroundLaunchRejectedException()
+        }
         return outcome
     }
 
