@@ -206,6 +206,14 @@ internal enum class NativeHostedE2EFailureCode(
         "health_connect_permission_app_return_missing",
         NativeHostedE2EStage.HealthConnectPermissionState,
     ),
+    HealthConnectPermissionSystemGrantMissing(
+        "health_connect_permission_system_grant_missing",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionSystemGrantCheckFailed(
+        "health_connect_permission_system_grant_check_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
     HealthConnectPermissionGrantClassificationFailed(
         "health_connect_permission_grant_classification_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
@@ -255,6 +263,7 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     didActivateAllowAll: Boolean,
     authorizationSelected: Boolean,
     returnedToApp: Boolean = true,
+    healthReadGrantConfirmed: Boolean? = true,
     hasVisibleText: (String) -> Boolean = { false },
     appReady: Boolean = true,
     appIsConnecting: Boolean = false,
@@ -288,6 +297,10 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
         hasVisibleText(it) || hasAppStateText(it)
     } ->
         NativeHostedE2EFailureCode.HealthConnectPostPermissionSetupSaveFailed
+    healthReadGrantConfirmed == false ->
+        NativeHostedE2EFailureCode.HealthConnectPermissionSystemGrantMissing
+    healthReadGrantConfirmed == null ->
+        NativeHostedE2EFailureCode.HealthConnectPermissionSystemGrantCheckFailed
     !appReady -> NativeHostedE2EFailureCode.HealthConnectPermissionAppStateFailed
     appIsConnecting -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionPending
     appSetupAdvanced || appHealthConnected ->

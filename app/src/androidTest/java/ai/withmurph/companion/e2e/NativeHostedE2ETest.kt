@@ -6,6 +6,7 @@ import ai.withmurph.companion.MurphApplication
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.health.probeGrantedHealthConnectReadPermission
 import android.content.Context
 import android.os.Bundle
 import androidx.compose.ui.test.SemanticsMatcher
@@ -502,6 +503,9 @@ class NativeHostedE2ETest {
                 didActivateAllowAll = didActivateAllowAll,
                 authorizationSelected = authorizationSelected,
                 returnedToApp = returnedToApp,
+                healthReadGrantConfirmed = probeGrantedHealthConnectReadPermission(
+                    targetContext,
+                ),
                 hasVisibleText = ::hasAppOwnedText,
                 appReady = appState.phase == AppPhase.Ready,
                 appIsConnecting = appState.isConnectingHealth,

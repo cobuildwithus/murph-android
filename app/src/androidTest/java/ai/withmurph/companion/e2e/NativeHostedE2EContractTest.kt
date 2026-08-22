@@ -217,6 +217,26 @@ class NativeHostedE2EContractTest {
                 returnedToApp = false,
             ),
         )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionSystemGrantMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                returnedToApp = true,
+                healthReadGrantConfirmed = false,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionSystemGrantCheckFailed,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                returnedToApp = true,
+                healthReadGrantConfirmed = null,
+            ),
+        )
 
         val expectedByMarker = mapOf(
             "Choose at least one Health Connect category to connect Murph." to

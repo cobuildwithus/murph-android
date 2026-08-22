@@ -175,6 +175,8 @@ test("a failed journey contains only the passed prefix and one allowlisted termi
     "health_connect_permission_ui_projection_failed",
     "health_connect_permission_app_state_failed",
     "health_connect_permission_app_return_missing",
+    "health_connect_permission_system_grant_missing",
+    "health_connect_permission_system_grant_check_failed",
     "health_connect_permission_grant_classification_failed",
     "health_connect_permission_verification_failed",
     "health_connect_post_permission_reset_failed",
