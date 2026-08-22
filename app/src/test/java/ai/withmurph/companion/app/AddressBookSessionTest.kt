@@ -31,8 +31,9 @@ import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentScopeStatus
 import ai.withmurph.companion.core.LaunchConsentStatus
 import ai.withmurph.companion.core.LocalState
-import ai.withmurph.companion.core.PendingExternalHandoff
 import ai.withmurph.companion.core.LoginMethod
+import ai.withmurph.companion.core.PendingExternalHandoff
+import ai.withmurph.companion.core.PendingHealthSyncFailure
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.SignInTokenResponse
 import kotlinx.coroutines.CancellationException
@@ -2306,6 +2307,8 @@ class AddressBookSessionTest {
         override var lastKnownDataReceivedAt: InstantValue? = null
         override var lastKnownStatusObservedAt: InstantValue? = null
         override var healthReconnectRequired = false
+        override var pendingHealthSyncFailure: PendingHealthSyncFailure? = null
+            private set
         override var signOutPending = false
             private set
         override var pendingPrivySignOutMemberKey: String? = null
@@ -2326,6 +2329,7 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = statusObservedAt
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             if (completesInitialSetup) {
                 initialSetupStep = InitialSetupStep.FriendlyNames
             }
@@ -2338,6 +2342,28 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = true
+            pendingHealthSyncFailure = null
+            return true
+        }
+
+        override fun recordPendingHealthSyncFailure(
+            failure: PendingHealthSyncFailure,
+        ): Boolean {
+            if (healthAccessRequestedAt == null || signOutPending) return false
+            pendingHealthSyncFailure =
+                pendingHealthSyncFailure?.mergedWith(failure) ?: failure
+            return true
+        }
+
+        override fun replacePendingHealthSyncFailure(
+            failure: PendingHealthSyncFailure?,
+        ): Boolean {
+            pendingHealthSyncFailure = failure
+            return true
+        }
+
+        override fun clearPendingHealthSyncFailure(): Boolean {
+            pendingHealthSyncFailure = null
             return true
         }
         var revision: Int? = null
@@ -2452,6 +2478,7 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             return true
         }
 
@@ -2469,6 +2496,7 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             if (!preserveMemberState) {
                 initialSetupStep = null
                 clearAddressBookMetadata()
@@ -2491,6 +2519,7 @@ class AddressBookSessionTest {
             lastKnownDataReceivedAt = null
             lastKnownStatusObservedAt = null
             healthReconnectRequired = false
+            pendingHealthSyncFailure = null
             initialSetupStep = null
             clearAddressBookMetadata()
         }
