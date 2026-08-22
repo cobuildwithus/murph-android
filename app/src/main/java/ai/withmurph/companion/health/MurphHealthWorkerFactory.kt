@@ -35,6 +35,7 @@ internal object VitalHealthWorkerLease {
     private data class Lease(
         val memberKey: String,
         val stage: Stage,
+        val beforePromotion: (() -> Boolean)?,
     )
 
     private val lock = Any()
@@ -42,14 +43,17 @@ internal object VitalHealthWorkerLease {
     private var activeExecutionMemberKey: String? = null
     private val activeExecutionCount = MutableStateFlow(0)
 
-    fun openFor(expectedMemberKey: String) {
+    fun openFor(
+        expectedMemberKey: String,
+        beforePromotion: () -> Boolean,
+    ) {
         require(expectedMemberKey.isNotBlank())
         synchronized(lock) {
             check(lease == null) { "A Vital health worker lease is already open" }
             check(activeExecutionCount.value == 0) {
                 "A Vital health worker execution is still active"
             }
-            lease = Lease(expectedMemberKey, Stage.LaunchAuthorized)
+            lease = Lease(expectedMemberKey, Stage.LaunchAuthorized, beforePromotion)
         }
     }
 
@@ -60,9 +64,16 @@ internal object VitalHealthWorkerLease {
     }
 
     fun isLaunchAuthorizedFor(expectedMemberKey: String): Boolean = synchronized(lock) {
-        lease == Lease(expectedMemberKey, Stage.LaunchAuthorized)
+        lease?.let { current ->
+            current.memberKey == expectedMemberKey &&
+                current.stage == Stage.LaunchAuthorized
+        } == true
     }
 
+    /**
+     * Commits the durable attempt owner and promotion as one decision relative
+     * to background rejection. Child readers remain closed until this succeeds.
+     */
     fun markPromotedFor(expectedMemberKey: String): Boolean = synchronized(lock) {
         val current = lease
         if (
@@ -70,8 +81,13 @@ internal object VitalHealthWorkerLease {
             current.stage != Stage.LaunchAuthorized
         ) {
             false
+        } else if (current.beforePromotion?.invoke() != true) {
+            false
         } else {
-            lease = current.copy(stage = Stage.Promoted)
+            lease = current.copy(
+                stage = Stage.Promoted,
+                beforePromotion = null,
+            )
             true
         }
     }
@@ -82,19 +98,28 @@ internal object VitalHealthWorkerLease {
             current?.memberKey == expectedMemberKey &&
             current.stage == Stage.LaunchAuthorized
         ) {
-            lease = current.copy(stage = Stage.LaunchRejected)
+            lease = current.copy(
+                stage = Stage.LaunchRejected,
+                beforePromotion = null,
+            )
         }
     }
 
     fun rejectUnpromoted() = synchronized(lock) {
         val current = lease
         if (current?.stage == Stage.LaunchAuthorized) {
-            lease = current.copy(stage = Stage.LaunchRejected)
+            lease = current.copy(
+                stage = Stage.LaunchRejected,
+                beforePromotion = null,
+            )
         }
     }
 
     fun wasLaunchRejectedFor(expectedMemberKey: String): Boolean = synchronized(lock) {
-        lease == Lease(expectedMemberKey, Stage.LaunchRejected)
+        lease?.let { current ->
+            current.memberKey == expectedMemberKey &&
+                current.stage == Stage.LaunchRejected
+        } == true
     }
 
     fun closeFor(expectedMemberKey: String) = synchronized(lock) {
@@ -116,7 +141,7 @@ internal object VitalHealthWorkerLease {
         val current = lease
         if (
             current?.memberKey != expectedMemberKey ||
-            current.stage == Stage.LaunchRejected
+            current.stage != Stage.Promoted
         ) {
             false
         } else {
