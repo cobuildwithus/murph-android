@@ -260,14 +260,21 @@ class NativeHostedE2EContractTest {
         assertEquals(
             networkFailure,
             nativeHostedE2EHealthPermissionRetryFailure(
-                systemSurfaceOpened = false,
+                result = NativeHostedE2EHealthPermissionHandoffResult.TimedOut,
                 failureBeforeRetry = networkFailure,
             ),
         )
         assertEquals(
             null,
             nativeHostedE2EHealthPermissionRetryFailure(
-                systemSurfaceOpened = true,
+                result = NativeHostedE2EHealthPermissionHandoffResult.ConnectedWithoutPrompt,
+                failureBeforeRetry = networkFailure,
+            ),
+        )
+        assertEquals(
+            null,
+            nativeHostedE2EHealthPermissionRetryFailure(
+                result = NativeHostedE2EHealthPermissionHandoffResult.SystemSurfaceOpened,
                 failureBeforeRetry = networkFailure,
             ),
         )

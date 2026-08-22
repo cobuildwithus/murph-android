@@ -264,10 +264,18 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
 
+internal enum class NativeHostedE2EHealthPermissionHandoffResult {
+    SystemSurfaceOpened,
+    ConnectedWithoutPrompt,
+    TimedOut,
+}
+
 internal fun nativeHostedE2EHealthPermissionRetryFailure(
-    systemSurfaceOpened: Boolean,
+    result: NativeHostedE2EHealthPermissionHandoffResult,
     failureBeforeRetry: NativeHostedE2EFailureCode,
-): NativeHostedE2EFailureCode? = failureBeforeRetry.takeUnless { systemSurfaceOpened }
+): NativeHostedE2EFailureCode? = failureBeforeRetry.takeIf {
+    result == NativeHostedE2EHealthPermissionHandoffResult.TimedOut
+}
 
 private val HealthPermissionGrantFailureMarkers = listOf(
     "Choose at least one Health Connect category to connect Murph.",

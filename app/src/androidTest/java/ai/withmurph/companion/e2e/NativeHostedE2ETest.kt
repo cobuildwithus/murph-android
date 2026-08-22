@@ -438,16 +438,20 @@ class NativeHostedE2ETest {
     }
 
     private fun beginHealthConnectHandoff() {
-        if (!tryBeginHealthConnectHandoff()) {
+        if (
+            tryBeginHealthConnectHandoff() !=
+            NativeHostedE2EHealthPermissionHandoffResult.SystemSurfaceOpened
+        ) {
             throw JourneyFailure(NativeHostedE2EFailureCode.HealthConnectSurfaceMissing)
         }
     }
 
-    private fun tryBeginHealthConnectHandoff(): Boolean {
+    private fun tryBeginHealthConnectHandoff(): NativeHostedE2EHealthPermissionHandoffResult {
         val deadline = System.currentTimeMillis() + 180_000
         while (System.currentTimeMillis() < deadline) {
             when {
-                waitForExternalHealthSurface(1_000) -> return true
+                waitForExternalHealthSurface(1_000) ->
+                    return NativeHostedE2EHealthPermissionHandoffResult.SystemSurfaceOpened
                 hasClickableText("Reconnect Health Connect") -> {
                     clickText("Reconnect Health Connect", 20_000)
                     acceptHealthDetailsIfPresented()
@@ -459,11 +463,12 @@ class NativeHostedE2ETest {
                 hasClickableText("Finish setting up Health Connect") -> {
                     clickText("Finish setting up Health Connect", 20_000)
                 }
-                isConnectedHealthState() -> return false
+                isConnectedHealthState() ->
+                    return NativeHostedE2EHealthPermissionHandoffResult.ConnectedWithoutPrompt
                 else -> sleepBriefly()
             }
         }
-        return false
+        return NativeHostedE2EHealthPermissionHandoffResult.TimedOut
     }
 
     private fun acceptHealthDetails() {
@@ -572,11 +577,17 @@ class NativeHostedE2ETest {
             ) {
                 val failureBeforeRetry = currentFailure()
                 handoffAttempts += 1
-                val systemSurfaceOpened = tryBeginHealthConnectHandoff()
+                val handoffResult = tryBeginHealthConnectHandoff()
                 nativeHostedE2EHealthPermissionRetryFailure(
-                    systemSurfaceOpened = systemSurfaceOpened,
+                    result = handoffResult,
                     failureBeforeRetry = failureBeforeRetry,
                 )?.let { throw JourneyFailure(it) }
+                if (
+                    handoffResult ==
+                    NativeHostedE2EHealthPermissionHandoffResult.ConnectedWithoutPrompt
+                ) {
+                    return
+                }
                 returnedToApp = false
                 continue
             }
