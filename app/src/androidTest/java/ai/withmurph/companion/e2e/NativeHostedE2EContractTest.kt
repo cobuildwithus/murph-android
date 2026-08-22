@@ -244,6 +244,55 @@ class NativeHostedE2EContractTest {
                 ),
             )
         }
+
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                hasAppStateText = {
+                    it == "Murph couldn't reach the network. Check your connection and try again."
+                },
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionAppStateFailed,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                appReady = false,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionCompletionPending,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                appIsConnecting = true,
+            ),
+        )
+        listOf(
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                appSetupAdvanced = true,
+            ),
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                appHealthConnected = true,
+            ),
+        ).forEach { failure ->
+            assertEquals(
+                NativeHostedE2EFailureCode.HealthConnectPermissionUiProjectionFailed,
+                failure,
+            )
+        }
     }
 
     @Test

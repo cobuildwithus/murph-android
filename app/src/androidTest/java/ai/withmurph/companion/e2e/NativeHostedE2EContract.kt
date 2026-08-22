@@ -190,6 +190,18 @@ internal enum class NativeHostedE2EFailureCode(
         "health_connect_permission_completion_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
     ),
+    HealthConnectPermissionCompletionPending(
+        "health_connect_permission_completion_pending",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionUiProjectionFailed(
+        "health_connect_permission_ui_projection_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionAppStateFailed(
+        "health_connect_permission_app_state_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
     HealthConnectPermissionAppReturnMissing(
         "health_connect_permission_app_return_missing",
         NativeHostedE2EStage.HealthConnectPermissionState,
@@ -244,23 +256,42 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     authorizationSelected: Boolean,
     returnedToApp: Boolean = true,
     hasVisibleText: (String) -> Boolean = { false },
+    appReady: Boolean = true,
+    appIsConnecting: Boolean = false,
+    appSetupAdvanced: Boolean = false,
+    appHealthConnected: Boolean = false,
+    hasAppStateText: (String) -> Boolean = { false },
 ): NativeHostedE2EFailureCode = when {
     !sawPermissionSurface -> NativeHostedE2EFailureCode.HealthConnectPermissionSurfaceMissing
     !didActivateAllowAll -> NativeHostedE2EFailureCode.HealthConnectPermissionSelectionMissing
     !authorizationSelected -> NativeHostedE2EFailureCode.HealthConnectPermissionApprovalMissing
     !returnedToApp -> NativeHostedE2EFailureCode.HealthConnectPermissionAppReturnMissing
-    HealthPermissionGrantFailureMarkers.any(hasVisibleText) ->
+    HealthPermissionGrantFailureMarkers.any { hasVisibleText(it) || hasAppStateText(it) } ->
         NativeHostedE2EFailureCode.HealthConnectPermissionGrantClassificationFailed
-    HealthPermissionVerificationFailureMarkers.any(hasVisibleText) ->
+    HealthPermissionVerificationFailureMarkers.any {
+        hasVisibleText(it) || hasAppStateText(it)
+    } ->
         NativeHostedE2EFailureCode.HealthConnectPermissionVerificationFailed
-    HealthPostPermissionResetFailureMarkers.any(hasVisibleText) ->
+    HealthPostPermissionResetFailureMarkers.any {
+        hasVisibleText(it) || hasAppStateText(it)
+    } ->
         NativeHostedE2EFailureCode.HealthConnectPostPermissionResetFailed
-    HealthPostPermissionNetworkFailureMarkers.any(hasVisibleText) ->
+    HealthPostPermissionNetworkFailureMarkers.any {
+        hasVisibleText(it) || hasAppStateText(it)
+    } ->
         NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed
-    HealthPostPermissionConnectionFailureMarkers.any(hasVisibleText) ->
+    HealthPostPermissionConnectionFailureMarkers.any {
+        hasVisibleText(it) || hasAppStateText(it)
+    } ->
         NativeHostedE2EFailureCode.HealthConnectPostPermissionConnectionFailed
-    HealthPostPermissionSetupSaveFailureMarkers.any(hasVisibleText) ->
+    HealthPostPermissionSetupSaveFailureMarkers.any {
+        hasVisibleText(it) || hasAppStateText(it)
+    } ->
         NativeHostedE2EFailureCode.HealthConnectPostPermissionSetupSaveFailed
+    !appReady -> NativeHostedE2EFailureCode.HealthConnectPermissionAppStateFailed
+    appIsConnecting -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionPending
+    appSetupAdvanced || appHealthConnected ->
+        NativeHostedE2EFailureCode.HealthConnectPermissionUiProjectionFailed
     else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
 

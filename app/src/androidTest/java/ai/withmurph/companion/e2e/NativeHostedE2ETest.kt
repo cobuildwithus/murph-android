@@ -2,6 +2,10 @@ package ai.withmurph.companion.e2e
 
 import ai.withmurph.companion.BuildConfig
 import ai.withmurph.companion.MainActivity
+import ai.withmurph.companion.MurphApplication
+import ai.withmurph.companion.app.AppPhase
+import ai.withmurph.companion.core.HealthSyncState
+import ai.withmurph.companion.core.InitialSetupStep
 import android.content.Context
 import android.os.Bundle
 import androidx.compose.ui.test.SemanticsMatcher
@@ -490,15 +494,23 @@ class NativeHostedE2ETest {
         var returnedToApp = false
         var handoffAttempts = 1
         var systemIdleIterations = 0
-        fun currentFailure() = nativeHostedE2EHealthPermissionTimeoutFailure(
-            sawPermissionSurface = sawPermissionSurface,
-            didActivateAllowAll = didActivateAllowAll,
-            authorizationSelected = authorizationSelected,
-            returnedToApp = returnedToApp,
-            hasVisibleText = { marker ->
-                hasAppOwnedText(marker)
-            },
-        )
+        fun currentFailure(): NativeHostedE2EFailureCode {
+            val appState = (targetContext.applicationContext as MurphApplication)
+                .graph.session.state.value
+            return nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = sawPermissionSurface,
+                didActivateAllowAll = didActivateAllowAll,
+                authorizationSelected = authorizationSelected,
+                returnedToApp = returnedToApp,
+                hasVisibleText = ::hasAppOwnedText,
+                appReady = appState.phase == AppPhase.Ready,
+                appIsConnecting = appState.isConnectingHealth,
+                appSetupAdvanced =
+                    appState.initialSetupStep != InitialSetupStep.HealthConnect,
+                appHealthConnected = appState.healthSync != HealthSyncState.NotConnected,
+                hasAppStateText = { marker -> appState.healthMessage == marker },
+            )
+        }
 
         while (System.currentTimeMillis() < deadline) {
             val currentPackage = device.currentPackageName
