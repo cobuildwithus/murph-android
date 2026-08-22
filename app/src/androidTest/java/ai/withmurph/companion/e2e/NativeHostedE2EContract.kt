@@ -308,6 +308,11 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
 
+internal fun nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+    completionObserved: Boolean,
+    healthReadGrantConfirmed: Boolean?,
+): Boolean = completionObserved && healthReadGrantConfirmed == true
+
 internal enum class NativeHostedE2EHealthPermissionHandoffResult {
     SystemSurfaceOpened,
     ConnectedWithoutPrompt,

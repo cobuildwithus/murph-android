@@ -575,14 +575,26 @@ class NativeHostedE2ETest {
                 }
             }
 
-            if (sawPermissionSurface && authorizationSelected && (
-                    isConnectedHealthState() ||
-                        hasAnyAppOwnedText(
-                            "Connecting…",
-                            "Sync is on its way",
-                            "Check for new data",
-                        )
+            val appCompletionObserved =
+                sawPermissionSurface &&
+                    authorizationSelected &&
+                    (
+                        isConnectedHealthState() ||
+                            hasAnyAppOwnedText(
+                                "Connecting…",
+                                "Sync is on its way",
+                                "Check for new data",
+                            )
                     )
+            if (
+                nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                    completionObserved = appCompletionObserved,
+                    healthReadGrantConfirmed = if (appCompletionObserved) {
+                        probeGrantedHealthConnectReadPermission(targetContext)
+                    } else {
+                        null
+                    },
+                )
             ) {
                 return
             }
@@ -606,7 +618,16 @@ class NativeHostedE2ETest {
                     handoffResult ==
                     NativeHostedE2EHealthPermissionHandoffResult.ConnectedWithoutPrompt
                 ) {
-                    return
+                    if (
+                        nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                            completionObserved = true,
+                            healthReadGrantConfirmed =
+                                probeGrantedHealthConnectReadPermission(targetContext),
+                        )
+                    ) {
+                        return
+                    }
+                    continue
                 }
                 returnedToApp = false
                 continue

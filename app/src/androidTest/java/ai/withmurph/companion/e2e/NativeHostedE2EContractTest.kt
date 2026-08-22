@@ -260,6 +260,7 @@ class NativeHostedE2EContractTest {
                     didActivateAllowAll = true,
                     authorizationSelected = true,
                     returnedToApp = true,
+                    healthReadGrantConfirmed = false,
                     hasVisibleText = { it == visibleMarker },
                 ),
             )
@@ -313,6 +314,30 @@ class NativeHostedE2EContractTest {
                 failure,
             )
         }
+    }
+
+    @Test
+    fun healthPermissionCompletionRequiresPositiveSystemGrantEvidence() {
+        listOf(false, null).forEach { healthReadGrantConfirmed ->
+            assertFalse(
+                nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                    completionObserved = true,
+                    healthReadGrantConfirmed = healthReadGrantConfirmed,
+                ),
+            )
+        }
+        assertFalse(
+            nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                completionObserved = false,
+                healthReadGrantConfirmed = true,
+            ),
+        )
+        assertTrue(
+            nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                completionObserved = true,
+                healthReadGrantConfirmed = true,
+            ),
+        )
     }
 
     @Test
