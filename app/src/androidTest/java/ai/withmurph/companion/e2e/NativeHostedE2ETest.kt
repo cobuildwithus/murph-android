@@ -438,10 +438,16 @@ class NativeHostedE2ETest {
     }
 
     private fun beginHealthConnectHandoff() {
+        if (!tryBeginHealthConnectHandoff()) {
+            throw JourneyFailure(NativeHostedE2EFailureCode.HealthConnectSurfaceMissing)
+        }
+    }
+
+    private fun tryBeginHealthConnectHandoff(): Boolean {
         val deadline = System.currentTimeMillis() + 180_000
         while (System.currentTimeMillis() < deadline) {
             when {
-                waitForExternalHealthSurface(1_000) -> return
+                waitForExternalHealthSurface(1_000) -> return true
                 hasClickableText("Reconnect Health Connect") -> {
                     clickText("Reconnect Health Connect", 20_000)
                     acceptHealthDetailsIfPresented()
@@ -453,15 +459,11 @@ class NativeHostedE2ETest {
                 hasClickableText("Finish setting up Health Connect") -> {
                     clickText("Finish setting up Health Connect", 20_000)
                 }
-                isConnectedHealthState() -> {
-                    throw JourneyFailure(
-                        NativeHostedE2EFailureCode.HealthConnectSurfaceMissing,
-                    )
-                }
+                isConnectedHealthState() -> return false
                 else -> sleepBriefly()
             }
         }
-        throw JourneyFailure(NativeHostedE2EFailureCode.HealthConnectSurfaceMissing)
+        return false
     }
 
     private fun acceptHealthDetails() {
@@ -483,6 +485,15 @@ class NativeHostedE2ETest {
         var returnedToApp = false
         var handoffAttempts = 1
         var systemIdleIterations = 0
+        fun currentFailure() = nativeHostedE2EHealthPermissionTimeoutFailure(
+            sawPermissionSurface = sawPermissionSurface,
+            didActivateAllowAll = didActivateAllowAll,
+            authorizationSelected = authorizationSelected,
+            returnedToApp = returnedToApp,
+            hasVisibleText = { marker ->
+                runCatching { hasVisibleText(marker) }.getOrDefault(false)
+            },
+        )
 
         while (System.currentTimeMillis() < deadline) {
             val currentPackage = device.currentPackageName
@@ -538,8 +549,9 @@ class NativeHostedE2ETest {
                 // Some Health Connect builds use Allow all as the terminal
                 // action; others expose a separate final Allow button.
                 authorizationSelected = true
-                returnedToApp = returnedToApp ||
-                    currentPackage == targetContext.packageName
+                if (currentPackage == targetContext.packageName) {
+                    returnedToApp = true
+                }
             }
 
             if (sawPermissionSurface && authorizationSelected && (
@@ -558,23 +570,19 @@ class NativeHostedE2ETest {
                     "Finish setting up Health Connect",
                 )
             ) {
+                val failureBeforeRetry = currentFailure()
                 handoffAttempts += 1
-                beginHealthConnectHandoff()
+                val systemSurfaceOpened = tryBeginHealthConnectHandoff()
+                nativeHostedE2EHealthPermissionRetryFailure(
+                    systemSurfaceOpened = systemSurfaceOpened,
+                    failureBeforeRetry = failureBeforeRetry,
+                )?.let { throw JourneyFailure(it) }
+                returnedToApp = false
                 continue
             }
             sleepBriefly()
         }
-        throw JourneyFailure(
-            nativeHostedE2EHealthPermissionTimeoutFailure(
-                sawPermissionSurface = sawPermissionSurface,
-                didActivateAllowAll = didActivateAllowAll,
-                authorizationSelected = authorizationSelected,
-                returnedToApp = returnedToApp,
-                hasVisibleText = { marker ->
-                    runCatching { hasVisibleText(marker) }.getOrDefault(false)
-                },
-            ),
-        )
+        throw JourneyFailure(currentFailure())
     }
 
     private fun finishOptionalSetupAndRequireConnectedState() {

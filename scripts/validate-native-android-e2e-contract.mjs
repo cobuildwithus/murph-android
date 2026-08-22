@@ -99,6 +99,7 @@ const FAILURE_CODES_BY_STAGE = new Map([
       "health_connect_permission_app_return_missing",
       "health_connect_permission_grant_classification_failed",
       "health_connect_permission_verification_failed",
+      "health_connect_post_permission_reset_failed",
       "health_connect_post_permission_network_failed",
       "health_connect_post_permission_connection_failed",
       "health_connect_post_permission_setup_save_failed",

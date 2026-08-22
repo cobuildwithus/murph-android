@@ -202,6 +202,10 @@ internal enum class NativeHostedE2EFailureCode(
         "health_connect_permission_verification_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
     ),
+    HealthConnectPostPermissionResetFailed(
+        "health_connect_post_permission_reset_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
     HealthConnectPostPermissionNetworkFailed(
         "health_connect_post_permission_network_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
@@ -249,6 +253,8 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
         NativeHostedE2EFailureCode.HealthConnectPermissionGrantClassificationFailed
     HealthPermissionVerificationFailureMarkers.any(hasVisibleText) ->
         NativeHostedE2EFailureCode.HealthConnectPermissionVerificationFailed
+    HealthPostPermissionResetFailureMarkers.any(hasVisibleText) ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionResetFailed
     HealthPostPermissionNetworkFailureMarkers.any(hasVisibleText) ->
         NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed
     HealthPostPermissionConnectionFailureMarkers.any(hasVisibleText) ->
@@ -257,6 +263,11 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
         NativeHostedE2EFailureCode.HealthConnectPostPermissionSetupSaveFailed
     else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
+
+internal fun nativeHostedE2EHealthPermissionRetryFailure(
+    systemSurfaceOpened: Boolean,
+    failureBeforeRetry: NativeHostedE2EFailureCode,
+): NativeHostedE2EFailureCode? = failureBeforeRetry.takeUnless { systemSurfaceOpened }
 
 private val HealthPermissionGrantFailureMarkers = listOf(
     "Choose at least one Health Connect category to connect Murph.",
@@ -268,6 +279,10 @@ private val HealthPermissionGrantFailureMarkers = listOf(
 private val HealthPermissionVerificationFailureMarkers = listOf(
     "Murph couldn't verify Health Connect permissions. Try again.",
     "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+)
+
+private val HealthPostPermissionResetFailureMarkers = listOf(
+    "Murph couldn't safely reset health sync. Keep the app open and sign out.",
 )
 
 private val HealthPostPermissionNetworkFailureMarkers = listOf(

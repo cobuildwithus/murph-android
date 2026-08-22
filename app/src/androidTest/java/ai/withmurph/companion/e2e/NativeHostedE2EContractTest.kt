@@ -223,6 +223,8 @@ class NativeHostedE2EContractTest {
                 NativeHostedE2EFailureCode.HealthConnectPermissionGrantClassificationFailed,
             "Murph couldn't verify Health Connect permissions. Try again." to
                 NativeHostedE2EFailureCode.HealthConnectPermissionVerificationFailed,
+            "Murph couldn't safely reset health sync. Keep the app open and sign out." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionResetFailed,
             "Murph couldn't reach the network. Check your connection and try again." to
                 NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed,
             "Murph couldn't finish connecting Health Connect. Try again in a moment." to
@@ -242,6 +244,42 @@ class NativeHostedE2EContractTest {
                 ),
             )
         }
+    }
+
+    @Test
+    fun healthPermissionRetryPreservesTheFailureAndStartsFreshReturnEvidence() {
+        val networkFailure = nativeHostedE2EHealthPermissionTimeoutFailure(
+            sawPermissionSurface = true,
+            didActivateAllowAll = true,
+            authorizationSelected = true,
+            returnedToApp = true,
+            hasVisibleText = {
+                it == "Murph couldn't reach the network. Check your connection and try again."
+            },
+        )
+        assertEquals(
+            networkFailure,
+            nativeHostedE2EHealthPermissionRetryFailure(
+                systemSurfaceOpened = false,
+                failureBeforeRetry = networkFailure,
+            ),
+        )
+        assertEquals(
+            null,
+            nativeHostedE2EHealthPermissionRetryFailure(
+                systemSurfaceOpened = true,
+                failureBeforeRetry = networkFailure,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionAppReturnMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                returnedToApp = false,
+            ),
+        )
     }
 
     @Test
