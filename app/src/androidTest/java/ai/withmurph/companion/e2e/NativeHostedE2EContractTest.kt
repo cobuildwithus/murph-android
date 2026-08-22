@@ -247,6 +247,12 @@ class NativeHostedE2EContractTest {
                 NativeHostedE2EFailureCode.HealthConnectPostPermissionResetFailed,
             "Murph couldn't reach the network. Check your connection and try again." to
                 NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed,
+            "You're offline. Saved sync status is shown until Murph reconnects." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed,
+            "Murph couldn't verify your account. Saved status is still shown." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed,
+            "Health Connect permissions couldn't be opened. Try again." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionConnectionFailed,
             "Murph couldn't finish connecting Health Connect. Try again in a moment." to
                 NativeHostedE2EFailureCode.HealthConnectPostPermissionConnectionFailed,
             "Murph couldn't save Health Connect setup. Try again." to
@@ -286,6 +292,39 @@ class NativeHostedE2EContractTest {
                 appReady = false,
             ),
         )
+        val expectedByAppState = listOf(
+            NativeHostedE2EFailureCode.HealthConnectPostPermissionConsentRecovery to
+                nativeHostedE2EHealthPermissionTimeoutFailure(
+                    sawPermissionSurface = true,
+                    didActivateAllowAll = true,
+                    authorizationSelected = true,
+                    appHasConsentRecovery = true,
+                ),
+            NativeHostedE2EFailureCode.HealthConnectPostPermissionAuthUnverified to
+                nativeHostedE2EHealthPermissionTimeoutFailure(
+                    sawPermissionSurface = true,
+                    didActivateAllowAll = true,
+                    authorizationSelected = true,
+                    appAuthVerifiedOnline = false,
+                ),
+            NativeHostedE2EFailureCode.HealthConnectPostPermissionStatusStale to
+                nativeHostedE2EHealthPermissionTimeoutFailure(
+                    sawPermissionSurface = true,
+                    didActivateAllowAll = true,
+                    authorizationSelected = true,
+                    appHealthStatusIsStale = true,
+                ),
+            NativeHostedE2EFailureCode.HealthConnectPostPermissionUnclassifiedMessage to
+                nativeHostedE2EHealthPermissionTimeoutFailure(
+                    sawPermissionSurface = true,
+                    didActivateAllowAll = true,
+                    authorizationSelected = true,
+                    appHasHealthMessage = true,
+                ),
+        )
+        expectedByAppState.forEach { (expected, actual) ->
+            assertEquals(expected, actual)
+        }
         assertEquals(
             NativeHostedE2EFailureCode.HealthConnectPermissionCompletionPending,
             nativeHostedE2EHealthPermissionTimeoutFailure(
