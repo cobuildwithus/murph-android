@@ -207,6 +207,44 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
+    fun healthPermissionTimeoutClassifiesFixedPostPermissionAppStates() {
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionAppReturnMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                returnedToApp = false,
+            ),
+        )
+
+        val expectedByMarker = mapOf(
+            "Choose at least one Health Connect category to connect Murph." to
+                NativeHostedE2EFailureCode.HealthConnectPermissionGrantClassificationFailed,
+            "Murph couldn't verify Health Connect permissions. Try again." to
+                NativeHostedE2EFailureCode.HealthConnectPermissionVerificationFailed,
+            "Murph couldn't reach the network. Check your connection and try again." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed,
+            "Murph couldn't finish connecting Health Connect. Try again in a moment." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionConnectionFailed,
+            "Murph couldn't save Health Connect setup. Try again." to
+                NativeHostedE2EFailureCode.HealthConnectPostPermissionSetupSaveFailed,
+        )
+        expectedByMarker.forEach { (visibleMarker, expected) ->
+            assertEquals(
+                expected,
+                nativeHostedE2EHealthPermissionTimeoutFailure(
+                    sawPermissionSurface = true,
+                    didActivateAllowAll = true,
+                    authorizationSelected = true,
+                    returnedToApp = true,
+                    hasVisibleText = { it == visibleMarker },
+                ),
+            )
+        }
+    }
+
+    @Test
     fun onboardingProgressSupportsServerContinuationAndRejectsSkippedStages() {
         NativeHostedE2EOnboardingProgress().apply {
             observe("Choose a voice")

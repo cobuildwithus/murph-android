@@ -190,6 +190,30 @@ internal enum class NativeHostedE2EFailureCode(
         "health_connect_permission_completion_failed",
         NativeHostedE2EStage.HealthConnectPermissionState,
     ),
+    HealthConnectPermissionAppReturnMissing(
+        "health_connect_permission_app_return_missing",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionGrantClassificationFailed(
+        "health_connect_permission_grant_classification_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPermissionVerificationFailed(
+        "health_connect_permission_verification_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPostPermissionNetworkFailed(
+        "health_connect_post_permission_network_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPostPermissionConnectionFailed(
+        "health_connect_post_permission_connection_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
+    HealthConnectPostPermissionSetupSaveFailed(
+        "health_connect_post_permission_setup_save_failed",
+        NativeHostedE2EStage.HealthConnectPermissionState,
+    ),
     ConnectedStateFailed("connected_state_failed", NativeHostedE2EStage.ConnectedState),
     SignOutFailed("sign_out_failed", NativeHostedE2EStage.SignOut),
     ReturningPrivyOtpFailed(
@@ -214,12 +238,50 @@ internal fun nativeHostedE2EHealthPermissionTimeoutFailure(
     sawPermissionSurface: Boolean,
     didActivateAllowAll: Boolean,
     authorizationSelected: Boolean,
+    returnedToApp: Boolean = true,
+    hasVisibleText: (String) -> Boolean = { false },
 ): NativeHostedE2EFailureCode = when {
     !sawPermissionSurface -> NativeHostedE2EFailureCode.HealthConnectPermissionSurfaceMissing
     !didActivateAllowAll -> NativeHostedE2EFailureCode.HealthConnectPermissionSelectionMissing
     !authorizationSelected -> NativeHostedE2EFailureCode.HealthConnectPermissionApprovalMissing
+    !returnedToApp -> NativeHostedE2EFailureCode.HealthConnectPermissionAppReturnMissing
+    HealthPermissionGrantFailureMarkers.any(hasVisibleText) ->
+        NativeHostedE2EFailureCode.HealthConnectPermissionGrantClassificationFailed
+    HealthPermissionVerificationFailureMarkers.any(hasVisibleText) ->
+        NativeHostedE2EFailureCode.HealthConnectPermissionVerificationFailed
+    HealthPostPermissionNetworkFailureMarkers.any(hasVisibleText) ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionNetworkFailed
+    HealthPostPermissionConnectionFailureMarkers.any(hasVisibleText) ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionConnectionFailed
+    HealthPostPermissionSetupSaveFailureMarkers.any(hasVisibleText) ->
+        NativeHostedE2EFailureCode.HealthConnectPostPermissionSetupSaveFailed
     else -> NativeHostedE2EFailureCode.HealthConnectPermissionCompletionFailed
 }
+
+private val HealthPermissionGrantFailureMarkers = listOf(
+    "Choose at least one Health Connect category to connect Murph.",
+    "Power, speed, and elevation require Workouts. Allow Workouts in Health Connect, then try again.",
+    "Reproductive details require Menstruation. Allow Menstruation in Health Connect, then try again.",
+    "Power, speed, and elevation require Workouts; reproductive details require Menstruation. Update Health Connect permissions, then try again.",
+)
+
+private val HealthPermissionVerificationFailureMarkers = listOf(
+    "Murph couldn't verify Health Connect permissions. Try again.",
+    "Murph couldn't verify current Health Connect permissions. Saved status is still shown.",
+)
+
+private val HealthPostPermissionNetworkFailureMarkers = listOf(
+    "Murph couldn't reach the network. Check your connection and try again.",
+)
+
+private val HealthPostPermissionConnectionFailureMarkers = listOf(
+    "Murph couldn't finish connecting Health Connect. Try again in a moment.",
+    "Reconnect Health Connect to resume syncing.",
+)
+
+private val HealthPostPermissionSetupSaveFailureMarkers = listOf(
+    "Murph couldn't save Health Connect setup. Try again.",
+)
 
 internal data class NativeHostedE2EDispatchConfiguration(
     val mode: NativeHostedE2EMode,

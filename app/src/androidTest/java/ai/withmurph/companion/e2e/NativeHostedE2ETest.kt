@@ -480,6 +480,7 @@ class NativeHostedE2ETest {
         var authorizationSelected = false
         var didActivateAllowAll = false
         var sawPermissionSurface = false
+        var returnedToApp = false
         var handoffAttempts = 1
         var systemIdleIterations = 0
 
@@ -537,6 +538,8 @@ class NativeHostedE2ETest {
                 // Some Health Connect builds use Allow all as the terminal
                 // action; others expose a separate final Allow button.
                 authorizationSelected = true
+                returnedToApp = returnedToApp ||
+                    currentPackage == targetContext.packageName
             }
 
             if (sawPermissionSurface && authorizationSelected && (
@@ -566,6 +569,10 @@ class NativeHostedE2ETest {
                 sawPermissionSurface = sawPermissionSurface,
                 didActivateAllowAll = didActivateAllowAll,
                 authorizationSelected = authorizationSelected,
+                returnedToApp = returnedToApp,
+                hasVisibleText = { marker ->
+                    runCatching { hasVisibleText(marker) }.getOrDefault(false)
+                },
             ),
         )
     }
