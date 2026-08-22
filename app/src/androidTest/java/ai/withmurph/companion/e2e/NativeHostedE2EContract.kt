@@ -289,6 +289,12 @@ internal fun nativeHostedE2EHasCompletedHealthSetup(
     "Friendly Names are optional",
 ).any(hasVisibleText)
 
+internal fun nativeHostedE2EHasAppOwnedText(
+    text: String,
+    composeHasVisibleText: (String) -> Boolean,
+    hierarchyHasVisibleText: (String) -> Boolean,
+): Boolean = composeHasVisibleText(text) || hierarchyHasVisibleText(text)
+
 private val HealthPermissionGrantFailureMarkers = listOf(
     "Choose at least one Health Connect category to connect Murph.",
     "Power, speed, and elevation require Workouts. Allow Workouts in Health Connect, then try again.",
