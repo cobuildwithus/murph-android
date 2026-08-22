@@ -656,12 +656,8 @@ class NativeHostedE2ETest {
     private fun isReadyShell(): Boolean =
         hasClickableText("Home") && hasClickableText("Settings")
 
-    private fun isConnectedHealthState(): Boolean = hasAnyText(
-        "You're connected",
-        "Synced",
-        "Sync is on its way",
-        "Worth a quick check",
-    )
+    private fun isConnectedHealthState(): Boolean =
+        nativeHostedE2EHasCompletedHealthSetup(::hasVisibleText)
 
     private fun waitForExternalHealthSurface(timeout: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeout

@@ -290,6 +290,15 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
+    fun friendlyNamesBannerProvesInitialHealthSetupCompleted() {
+        assertTrue(
+            nativeHostedE2EHasCompletedHealthSetup { visibleText ->
+                visibleText == "Friendly Names are optional"
+            },
+        )
+    }
+
+    @Test
     fun onboardingProgressSupportsServerContinuationAndRejectsSkippedStages() {
         NativeHostedE2EOnboardingProgress().apply {
             observe("Choose a voice")
