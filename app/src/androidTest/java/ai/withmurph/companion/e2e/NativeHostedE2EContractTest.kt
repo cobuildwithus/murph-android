@@ -217,6 +217,26 @@ class NativeHostedE2EContractTest {
                 returnedToApp = false,
             ),
         )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionSystemGrantMissing,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                returnedToApp = true,
+                healthReadGrantConfirmed = false,
+            ),
+        )
+        assertEquals(
+            NativeHostedE2EFailureCode.HealthConnectPermissionSystemGrantCheckFailed,
+            nativeHostedE2EHealthPermissionTimeoutFailure(
+                sawPermissionSurface = true,
+                didActivateAllowAll = true,
+                authorizationSelected = true,
+                returnedToApp = true,
+                healthReadGrantConfirmed = null,
+            ),
+        )
 
         val expectedByMarker = mapOf(
             "Choose at least one Health Connect category to connect Murph." to
@@ -240,6 +260,7 @@ class NativeHostedE2EContractTest {
                     didActivateAllowAll = true,
                     authorizationSelected = true,
                     returnedToApp = true,
+                    healthReadGrantConfirmed = false,
                     hasVisibleText = { it == visibleMarker },
                 ),
             )
@@ -293,6 +314,30 @@ class NativeHostedE2EContractTest {
                 failure,
             )
         }
+    }
+
+    @Test
+    fun healthPermissionCompletionRequiresPositiveSystemGrantEvidence() {
+        listOf(false, null).forEach { healthReadGrantConfirmed ->
+            assertFalse(
+                nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                    completionObserved = true,
+                    healthReadGrantConfirmed = healthReadGrantConfirmed,
+                ),
+            )
+        }
+        assertFalse(
+            nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                completionObserved = false,
+                healthReadGrantConfirmed = true,
+            ),
+        )
+        assertTrue(
+            nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                completionObserved = true,
+                healthReadGrantConfirmed = true,
+            ),
+        )
     }
 
     @Test

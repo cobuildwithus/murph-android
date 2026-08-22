@@ -6,6 +6,7 @@ import ai.withmurph.companion.MurphApplication
 import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.core.HealthSyncState
 import ai.withmurph.companion.core.InitialSetupStep
+import ai.withmurph.companion.health.probeGrantedHealthConnectReadPermission
 import android.content.Context
 import android.os.Bundle
 import androidx.compose.ui.test.SemanticsMatcher
@@ -502,6 +503,9 @@ class NativeHostedE2ETest {
                 didActivateAllowAll = didActivateAllowAll,
                 authorizationSelected = authorizationSelected,
                 returnedToApp = returnedToApp,
+                healthReadGrantConfirmed = probeGrantedHealthConnectReadPermission(
+                    targetContext,
+                ),
                 hasVisibleText = ::hasAppOwnedText,
                 appReady = appState.phase == AppPhase.Ready,
                 appIsConnecting = appState.isConnectingHealth,
@@ -571,14 +575,26 @@ class NativeHostedE2ETest {
                 }
             }
 
-            if (sawPermissionSurface && authorizationSelected && (
-                    isConnectedHealthState() ||
-                        hasAnyAppOwnedText(
-                            "Connecting…",
-                            "Sync is on its way",
-                            "Check for new data",
-                        )
+            val appCompletionObserved =
+                sawPermissionSurface &&
+                    authorizationSelected &&
+                    (
+                        isConnectedHealthState() ||
+                            hasAnyAppOwnedText(
+                                "Connecting…",
+                                "Sync is on its way",
+                                "Check for new data",
+                            )
                     )
+            if (
+                nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                    completionObserved = appCompletionObserved,
+                    healthReadGrantConfirmed = if (appCompletionObserved) {
+                        probeGrantedHealthConnectReadPermission(targetContext)
+                    } else {
+                        null
+                    },
+                )
             ) {
                 return
             }
@@ -602,7 +618,16 @@ class NativeHostedE2ETest {
                     handoffResult ==
                     NativeHostedE2EHealthPermissionHandoffResult.ConnectedWithoutPrompt
                 ) {
-                    return
+                    if (
+                        nativeHostedE2EHasConfirmedHealthPermissionCompletion(
+                            completionObserved = true,
+                            healthReadGrantConfirmed =
+                                probeGrantedHealthConnectReadPermission(targetContext),
+                        )
+                    ) {
+                        return
+                    }
+                    continue
                 }
                 returnedToApp = false
                 continue
