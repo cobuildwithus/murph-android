@@ -5,11 +5,12 @@ do not edit the repository, create a patch, or take external actions.
 # Goal
 
 Decide whether the current Murph Android companion is safe to ship for its
-stated narrow purpose: Privy OTP authentication, explicit Health Connect setup
-through Junction, backend-confirmed sync status, and account/legal controls.
-Find reachable correctness, privacy, security, lifecycle, Release-build, or
-user-blocking interaction failures, plus material opportunities to preserve
-the same behavior with less complexity.
+stated narrow purpose: Privy OTP authentication, server-owned initial
+onboarding, explicit Health Connect setup through Junction, backend-confirmed
+sync status, optional foreground-only Friendly Names, and account/legal
+controls. Find reachable correctness, privacy, security, lifecycle,
+Release-build, or user-blocking interaction failures, plus material
+opportunities to preserve the same behavior with less complexity.
 
 # Evidence
 
@@ -46,6 +47,12 @@ snippets. Inspect at least:
 Do not invent guarantees for Android scheduling, OEM behavior, Health Connect,
 Junction, Privy, or WHOOP. Do not report style, naming, speculative edge cases,
 generic robustness, or low-impact cleanup.
+
+For PR merge review, honor the evidence boundary in `AGENTS.md`: a named
+physical-device-only gap that remains an explicit Play release gate is not by
+itself a code finding. Report a finding when the current change falsely claims
+that proof, removes or weakens the release gate, omits the required gap, or has
+a reachable source-level defect. Never treat merge as physical-device proof.
 
 # Architecture bar
 

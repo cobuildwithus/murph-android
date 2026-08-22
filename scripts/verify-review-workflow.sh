@@ -62,6 +62,10 @@ grep -Fq 'review-gpt-contract.mjs invocation' scripts/review-pr.sh
 grep -Fq 'review_gpt_register_dir_preset "android-review"' scripts/review-gpt.config.sh
 grep -Fq 'review_gpt_register_dir_preset "android-pr-review"' scripts/review-gpt.config.sh
 grep -Fq 'Use the connected GitHub repository as the sole repository-content source.' scripts/chatgpt-review-presets/android-deep-review.md
+grep -Fq 'server-owned initial' scripts/chatgpt-review-presets/android-deep-review.md
+grep -Fq 'optional foreground-only Friendly Names' scripts/chatgpt-review-presets/android-deep-review.md
+grep -Fq 'For PR merge review, honor the evidence boundary in `AGENTS.md`' scripts/chatgpt-review-presets/android-deep-review.md
+grep -Fq 'physical-device-only gap that remains an explicit Play release gate is not by' scripts/chatgpt-review-presets/android-deep-review.md
 ! grep -Fq 'codebase.zip' scripts/chatgpt-review-presets/android-deep-review.md
 grep -Fq 'REVIEW_CONTEXT_SHA256:' scripts/chatgpt-review-presets/android-deep-review.md
 grep -Fq 'REVIEW_FINDINGS:' scripts/chatgpt-review-presets/android-deep-review.md
