@@ -274,6 +274,7 @@ class JunctionHealthSyncService(
 
     override suspend fun syncAllGrantedResources(
         expectedMemberKey: String,
+        beforeSyncPromotion: () -> Boolean,
     ): HealthSyncAttemptResult {
         // An upgrade can inherit durable all-granted work enqueued by Vital's public
         // unpause setter. Retire every pinned chain before evaluating the exact set,
@@ -297,7 +298,7 @@ class JunctionHealthSyncService(
         }
 
         try {
-            VitalHealthWorkerLease.openFor(expectedMemberKey)
+            VitalHealthWorkerLease.openFor(expectedMemberKey, beforeSyncPromotion)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -340,7 +341,8 @@ class JunctionHealthSyncService(
                 }
             }
         } catch (error: CancellationException) {
-            throw error
+            launchRejected = VitalHealthWorkerLease.wasLaunchRejectedFor(expectedMemberKey)
+            if (!launchRejected) throw error
         } finally {
             withContext(NonCancellable) {
                 try {

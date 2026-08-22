@@ -84,33 +84,62 @@ class MurphHealthWorkerFactoryTest {
     @Test
     fun restartedProcessDefaultsClosedAndLeaseIsMemberScoped() {
         assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
+        var promotionCommits = 0
 
-        VitalHealthWorkerLease.openFor(testMemberKey)
+        VitalHealthWorkerLease.openFor(testMemberKey) {
+            promotionCommits += 1
+            true
+        }
 
         assertTrue(VitalHealthWorkerLease.isOpenFor(testMemberKey))
         assertFalse(VitalHealthWorkerLease.isOpenFor("did:privy:another-member"))
+        // Process-local authority and its pending commit disappear together.
+        VitalHealthWorkerLease.close()
+        assertFalse(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
+        assertEquals(0, promotionCommits)
+
+        VitalHealthWorkerLease.openFor(testMemberKey) { true }
         VitalHealthWorkerLease.closeFor(testMemberKey)
         assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
     }
 
     @Test
     fun backgroundRevokesOnlyAnUnpromotedLaunch() {
-        VitalHealthWorkerLease.openFor(testMemberKey)
+        var promotionCommits = 0
+        VitalHealthWorkerLease.openFor(testMemberKey) {
+            promotionCommits += 1
+            true
+        }
         assertTrue(VitalHealthWorkerLease.isLaunchAuthorizedFor(testMemberKey))
 
         VitalHealthWorkerLease.rejectUnpromoted()
 
         assertFalse(VitalHealthWorkerLease.isOpenFor(testMemberKey))
         assertTrue(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
+        assertFalse(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
+        assertEquals(0, promotionCommits)
 
         VitalHealthWorkerLease.closeFor(testMemberKey)
-        VitalHealthWorkerLease.openFor(testMemberKey)
+        VitalHealthWorkerLease.openFor(testMemberKey) {
+            promotionCommits += 1
+            true
+        }
         assertTrue(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
+        assertEquals(1, promotionCommits)
 
         VitalHealthWorkerLease.rejectUnpromoted()
 
         assertTrue(VitalHealthWorkerLease.isOpenFor(testMemberKey))
         assertFalse(VitalHealthWorkerLease.wasLaunchRejectedFor(testMemberKey))
+    }
+
+    @Test
+    fun failedPromotionCommitStartsNoPromotedLease() {
+        VitalHealthWorkerLease.openFor(testMemberKey) { false }
+
+        assertFalse(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
+        assertTrue(VitalHealthWorkerLease.isLaunchAuthorizedFor(testMemberKey))
+        assertFalse(VitalHealthWorkerLease.beginExecutionFor(testMemberKey))
     }
 
     @Test
@@ -127,7 +156,7 @@ class MurphHealthWorkerFactoryTest {
 
     @Test
     fun workInfoCancellationCannotCompleteTeardownUntilTheDelegatedBodyExits() = runTest {
-        VitalHealthWorkerLease.openFor(testMemberKey)
+        VitalHealthWorkerLease.openFor(testMemberKey) { true }
         assertTrue(VitalHealthWorkerLease.markPromotedFor(testMemberKey))
         assertTrue(VitalHealthWorkerLease.beginExecutionFor(testMemberKey))
         VitalHealthWorkerLease.close()

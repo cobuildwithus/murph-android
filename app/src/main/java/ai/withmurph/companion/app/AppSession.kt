@@ -39,6 +39,7 @@ import ai.withmurph.companion.core.PendingHealthSyncFailure
 import ai.withmurph.companion.core.PendingExternalHandoff
 import ai.withmurph.companion.core.SignInTokenRequest
 import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
+import ai.withmurph.companion.core.UNKNOWN_HEALTH_RESOURCE_KEY
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,7 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AppSession(
     private val auth: AuthProvider,
@@ -3645,18 +3647,57 @@ class AppSession(
             if (!health.isSignedIn()) return true
             val syncMemberKey = currentMemberKey ?: return false
             if (localState.memberKey != syncMemberKey) return false
+            val previousPendingFailure = localState.pendingHealthSyncFailure
+            if (
+                previousPendingFailure?.resourceKeys
+                    ?.contains(UNKNOWN_HEALTH_RESOURCE_KEY) == true
+            ) {
+                requireHealthReconnectAfterUnclassifiedSyncFailure()
+                return false
+            }
+            val provisionalFailure = PendingHealthSyncFailure(
+                resourceKeys = setOf(UNKNOWN_HEALTH_RESOURCE_KEY),
+                receiptFloorAt = InstantValue(preSyncStatus.observedAt.toEpochMilli()),
+            )
             lastStartedHealthSyncSequence += 1
             val syncSequence = lastStartedHealthSyncSequence
             var syncSucceeded = false
+            val provisionalPersistenceFailed = AtomicBoolean(false)
             try {
-                when (
-                    val result = runForegroundHealthSync(
-                        foregroundClaim = foregroundClaim,
-                        memberKey = syncMemberKey,
-                    ) ?: return false
-                ) {
-                    HealthSyncAttemptResult.Complete -> syncSucceeded = true
+                val result = runForegroundHealthSync(
+                    foregroundClaim = foregroundClaim,
+                    memberKey = syncMemberKey,
+                    beforeSyncPromotion = {
+                        if (!ownsForegroundRefresh(foregroundClaim)) {
+                            false
+                        } else {
+                            localState.replacePendingHealthSyncFailure(provisionalFailure)
+                                .also { persisted ->
+                                    provisionalPersistenceFailed.set(!persisted)
+                                }
+                        }
+                    },
+                )
+                if (provisionalPersistenceFailed.get()) {
+                    requireHealthReconnectAfterUnclassifiedSyncFailure()
+                    return false
+                }
+                val completedResult = result ?: return false
+                when (completedResult) {
+                    HealthSyncAttemptResult.Complete -> {
+                        if (
+                            !replacePendingHealthSyncFailureOrReconnect(
+                                previousPendingFailure,
+                            )
+                        ) return false
+                        syncSucceeded = true
+                    }
                     HealthSyncAttemptResult.NotStarted -> {
+                        if (
+                            !replacePendingHealthSyncFailureOrReconnect(
+                                previousPendingFailure,
+                            )
+                        ) return false
                         _state.update { current ->
                             current.copy(
                                 healthMessage = if (
@@ -3675,12 +3716,15 @@ class AppSession(
                         return false
                     }
                     is HealthSyncAttemptResult.PartialFailure -> {
-                        if (
-                            !recordPendingHealthSyncFailure(
-                                resourceKeys = result.resourceKeys,
-                                receiptFloorAt = preSyncStatus.observedAt,
-                            )
-                        ) return false
+                        val exactFailure = PendingHealthSyncFailure(
+                            resourceKeys = completedResult.resourceKeys,
+                            receiptFloorAt =
+                                InstantValue(preSyncStatus.observedAt.toEpochMilli()),
+                        )
+                        val replacement = previousPendingFailure
+                            ?.mergedWith(exactFailure)
+                            ?: exactFailure
+                        if (!replacePendingHealthSyncFailureOrReconnect(replacement)) return false
                     }
                 }
             } catch (error: CancellationException) {
@@ -3732,14 +3776,18 @@ class AppSession(
     private suspend fun runForegroundHealthSync(
         foregroundClaim: ForegroundRefreshClaim,
         memberKey: String,
+        beforeSyncPromotion: () -> Boolean,
     ): HealthSyncAttemptResult? = coroutineScope {
         val sync = async(start = CoroutineStart.LAZY) {
-            health.syncAllGrantedResources(memberKey)
+            health.syncAllGrantedResources(
+                memberKey,
+                beforeSyncPromotion,
+            )
         }
         val operation = claimForegroundHealthOperation(foregroundClaim, sync)
         if (operation == null) {
             sync.cancel()
-            return@coroutineScope null
+            return@coroutineScope HealthSyncAttemptResult.NotStarted
         }
         try {
             sync.start()
@@ -4141,44 +4189,12 @@ class AppSession(
         }
     }
 
-    private fun recordPendingHealthSyncFailure(
-        resourceKeys: Set<String>,
-        receiptFloorAt: Instant,
+    /** Called only while [healthMutex] is held. */
+    private suspend fun replacePendingHealthSyncFailureOrReconnect(
+        failure: PendingHealthSyncFailure?,
     ): Boolean {
-        if (
-            localState.recordPendingHealthSyncFailure(
-                PendingHealthSyncFailure(
-                    resourceKeys = resourceKeys,
-                    receiptFloorAt = InstantValue(receiptFloorAt.toEpochMilli()),
-                ),
-            )
-        ) return true
-
-        val reconnectRecorded = localState.requireHealthReconnect()
-        healthSyncReminder.cancel()
-        _state.update { current ->
-            if (reconnectRecorded) {
-                current.copy(
-                    healthSync = HealthSyncState.NotConnected,
-                    healthReconnectRequired = true,
-                    healthMessage =
-                        "$HEALTH_RECONNECT_REQUIRED_MESSAGE The last sync result couldn't be saved safely.",
-                )
-            } else {
-                current.copy(
-                    healthSync = HealthSyncState.NeedsAttention(
-                        cachedHealthStatus()?.lastDataReceivedAt,
-                    ),
-                    healthMessage = HEALTH_PARTIAL_SYNC_MESSAGE,
-                    phase = AppPhase.Failed(
-                        message =
-                            "Murph couldn't safely save the partial health sync result. Keep the app open and try again.",
-                        canRetry = true,
-                        canSignOut = true,
-                    ),
-                )
-            }
-        }
+        if (localState.replacePendingHealthSyncFailure(failure)) return true
+        requireHealthReconnectAfterUnclassifiedSyncFailure()
         return false
     }
 
