@@ -115,7 +115,24 @@ const FAILURE_CODES_BY_STAGE = new Map([
     ]),
   ],
   ["connected_state", new Set(["connected_state_failed"])],
-  ["sign_out", new Set(["sign_out_failed"])],
+  [
+    "sign_out",
+    new Set([
+      "sign_out_failed",
+      "sign_out_settings_unavailable",
+      "sign_out_action_unavailable",
+      "sign_out_preflight_failed",
+      "sign_out_address_book_settle_failed",
+      "sign_out_health_reset_failed",
+      "sign_out_auth_verification_failed",
+      "sign_out_privy_failed",
+      "sign_out_persistence_failed",
+      "sign_out_unclassified_app_failure",
+      "sign_out_completion_pending",
+      "sign_out_session_unchanged",
+      "sign_out_login_surface_unavailable",
+    ]),
+  ],
   [
     "returning_privy_otp",
     new Set([

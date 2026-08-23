@@ -659,10 +659,34 @@ class NativeHostedE2ETest {
     }
 
     private fun signOut() {
-        clickText("Settings", 45_000)
-        clickText("Sign Out", 30_000, scroll = true)
-        waitForClickableText("Send code", 120_000)
+        if (!clickTextOrTimeout("Settings", 45_000)) {
+            throw JourneyFailure(NativeHostedE2EFailureCode.SignOutSettingsUnavailable)
+        }
+        if (!clickTextOrTimeout("Sign Out", 30_000, scroll = true)) {
+            throw JourneyFailure(NativeHostedE2EFailureCode.SignOutActionUnavailable)
+        }
+
+        val deadline = System.currentTimeMillis() + 120_000
+        while (System.currentTimeMillis() < deadline) {
+            if (hasClickableText("Send code")) return
+            val phase = currentAppPhase()
+            if (phase is AppPhase.Failed) {
+                throw JourneyFailure(nativeHostedE2ESignOutAppFailure(phase.message))
+            }
+            sleepBriefly()
+        }
+        val failure = when (val phase = currentAppPhase()) {
+            AppPhase.Launching -> NativeHostedE2EFailureCode.SignOutCompletionPending
+            AppPhase.Ready -> NativeHostedE2EFailureCode.SignOutSessionUnchanged
+            AppPhase.NeedsLogin ->
+                NativeHostedE2EFailureCode.SignOutLoginSurfaceUnavailable
+            is AppPhase.Failed -> nativeHostedE2ESignOutAppFailure(phase.message)
+        }
+        throw JourneyFailure(failure)
     }
+
+    private fun currentAppPhase(): AppPhase =
+        (targetContext.applicationContext as MurphApplication).graph.session.state.value.phase
 
     private fun requireReturningMemberState() {
         val deadline = System.currentTimeMillis() + 300_000
@@ -793,6 +817,15 @@ class NativeHostedE2ETest {
         compose.waitForIdle()
     }
 
+    private fun clickTextOrTimeout(
+        text: String,
+        timeout: Long,
+        scroll: Boolean = false,
+    ): Boolean = runCatching {
+        clickText(text, timeout, scroll)
+        true
+    }.getOrDefault(false)
+
     private fun hasVisibleText(text: String): Boolean = nodeCount(hasTextMatcher(text)) > 0
 
     private fun hasClickableText(text: String): Boolean = nodeCount(clickableText(text)) > 0
@@ -848,4 +881,23 @@ class NativeHostedE2ETest {
             "com.android.settings",
         )
     }
+}
+
+internal fun nativeHostedE2ESignOutAppFailure(
+    message: String,
+): NativeHostedE2EFailureCode = when (message) {
+    "We couldn't verify which account to sign out. Check your connection and try again.",
+    "We couldn't safely start signing out. Keep Murph open and try again.",
+    -> NativeHostedE2EFailureCode.SignOutPreflightFailed
+    "We couldn't safely settle the address-book update. Check your connection and try again." ->
+        NativeHostedE2EFailureCode.SignOutAddressBookSettleFailed
+    "We couldn't safely reset health sync. Keep Murph open and try again." ->
+        NativeHostedE2EFailureCode.SignOutHealthResetFailed
+    "We couldn't verify which account is signed in. Check your connection and try again." ->
+        NativeHostedE2EFailureCode.SignOutAuthVerificationFailed
+    "We couldn't finish signing out. Try once more." ->
+        NativeHostedE2EFailureCode.SignOutPrivyFailed
+    "We couldn't safely finish signing out. Keep Murph open and try again." ->
+        NativeHostedE2EFailureCode.SignOutPersistenceFailed
+    else -> NativeHostedE2EFailureCode.SignOutUnclassifiedAppFailure
 }

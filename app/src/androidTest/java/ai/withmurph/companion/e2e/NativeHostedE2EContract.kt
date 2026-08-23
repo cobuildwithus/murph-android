@@ -256,6 +256,48 @@ internal enum class NativeHostedE2EFailureCode(
     ),
     ConnectedStateFailed("connected_state_failed", NativeHostedE2EStage.ConnectedState),
     SignOutFailed("sign_out_failed", NativeHostedE2EStage.SignOut),
+    SignOutSettingsUnavailable(
+        "sign_out_settings_unavailable",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutActionUnavailable(
+        "sign_out_action_unavailable",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutPreflightFailed("sign_out_preflight_failed", NativeHostedE2EStage.SignOut),
+    SignOutAddressBookSettleFailed(
+        "sign_out_address_book_settle_failed",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutHealthResetFailed(
+        "sign_out_health_reset_failed",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutAuthVerificationFailed(
+        "sign_out_auth_verification_failed",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutPrivyFailed("sign_out_privy_failed", NativeHostedE2EStage.SignOut),
+    SignOutPersistenceFailed(
+        "sign_out_persistence_failed",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutUnclassifiedAppFailure(
+        "sign_out_unclassified_app_failure",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutCompletionPending(
+        "sign_out_completion_pending",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutSessionUnchanged(
+        "sign_out_session_unchanged",
+        NativeHostedE2EStage.SignOut,
+    ),
+    SignOutLoginSurfaceUnavailable(
+        "sign_out_login_surface_unavailable",
+        NativeHostedE2EStage.SignOut,
+    ),
     ReturningPrivyOtpFailed(
         "returning_privy_otp_failed",
         NativeHostedE2EStage.ReturningPrivyOtp,
