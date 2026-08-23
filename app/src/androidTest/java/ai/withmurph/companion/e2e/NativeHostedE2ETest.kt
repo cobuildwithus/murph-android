@@ -668,8 +668,8 @@ class NativeHostedE2ETest {
 
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {
-            if (hasClickableText("Send code")) return
             val phase = currentAppPhase()
+            if (phase == AppPhase.NeedsLogin && hasVisibleText("Send code")) return
             if (phase is AppPhase.Failed) {
                 throw JourneyFailure(nativeHostedE2ESignOutAppFailure(phase.message))
             }
