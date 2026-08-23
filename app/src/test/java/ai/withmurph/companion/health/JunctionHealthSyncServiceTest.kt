@@ -12,9 +12,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
@@ -189,6 +192,29 @@ class JunctionHealthSyncServiceTest {
         ).forEach { outcome ->
             assertFalse(permissionOutcomeAllowsCurrentGrantClassification(outcome))
         }
+    }
+
+    @Test
+    fun cancelledProviderResultFallsBackToCurrentGrantClassification() = runTest {
+        val outcome = CompletableDeferred<PermissionOutcome>()
+        outcome.cancel()
+
+        assertTrue(permissionRequestOutcomeAllowsCurrentGrantClassification(outcome))
+    }
+
+    @Test
+    fun callerCancellationStillStopsGrantClassification() = runTest {
+        val outcome = CompletableDeferred<PermissionOutcome>()
+        var classificationReturned = false
+        val caller = launch {
+            permissionRequestOutcomeAllowsCurrentGrantClassification(outcome)
+            classificationReturned = true
+        }
+        runCurrent()
+
+        caller.cancelAndJoin()
+
+        assertFalse(classificationReturned)
     }
 
     @Test

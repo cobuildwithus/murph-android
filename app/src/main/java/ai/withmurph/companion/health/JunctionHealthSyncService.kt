@@ -25,6 +25,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.guava.await
@@ -184,6 +186,20 @@ internal fun permissionOutcomeAllowsCurrentGrantClassification(
     outcome is PermissionOutcome.Success ||
         outcome is PermissionOutcome.NotPrompted
 
+/**
+ * Vital can cancel its result after Health Connect has already committed a grant.
+ * In that case the OS grant is authoritative, but caller cancellation must still
+ * stop the flow normally.
+ */
+internal suspend fun permissionRequestOutcomeAllowsCurrentGrantClassification(
+    outcome: Deferred<PermissionOutcome>,
+): Boolean = try {
+    permissionOutcomeAllowsCurrentGrantClassification(outcome.await())
+} catch (_: CancellationException) {
+    currentCoroutineContext().ensureActive()
+    true
+}
+
 class JunctionHealthSyncService(
     context: Context,
     private val environment: AppEnvironment,
@@ -202,7 +218,7 @@ class JunctionHealthSyncService(
     suspend fun permissionRequestCompleted(
         outcome: Deferred<PermissionOutcome>,
     ): HealthPermissionRequestResult {
-        if (!permissionOutcomeAllowsCurrentGrantClassification(outcome.await())) {
+        if (!permissionRequestOutcomeAllowsCurrentGrantClassification(outcome)) {
             return HealthPermissionRequestResult.NoActiveResource
         }
         manager.reloadPermissions()
