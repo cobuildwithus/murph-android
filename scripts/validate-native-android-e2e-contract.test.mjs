@@ -216,6 +216,42 @@ test("a failed journey contains only the passed prefix and one allowlisted termi
   }, "pr"));
 });
 
+test("sign-out diagnostics remain fixed allowlisted codes", () => {
+  const codes = [
+    "sign_out_failed",
+    "sign_out_settings_unavailable",
+    "sign_out_action_unavailable",
+    "sign_out_preflight_failed",
+    "sign_out_address_book_settle_failed",
+    "sign_out_health_reset_failed",
+    "sign_out_auth_verification_failed",
+    "sign_out_privy_failed",
+    "sign_out_persistence_failed",
+    "sign_out_unclassified_app_failure",
+    "sign_out_completion_pending",
+    "sign_out_session_unchanged",
+    "sign_out_login_surface_unavailable",
+  ];
+  const failedFor = (code) => ({
+    contractVersion: 1,
+    mode: "pr",
+    result: "failed",
+    stages: [
+      ...PR_STAGES.slice(0, 9).map((name) => ({ name, status: "passed" })),
+      { code, name: "sign_out", status: "failed" },
+    ],
+  });
+
+  codes.forEach((code) => {
+    const failed = failedFor(code);
+    assert.deepEqual(validateStageSummary(failed, "pr"), failed);
+  });
+  assert.throws(() => validateStageSummary(
+    failedFor("sign_out_private_message"),
+    "pr",
+  ));
+});
+
 test("instrumentation transport accepts exactly one bounded allowlisted summary", () => {
   const summary = passedSummary("pr", PR_STAGES);
   const line = `${STAGE_SUMMARY_STDOUT_PREFIX}${JSON.stringify(summary)}`;

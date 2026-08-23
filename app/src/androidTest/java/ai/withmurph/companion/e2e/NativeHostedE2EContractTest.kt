@@ -16,6 +16,31 @@ class NativeHostedE2EContractTest {
     private val nowEpochSeconds = 2_000_000_000L
 
     @Test
+    fun signOutAppFailuresExportOnlyFixedCodes() {
+        val expected = mapOf(
+            "We couldn't verify which account to sign out. Check your connection and try again." to
+                NativeHostedE2EFailureCode.SignOutPreflightFailed,
+            "We couldn't safely start signing out. Keep Murph open and try again." to
+                NativeHostedE2EFailureCode.SignOutPreflightFailed,
+            "We couldn't safely settle the address-book update. Check your connection and try again." to
+                NativeHostedE2EFailureCode.SignOutAddressBookSettleFailed,
+            "We couldn't safely reset health sync. Keep Murph open and try again." to
+                NativeHostedE2EFailureCode.SignOutHealthResetFailed,
+            "We couldn't verify which account is signed in. Check your connection and try again." to
+                NativeHostedE2EFailureCode.SignOutAuthVerificationFailed,
+            "We couldn't finish signing out. Try once more." to
+                NativeHostedE2EFailureCode.SignOutPrivyFailed,
+            "We couldn't safely finish signing out. Keep Murph open and try again." to
+                NativeHostedE2EFailureCode.SignOutPersistenceFailed,
+            "unexpected" to NativeHostedE2EFailureCode.SignOutUnclassifiedAppFailure,
+        )
+
+        expected.forEach { (message, code) ->
+            assertEquals(code, nativeHostedE2ESignOutAppFailure(message))
+        }
+    }
+
+    @Test
     fun dispatchConfigurationRequiresExactSourceOriginModeAndLifecycle() {
         val configuration = NativeHostedE2EDispatchConfiguration.require(validArguments(), nowEpochSeconds)
 
