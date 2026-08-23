@@ -433,5 +433,14 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   assert.match(gradle, /setOf\("synthetic", "hostedE2E", "productionCanary"\)/u);
   assert.doesNotMatch(gradle, /setOf\("synthetic", "debug", "productionCanary"\)/u);
   assert.match(workflow, /pixel6Api35HostedE2EAndroidTest/u);
+  assert.match(
+    workflow,
+    /-Pandroid\.testInstrumentationRunnerArguments\.murphHostedE2eEnabled=true/u,
+  );
+  assert.doesNotMatch(workflow, /export NATIVE_ANDROID_E2E_ENABLED=/u);
+  assert.doesNotMatch(
+    gradle,
+    /"murphHostedE2eEnabled" to "NATIVE_ANDROID_E2E_ENABLED"/u,
+  );
   assert.doesNotMatch(workflow, /pixel6Api35DebugAndroidTest/u);
 });
