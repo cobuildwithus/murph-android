@@ -293,17 +293,18 @@ export function extractStageSummaryFromInstrumentationLog(rawLog, expectedMode) 
   if (payloads.length === 0) {
     return inferStageSummaryFromAllowlistedFailure(rawLog, expectedMode);
   }
+  const uniquePayloads = [...new Set(payloads)];
   if (
-    payloads.length !== 1
-    || payloads[0].length === 0
-    || Buffer.byteLength(payloads[0], "utf8") > MAX_STAGE_SUMMARY_BYTES
+    uniquePayloads.length !== 1
+    || uniquePayloads[0].length === 0
+    || Buffer.byteLength(uniquePayloads[0], "utf8") > MAX_STAGE_SUMMARY_BYTES
   ) {
     throw new Error("Invalid native Android hosted E2E instrumentation log.");
   }
 
   let rawSummary;
   try {
-    rawSummary = JSON.parse(payloads[0]);
+    rawSummary = JSON.parse(uniquePayloads[0]);
   } catch {
     throw new Error("Invalid native Android hosted E2E instrumentation log.");
   }
