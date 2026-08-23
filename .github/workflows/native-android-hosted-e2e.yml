@@ -238,8 +238,7 @@ jobs:
             ./gradlew --no-daemon --stacktrace \
               "${TEST_TASK}" \
               -PMURPH_ANDROID_TEST_BUILD_TYPE="${BUILD_TYPE}" \
-              -Pandroid.testInstrumentationRunnerArguments.murphHostedE2eEnabled=true \
-              -Pandroid.testInstrumentationRunnerArguments.class=ai.withmurph.companion.e2e.NativeHostedE2EContractTest,ai.withmurph.companion.e2e.NativeHostedE2ETest \
+              -PMURPH_ANDROID_E2E_ENABLED=true \
               -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect \
               >>"${RAW_LOG}" 2>&1
             GRADLE_STATUS=$?
