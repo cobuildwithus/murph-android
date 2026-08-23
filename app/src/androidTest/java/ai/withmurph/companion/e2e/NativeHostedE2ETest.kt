@@ -257,7 +257,7 @@ class NativeHostedE2ETest {
             clickText("Send code", 20_000)
         }
 
-        waitUntil(90_000) {
+        waitForConditionOrTimeout(90_000) {
             hasVerificationCodeField() || hasVisibleText(OTP_REQUEST_ERROR)
         }
         if (!hasVerificationCodeField()) {
@@ -276,7 +276,7 @@ class NativeHostedE2ETest {
         if (submissionDecision == NativeHostedE2ECodeSubmissionDecision.TapSignIn) {
             clickText("Sign in", 20_000)
         }
-        waitUntil(180_000) {
+        waitForConditionOrTimeout(180_000) {
             isPostAuthenticationSurface() || hasVisibleText(OTP_CODE_ERROR)
         }
         if (!isPostAuthenticationSurface()) {
