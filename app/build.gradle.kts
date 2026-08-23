@@ -63,7 +63,6 @@ val productionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
 val instrumentationBuildType = providers.gradleProperty("MURPH_ANDROID_TEST_BUILD_TYPE")
     .orElse("synthetic")
 val hostedE2EInstrumentationArguments = mapOf(
-    "murphHostedE2eEnabled" to "NATIVE_ANDROID_E2E_ENABLED",
     "murphHostedE2eContractVersion" to "NATIVE_ANDROID_E2E_CONTRACT_VERSION",
     "murphHostedE2eCorrelationId" to "NATIVE_ANDROID_E2E_CORRELATION_ID",
     "murphHostedE2eDispatchExpiresAt" to "NATIVE_ANDROID_E2E_DISPATCH_EXPIRES_AT",
