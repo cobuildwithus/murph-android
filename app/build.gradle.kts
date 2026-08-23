@@ -62,6 +62,8 @@ val productionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
     .orElse("https://www.withmurph.ai")
 val instrumentationBuildType = providers.gradleProperty("MURPH_ANDROID_TEST_BUILD_TYPE")
     .orElse("synthetic")
+val hostedE2EEnabled = providers.gradleProperty("MURPH_ANDROID_E2E_ENABLED")
+    .orElse("false")
 val hostedE2EInstrumentationArguments = mapOf(
     "murphHostedE2eContractVersion" to "NATIVE_ANDROID_E2E_CONTRACT_VERSION",
     "murphHostedE2eCorrelationId" to "NATIVE_ANDROID_E2E_CORRELATION_ID",
@@ -130,6 +132,17 @@ android {
             providers.environmentVariable(environmentName).orNull?.let { value ->
                 testInstrumentationRunnerArguments[argument] = value
             }
+        }
+        val liveHostedE2E = hostedE2EEnabled.get().also { value ->
+            require(value == "true" || value == "false") {
+                "MURPH_ANDROID_E2E_ENABLED must be true or false."
+            }
+        }
+        testInstrumentationRunnerArguments["murphHostedE2eEnabled"] = liveHostedE2E
+        if (liveHostedE2E == "true") {
+            testInstrumentationRunnerArguments["class"] =
+                "ai.withmurph.companion.e2e.NativeHostedE2EContractTest," +
+                    "ai.withmurph.companion.e2e.NativeHostedE2ETest"
         }
 
         buildConfigField("String", "PRIVY_APP_ID", privyAppId.get().asBuildConfigString())

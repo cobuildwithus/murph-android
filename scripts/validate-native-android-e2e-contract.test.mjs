@@ -344,7 +344,6 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /environment: native-android-hosted-e2e-/u);
   assert.match(workflow, /timeout-minutes: 55/u);
-  assert.match(workflow, /NativeHostedE2EContractTest,ai\.withmurph\.companion\.e2e\.NativeHostedE2ETest/u);
   assert.match(workflow, /ANDROID_USER_HOME/u);
   assert.match(
     workflow,
@@ -427,16 +426,24 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   const gradle = await readFile(path.join(ROOT, "app", "build.gradle.kts"), "utf8");
   assert.match(gradle, /MURPH_ANDROID_TEST_BUILD_TYPE/u);
   assert.match(gradle, /\.orElse\("synthetic"\)/u);
+  assert.match(gradle, /MURPH_ANDROID_E2E_ENABLED/u);
+  assert.match(gradle, /MURPH_ANDROID_E2E_ENABLED must be true or false/u);
+  assert.match(
+    gradle,
+    /testInstrumentationRunnerArguments\["murphHostedE2eEnabled"\] = liveHostedE2E/u,
+  );
+  assert.match(
+    gradle,
+    /NativeHostedE2EContractTest," \+\s+"ai\.withmurph\.companion\.e2e\.NativeHostedE2ETest/u,
+  );
   assert.match(gradle, /create\("hostedE2E"\)/u);
   assert.match(gradle, /initWith\(getByName\("debug"\)\)/u);
   assert.match(gradle, /create\("productionCanary"\)/u);
   assert.match(gradle, /setOf\("synthetic", "hostedE2E", "productionCanary"\)/u);
   assert.doesNotMatch(gradle, /setOf\("synthetic", "debug", "productionCanary"\)/u);
   assert.match(workflow, /pixel6Api35HostedE2EAndroidTest/u);
-  assert.match(
-    workflow,
-    /-Pandroid\.testInstrumentationRunnerArguments\.murphHostedE2eEnabled=true/u,
-  );
+  assert.match(workflow, /-PMURPH_ANDROID_E2E_ENABLED=true/u);
+  assert.doesNotMatch(workflow, /-Pandroid\.testInstrumentationRunnerArguments\./u);
   assert.doesNotMatch(workflow, /export NATIVE_ANDROID_E2E_ENABLED=/u);
   assert.doesNotMatch(
     gradle,
