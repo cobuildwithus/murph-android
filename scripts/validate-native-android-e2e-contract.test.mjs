@@ -252,15 +252,25 @@ test("sign-out diagnostics remain fixed allowlisted codes", () => {
   ));
 });
 
-test("instrumentation transport accepts exactly one bounded allowlisted summary", () => {
+test("instrumentation transport accepts repeated identical bounded summaries", () => {
   const summary = passedSummary("pr", PR_STAGES);
   const line = `${STAGE_SUMMARY_STDOUT_PREFIX}${JSON.stringify(summary)}`;
   assert.deepEqual(
     extractStageSummaryFromInstrumentationLog(`private provider prose\n${line}\n`, "pr"),
     summary,
   );
+  assert.deepEqual(
+    extractStageSummaryFromInstrumentationLog(`${line}\n${line}`, "pr"),
+    summary,
+  );
   assert.throws(() => extractStageSummaryFromInstrumentationLog("no summary", "pr"));
-  assert.throws(() => extractStageSummaryFromInstrumentationLog(`${line}\n${line}`, "pr"));
+  const conflictingLine = `${STAGE_SUMMARY_STDOUT_PREFIX}${JSON.stringify(
+    infrastructureFailureSummary("pr", "gradle_failed"),
+  )}`;
+  assert.throws(() => extractStageSummaryFromInstrumentationLog(
+    `${line}\n${conflictingLine}`,
+    "pr",
+  ));
   assert.throws(() => extractStageSummaryFromInstrumentationLog(
     `${STAGE_SUMMARY_STDOUT_PREFIX}{not-json}`,
     "pr",
