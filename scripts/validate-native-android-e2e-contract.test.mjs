@@ -347,6 +347,12 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   assert.match(workflow, /ANDROID_USER_HOME/u);
   assert.match(
     workflow,
+    /managed_device_android_test_additional_output/u,
+  );
+  assert.match(workflow, /native-android-hosted-e2e-summary\.txt/u);
+  assert.match(workflow, /SUMMARY_SOURCE_LOG="\$\{SUMMARY_OUTPUT_FILES\[0\]\}"/u);
+  assert.match(
+    workflow,
     /privacy-safe summary finalizer below\.\n\s+set \+e\n\s+set -uo pipefail/u,
   );
   assert.doesNotMatch(workflow, /upload-artifact|download-artifact|\btee\b/u);
@@ -419,6 +425,11 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
     /while \(System\.currentTimeMillis\(\) < deadline\) \{[\s\S]*?if \(isLaunchConsentSheet\(\)\)[\s\S]*?if \(hasVisibleText\("Consent needed"\)\)/u,
   );
   assert.doesNotMatch(liveDriver, /ScreenshotActivity/u);
+  assert.match(liveDriver, /PlatformTestStorageRegistry\.getInstance\(\)/u);
+  assert.match(
+    liveDriver,
+    /openOutputFile\(NATIVE_ANDROID_STAGE_SUMMARY_FILE\)/u,
+  );
 
   const verify = await readFile(path.join(ROOT, "scripts", "verify.sh"), "utf8");
   assert.match(verify, /node --test scripts\/validate-native-android-e2e-contract\.test\.mjs/u);
