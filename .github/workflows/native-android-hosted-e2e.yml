@@ -248,20 +248,21 @@ jobs:
           unset NATIVE_ANDROID_E2E_FIXED_OTP NATIVE_ANDROID_E2E_LOGIN_IDENTIFIER
 
           SUMMARY_SOURCE_LOG="${RAW_LOG}"
-          SUMMARY_OUTPUT_ROOT="app/build/outputs/managed_device_android_test_additional_output"
-          SUMMARY_OUTPUT_FILES=()
-          if [[ -d "${SUMMARY_OUTPUT_ROOT}" ]]; then
-            mapfile -d '' -t SUMMARY_OUTPUT_FILES < <(
-              find "${SUMMARY_OUTPUT_ROOT}" -type f \
-                -name 'native-android-hosted-e2e-summary.txt' -print0
+          SUMMARY_LOGCAT_ROOT="app/build/outputs/androidTest-results/managedDevice"
+          SUMMARY_LOGCAT_FILES=()
+          if [[ -d "${SUMMARY_LOGCAT_ROOT}" ]]; then
+            mapfile -d '' -t SUMMARY_LOGCAT_FILES < <(
+              find "${SUMMARY_LOGCAT_ROOT}" -type f \
+                -name 'logcat-ai.withmurph.companion.e2e.NativeHostedE2ETest-protectedHostedJourney.txt' \
+                -print0
             )
           fi
 
-          if [[ ${#SUMMARY_OUTPUT_FILES[@]} -gt 1 ]]; then
+          if [[ ${#SUMMARY_LOGCAT_FILES[@]} -gt 1 ]]; then
             EXTRACT_STATUS=1
           else
-            if [[ ${#SUMMARY_OUTPUT_FILES[@]} -eq 1 ]]; then
-              SUMMARY_SOURCE_LOG="${SUMMARY_OUTPUT_FILES[0]}"
+            if [[ ${#SUMMARY_LOGCAT_FILES[@]} -eq 1 ]]; then
+              SUMMARY_SOURCE_LOG="${SUMMARY_LOGCAT_FILES[0]}"
             fi
             node scripts/validate-native-android-e2e-contract.mjs \
               extract-stage-summary \

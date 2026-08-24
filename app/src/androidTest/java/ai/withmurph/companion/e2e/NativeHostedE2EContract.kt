@@ -7,8 +7,6 @@ import java.net.URI
 
 internal const val NATIVE_ANDROID_STAGE_SUMMARY_PREFIX =
     "MURPH_NATIVE_ANDROID_E2E_STAGE_SUMMARY_JSON:"
-internal const val NATIVE_ANDROID_STAGE_SUMMARY_FILE =
-    "native-android-hosted-e2e-summary.txt"
 
 internal enum class NativeHostedE2EMode(val rawValue: String) {
     Pr("pr"),

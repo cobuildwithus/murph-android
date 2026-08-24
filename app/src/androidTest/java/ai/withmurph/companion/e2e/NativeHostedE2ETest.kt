@@ -9,6 +9,7 @@ import ai.withmurph.companion.core.InitialSetupStep
 import ai.withmurph.companion.health.probeGrantedHealthConnectReadPermission
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasClickAction
@@ -24,7 +25,6 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.platform.io.PlatformTestStorageRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
@@ -228,13 +228,7 @@ class NativeHostedE2ETest {
     }
 
     private fun publishStageSummary(summary: String) {
-        PlatformTestStorageRegistry.getInstance()
-            .openOutputFile(NATIVE_ANDROID_STAGE_SUMMARY_FILE)
-            .bufferedWriter(Charsets.UTF_8)
-            .use { output ->
-                output.write(summary)
-                output.newLine()
-            }
+        Log.i("MurphHostedE2E", summary)
         instrumentation.sendStatus(
             0,
             Bundle().apply { putString("stream", "$summary\n") },
