@@ -256,7 +256,10 @@ test("instrumentation transport accepts repeated identical bounded summaries", (
   const summary = passedSummary("pr", PR_STAGES);
   const line = `${STAGE_SUMMARY_STDOUT_PREFIX}${JSON.stringify(summary)}`;
   assert.deepEqual(
-    extractStageSummaryFromInstrumentationLog(`private provider prose\n${line}\n`, "pr"),
+    extractStageSummaryFromInstrumentationLog(
+      `08-24 01:48:37.000 I/MurphHostedE2E: ${line}\n`,
+      "pr",
+    ),
     summary,
   );
   assert.deepEqual(
@@ -347,10 +350,13 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
   assert.match(workflow, /ANDROID_USER_HOME/u);
   assert.match(
     workflow,
-    /managed_device_android_test_additional_output/u,
+    /app\/build\/outputs\/androidTest-results\/managedDevice/u,
   );
-  assert.match(workflow, /native-android-hosted-e2e-summary\.txt/u);
-  assert.match(workflow, /SUMMARY_SOURCE_LOG="\$\{SUMMARY_OUTPUT_FILES\[0\]\}"/u);
+  assert.match(
+    workflow,
+    /logcat-ai\.withmurph\.companion\.e2e\.NativeHostedE2ETest-protectedHostedJourney\.txt/u,
+  );
+  assert.match(workflow, /SUMMARY_SOURCE_LOG="\$\{SUMMARY_LOGCAT_FILES\[0\]\}"/u);
   assert.match(
     workflow,
     /privacy-safe summary finalizer below\.\n\s+set \+e\n\s+set -uo pipefail/u,
@@ -425,11 +431,8 @@ test("private workflow is source-bound, pinned, non-artifacting, and preserves s
     /while \(System\.currentTimeMillis\(\) < deadline\) \{[\s\S]*?if \(isLaunchConsentSheet\(\)\)[\s\S]*?if \(hasVisibleText\("Consent needed"\)\)/u,
   );
   assert.doesNotMatch(liveDriver, /ScreenshotActivity/u);
-  assert.match(liveDriver, /PlatformTestStorageRegistry\.getInstance\(\)/u);
-  assert.match(
-    liveDriver,
-    /openOutputFile\(NATIVE_ANDROID_STAGE_SUMMARY_FILE\)/u,
-  );
+  assert.match(liveDriver, /Log\.i\("MurphHostedE2E", summary\)/u);
+  assert.doesNotMatch(liveDriver, /PlatformTestStorageRegistry/u);
 
   const verify = await readFile(path.join(ROOT, "scripts", "verify.sh"), "utf8");
   assert.match(verify, /node --test scripts\/validate-native-android-e2e-contract\.test\.mjs/u);
