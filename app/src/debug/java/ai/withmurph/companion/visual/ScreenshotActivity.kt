@@ -716,6 +716,7 @@ private val NoOpActions = MurphActions(
     onOpenInitialOnboardingContact = {},
     onOpenConsentDocument = {},
     onOpenAppSettings = {},
+    onOpenAccountSettings = {},
     onOpenPrivacy = {},
     onOpenTerms = {},
     onOpenHealthNotice = {},

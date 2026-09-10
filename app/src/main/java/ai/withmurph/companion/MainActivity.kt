@@ -300,6 +300,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onOpenConsentDocument = { openUri(it) },
                         onOpenAppSettings = ::openAppSettings,
+                        onOpenAccountSettings = {
+                            openUri(graph.config.backendBaseUrl.trimEnd('/') + "/settings/accounts")
+                        },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
