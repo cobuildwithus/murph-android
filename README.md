@@ -395,6 +395,8 @@ See `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, and `SOURCE_BASES.md` before 
 
 ## Auth transition release gate
 
+An interrupted initial secure-record write is recovered by committing a signed-out record. The unfinished bytes never authorize a session or SDK fallback. Failed recovery retains the orphan for retry; corrupted committed records and unavailable Keystore keys still fail closed. The existing AppSession tears down Junction before showing usable sign-in again.
+
 The current app uses the first-party companion auth endpoints. Its existing
 Privy dependency only restores, refreshes and signs out installed sessions while
 a same-member durable handoff completes. The local ownership key stays stable

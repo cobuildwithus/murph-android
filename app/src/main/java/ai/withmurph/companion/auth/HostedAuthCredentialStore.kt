@@ -23,6 +23,11 @@ class HostedAuthCredentialStore(context: Context) : HostedAuthCredentialStoring 
         val encoded = try {
             readBounded()
         } catch (error: FileNotFoundException) {
+            if (hasInterruptedInitialWrite()) {
+                // An interrupted initial write has no committed authority.
+                // Retire fallback durably; never adopt its unfinished bytes.
+                return@guarded HostedAuthStoredState.SignedOut(null).also { save(it) }
+            }
             if (hasRecordFiles()) throw error
             return@guarded null
         }
@@ -41,13 +46,16 @@ class HostedAuthCredentialStore(context: Context) : HostedAuthCredentialStoring 
         cipher.updateAAD(AAD)
         require(cipher.iv.size == 12)
         val encoded = byteArrayOf(1) + cipher.iv + cipher.doFinal(plaintext)
+        val recoveringInitialWrite = hasInterruptedInitialWrite()
         val output = file.startWrite()
         try {
             output.write(encoded)
             output.fd.sync()
             file.finishWrite(output)
         } catch (error: Exception) {
-            file.failWrite(output)
+            // Keep the orphan as a retryable retirement witness if recovery
+            // itself is interrupted. Deleting it could resurrect SDK fallback.
+            if (recoveringInitialWrite) output.close() else file.failWrite(output)
             throw error
         }
         // AtomicFile reports some rename failures through platform logging.
@@ -57,6 +65,10 @@ class HostedAuthCredentialStore(context: Context) : HostedAuthCredentialStoring 
 
     private fun hasRecordFiles(): Boolean = listOf("", ".bak", ".new")
         .any { File(file.baseFile.path + it).exists() }
+
+    private fun hasInterruptedInitialWrite(): Boolean = !file.baseFile.exists()
+        && !File(file.baseFile.path + ".bak").exists()
+        && File(file.baseFile.path + ".new").exists()
 
     private fun readBounded(): ByteArray = file.openRead().use { input ->
         val bytes = ByteArray(MAX_BYTES + 1)
