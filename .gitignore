@@ -10,6 +10,7 @@ captures/
 externalNativeBuild/
 node_modules/
 output-packages/
+.artifacts/
 
 # Signing material and local credentials
 *.jks
