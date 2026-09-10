@@ -6,7 +6,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 
 ## Included
 
-- Murph-owned phone and email OTP sign-in, with a temporary reader for existing Privy sessions.
+- Murph-owned phone and email OTP sign-in, with secure first-party session restoration.
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
@@ -49,19 +49,14 @@ The standard Gradle wrapper is checked in. Verify the pinned version with:
 ./gradlew --version
 ```
 
-Configure the public mobile client identifiers in `~/.gradle/gradle.properties`:
+Configure optional backend overrides in the local Gradle properties:
 
 ```properties
-MURPH_PRIVY_APP_ID=your-privy-app-id
-MURPH_PRIVY_APP_CLIENT_ID=your-android-app-client-id
 MURPH_BACKEND_BASE_URL_DEV=https://linq-webhook-dev.ourrevolution.wtf
 MURPH_BACKEND_BASE_URL_PROD=https://www.withmurph.ai
 ```
 
-Never put the Privy app secret in this app. The Android Privy app client must allow:
-
-- release package: `ai.withmurph.app`
-- debug package: `ai.withmurph.app.dev`
+No authentication-provider client identifiers or secrets are compiled into the app.
 
 Apply the accompanying backend patch before testing. Current Murph `main` rejects `platform: "android"`; the patch also makes sync status source-scoped so an Apple Health receipt cannot make the Android app report Health Connect as synced.
 
@@ -72,15 +67,15 @@ Apply the accompanying backend patch before testing. Current Murph `main` reject
 ```
 
 The verification script runs unit tests, lint, and assembly for both Debug and
-Release. Release tasks fail before compilation when either public Privy
-identifier is blank or the production backend URL is not absolute HTTPS.
+Release. Release tasks fail before compilation when the production backend
+URL is not absolute HTTPS.
 
 The native UI smoke suite launches the same debug-only synthetic scenarios used
 for exact-head visual evidence, renders the production Compose surfaces, and
 asserts their semantics without pixel snapshots. A uniquely packaged synthetic
 build variant uses a plain `Application`, removes AndroidX Startup providers,
 and has no network, Contacts, or Health Connect data permissions. It therefore
-does not initialize live Privy, Junction or member work. Dedicated auth boundary tests use only synthetic secure records and intercepted HTTP requests. Run it on
+does not initialize live authentication, Junction or member work. Dedicated auth boundary tests use only synthetic secure records and intercepted HTTP requests. Run it on
 an attached device with:
 
 ```bash
@@ -367,7 +362,7 @@ message.
 An assembled Release APK or AAB is not authorization to publish. Before any
 Play upload, run `:app:checkPlaySubmissionReadiness` from a clean checkout at
 the exact source commit with the exact signed AAB and the ignored private
-operator assertions. The gate rejects synthetic Privy identifiers and
+operator assertions. The gate rejects
 non-production backend hosts, validates the bundle with the build's pinned
 bundletool, requires complete per-entry coverage by the approved upload signer,
 treats its base manifest as authoritative, requires its SDK, backup/network,
@@ -394,19 +389,19 @@ Before a Play release:
 
 See `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, and `SOURCE_BASES.md` before extending the app.
 
-## Auth transition release gate
+## Authentication retirement release gate
 
 The existing AndroidX Core AtomicFile stages writes consistently on API 28 and newer. An interrupted initial secure-record write, including an empty write, is recovered by committing a signed-out record. The unfinished bytes never authorize a session or SDK fallback. Failed recovery retains the orphan for retry; corrupted committed records and unavailable Keystore keys still fail closed. The existing AppSession tears down Junction before showing usable sign-in again.
 
-The current app uses the first-party companion auth endpoints. Its existing
-Privy dependency only restores, refreshes and signs out installed sessions while
-a same-member durable handoff completes. The local ownership key stays stable
-through that exchange. See [authentication ownership](ARCHITECTURE.md#authentication-ownership-and-transition)
-for storage, failure and retirement rules.
+The current app uses only first-party companion auth endpoints and the same
+secure record as [transition PR 39](https://github.com/cobuildwithus/murph-android/pull/39).
+Migrated installations retain their credential and local member key across SDK
+removal. An absent credential requires normal email/SMS login; unreadable storage
+and expired offline sessions remain retryable. This build cannot exchange an
+SDK-only credential. See [authentication ownership](ARCHITECTURE.md#authentication-ownership-and-transition).
 
-Backend and shared settings qualification must precede app distribution. Real
-generated-code delivery, installed-session exchange, dormant/skipped-version
-updates, signed-device renewal and genuine browser settings remain explicit
-release checks. The old hosted E2E fixed Privy code does not qualify these paths.
-CI uses public placeholder client identifiers for compilation; it does not
-qualify the release identifiers or provider behavior.
+Keep this release unpublished until the backend [retirement gates](https://github.com/cobuildwithus/murph/blob/feat/better-auth-retirement/docs/hosted-auth-migration.md)
+pass. Qualify generated-code delivery, installed upgrades, users who skipped the
+transition, signed-device renewal, and real browser settings. The old fixed
+provider-code E2E lane cannot establish those outcomes. Backend review and local
+synthetic tests do not qualify app distribution.

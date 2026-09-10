@@ -75,8 +75,6 @@ class NativeHostedE2ETest {
             require(BuildConfig.MURPH_ENVIRONMENT == dispatch.mode.expectedEnvironment)
             require(BuildConfig.APPLICATION_ID == dispatch.mode.expectedApplicationId)
             require(targetContext.packageName == dispatch.mode.expectedApplicationId)
-            require(BuildConfig.PRIVY_APP_ID.isNotBlank())
-            require(BuildConfig.PRIVY_APP_CLIENT_ID.isNotBlank())
         }
 
         val identity = runCatching {

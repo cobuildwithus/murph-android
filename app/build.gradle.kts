@@ -54,8 +54,6 @@ apply(from = rootProject.file("gradle/play-release.gradle.kts"))
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
-val privyAppId = providers.gradleProperty("MURPH_PRIVY_APP_ID").orElse("")
-val privyAppClientId = providers.gradleProperty("MURPH_PRIVY_APP_CLIENT_ID").orElse("")
 val developmentBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_DEV")
     .orElse("https://linq-webhook-dev.ourrevolution.wtf")
 val productionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
@@ -79,30 +77,13 @@ val hostedE2EInstrumentationArguments = mapOf(
 )
 
 fun publicReleaseConfigurationSha256(
-    appId: String,
-    appClientId: String,
     backend: String,
 ): String = MessageDigest.getInstance("SHA-256")
-    .digest("$appId\u0000$appClientId\u0000$backend".toByteArray(Charsets.UTF_8))
+    .digest(backend.toByteArray(Charsets.UTF_8))
     .joinToString("") { byte -> "%02x".format(byte) }
 
 val validateReleaseConfiguration by tasks.registering {
     doLast {
-        val requiredValues = mapOf(
-            "MURPH_PRIVY_APP_ID" to privyAppId.orNull,
-            "MURPH_PRIVY_APP_CLIENT_ID" to privyAppClientId.orNull,
-        )
-        val missing = requiredValues
-            .filterValues { it.isNullOrBlank() }
-            .keys
-            .sorted()
-        if (missing.isNotEmpty()) {
-            throw GradleException(
-                "Release configuration is missing: ${missing.joinToString()}. " +
-                    "Set the public native-client values in Gradle properties.",
-            )
-        }
-
         val backendValue = productionBackend.get()
         val backend = runCatching { URI(backendValue) }.getOrNull()
         if (backend?.scheme != "https" || backend.host == null) {
@@ -145,10 +126,7 @@ android {
                     "ai.withmurph.companion.e2e.NativeHostedE2ETest"
         }
 
-        buildConfigField("String", "PRIVY_APP_ID", privyAppId.get().asBuildConfigString())
-        buildConfigField("String", "PRIVY_APP_CLIENT_ID", privyAppClientId.get().asBuildConfigString())
         buildConfigField("String", "JUNCTION_SDK_VERSION", "\"5.0.2\"")
-        buildConfigField("String", "PRIVY_SDK_VERSION", "\"0.12.0\"")
     }
 
     buildTypes {
@@ -278,8 +256,6 @@ val writePlaySourceMetadata = tasks.register<WritePlaySourceMetadata>("writePlay
     workingTreeState.set(playWorkingTreeState)
     releaseConfigurationSha256.set(providers.provider {
         publicReleaseConfigurationSha256(
-            privyAppId.get(),
-            privyAppClientId.get(),
             productionBackend.get(),
         )
     })
@@ -313,7 +289,6 @@ dependencies {
     implementation(libs.coroutines.guava)
     implementation(libs.androidx.work.runtime)
 
-    implementation(libs.privy.core)
     implementation(libs.vital.client)
     implementation(libs.vital.health.connect)
 
