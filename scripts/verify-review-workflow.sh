@@ -47,7 +47,7 @@ if bash scripts/review-pr.sh 1 output-packages/review.md --prompt bypass >/dev/n
   exit 1
 fi
 
-grep -Fq 'model="gpt-5.6-sol"' scripts/review-gpt.config.sh
+grep -Fq 'model="gpt-6-pro"' scripts/review-gpt.config.sh
 grep -Fq 'app_connector="github"' scripts/review-gpt.config.sh
 grep -Fq 'repo_context_url="https://github.com/cobuildwithus/murph-android"' scripts/review-gpt.config.sh
 grep -Fq 'attach_artifacts=0' scripts/review-gpt.config.sh

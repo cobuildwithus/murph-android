@@ -146,7 +146,7 @@ repo_context_url="https://github.com/cobuildwithus/murph-android"
 attach_artifacts=0
 preset_dir="scripts/chatgpt-review-presets"
 app_connector="github"
-model="gpt-5.6-sol"
+model="gpt-6-pro"
 thinking="current"
 
 review_gpt_register_dir_preset "android-review" "android-deep-review.md" \
