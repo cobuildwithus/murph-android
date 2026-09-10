@@ -2,7 +2,7 @@ package ai.withmurph.companion.auth
 
 import android.content.Context
 import android.content.ContextWrapper
-import android.util.AtomicFile
+import androidx.core.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import ai.withmurph.companion.app.AppConfig
@@ -20,7 +20,13 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class HostedAuthInterruptedWriteTest {
-    @Test fun interruptedFirstWriteRetiresFallbackAndReopensLoginThroughSessionTeardown() = runBlocking {
+    @Test fun interruptedFirstWriteRetiresFallbackAndReopensLoginThroughSessionTeardown() =
+        assertInterruptedWriteRecovery("unfinished credential must never authorize".toByteArray())
+
+    @Test fun emptyInterruptedFirstWriteRetiresFallbackAndReopensLoginThroughSessionTeardown() =
+        assertInterruptedWriteRecovery(byteArrayOf())
+
+    private fun assertInterruptedWriteRecovery(stagedBytes: ByteArray) = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Context>()
         val directory = File(app.noBackupFilesDir, "auth-interruption-${UUID.randomUUID()}").apply { mkdirs() }
         val preferences = app.getSharedPreferences(directory.name, Context.MODE_PRIVATE)
@@ -34,7 +40,7 @@ class HostedAuthInterruptedWriteTest {
             HostedAuthCredentialStore(context(seed)).save(HostedAuthStoredState.SignedOut(null))
             val file = AtomicFile(File(directory, "hosted-auth-v1"))
             file.startWrite().use { output ->
-                output.write("unfinished credential must never authorize".toByteArray())
+                output.write(stagedBytes)
                 output.fd.sync()
             } // Simulate process interruption: neither finishWrite nor failWrite.
             assertFalse(file.baseFile.exists())

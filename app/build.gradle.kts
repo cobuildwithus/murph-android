@@ -217,6 +217,13 @@ android {
         unitTests.isIncludeAndroidResources = false
         managedDevices {
             localDevices {
+                for (api in listOf(28, 29)) {
+                    create("pixel2Api$api") {
+                        device = "Pixel 2"
+                        apiLevel = api
+                        systemImageSource = "google"
+                    }
+                }
                 create("pixel2Api30") {
                     device = "Pixel 2"
                     apiLevel = 30
