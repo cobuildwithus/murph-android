@@ -3,7 +3,7 @@ package ai.withmurph.companion.auth
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.AtomicFile
+import androidx.core.util.AtomicFile
 import org.json.JSONObject
 import java.io.File
 import java.io.FileNotFoundException
@@ -16,6 +16,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** One app-private, non-backed-up AES-GCM record with an Android Keystore key. */
 class HostedAuthCredentialStore(context: Context) : HostedAuthCredentialStoring {
+    // AndroidX keeps first-write staging consistent on API 28 and newer.
     private val file = AtomicFile(File(context.noBackupFilesDir, "hosted-auth-v1"))
 
     @Synchronized

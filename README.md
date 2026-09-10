@@ -87,11 +87,12 @@ an attached device with:
 ./gradlew connectedSyntheticAndroidTest
 ```
 
-For the deterministic Pixel 2 / API 30 automated-test device used by GitHub
-Actions, run:
+GitHub Actions runs the synthetic suite on API 28, 29 and 30 to cover older
+platform storage behavior as well as the automated-test device. Run the same
+managed-device checks with:
 
 ```bash
-./gradlew pixel2Api30SyntheticAndroidTest
+./gradlew pixel2Api28SyntheticAndroidTest pixel2Api29SyntheticAndroidTest pixel2Api30SyntheticAndroidTest
 ```
 
 On hosts without hardware rendering, append
@@ -395,7 +396,7 @@ See `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, and `SOURCE_BASES.md` before 
 
 ## Auth transition release gate
 
-An interrupted initial secure-record write is recovered by committing a signed-out record. The unfinished bytes never authorize a session or SDK fallback. Failed recovery retains the orphan for retry; corrupted committed records and unavailable Keystore keys still fail closed. The existing AppSession tears down Junction before showing usable sign-in again.
+The existing AndroidX Core AtomicFile stages writes consistently on API 28 and newer. An interrupted initial secure-record write, including an empty write, is recovered by committing a signed-out record. The unfinished bytes never authorize a session or SDK fallback. Failed recovery retains the orphan for retry; corrupted committed records and unavailable Keystore keys still fail closed. The existing AppSession tears down Junction before showing usable sign-in again.
 
 The current app uses the first-party companion auth endpoints. Its existing
 Privy dependency only restores, refreshes and signs out installed sessions while

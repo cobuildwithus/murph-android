@@ -113,7 +113,7 @@ switching; no auth operation creates a Health Connect connection.
 
 One versioned AES-GCM record in `noBackupFilesDir`, encrypted with an app-private
 Android Keystore key, stores either an active session or retirement. Updates use
-`AtomicFile`, explicit sync and ciphertext readback. An orphan initial `.new` file with no committed base or backup is recovered only by a durable signed-out write. A failed recovery keeps that orphan for retry; its unfinished bytes never authorize a member. Unreadable, malformed or undecryptable committed records never mean absence. SharedPreferences never stores a
+AndroidX Core's `AtomicFile`, explicit sync and ciphertext readback. Using the same staged-write implementation on API 28 and newer avoids the framework's older direct-to-base initial writes. An orphan initial `.new` file with no committed base or backup is recovered only by a durable signed-out write. A failed recovery keeps that orphan for retry; its unfinished bytes never authorize a member. Unreadable, malformed or undecryptable committed records never mean absence. SharedPreferences never stores a
 credential. Only absent first-party storage permits lazy Privy restoration. A
 same-member exchange rechecks the refreshed SDK identity and preserves its local
 member key; the new credential is returned only after secure persistence.

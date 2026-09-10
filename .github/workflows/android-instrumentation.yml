@@ -36,7 +36,9 @@ jobs:
           fi
       - name: Install compile SDK
         run: sdkmanager "platforms;android-36"
-      - name: Run managed-device UI smoke suite
+      - name: Run managed-device UI and auth suites on supported storage variants
         run: >-
-          ./gradlew --no-daemon pixel2Api30SyntheticAndroidTest
+          ./gradlew --no-daemon
+          pixel2Api28SyntheticAndroidTest pixel2Api29SyntheticAndroidTest
+          pixel2Api30SyntheticAndroidTest
           -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect
