@@ -30,9 +30,6 @@ class HostedAuthApiClient(
             .put("kind", method.wireValue()).put("value", value).put("code", code)
             .put("timeZone", TimeZone.getDefault().id)))
 
-    override suspend fun exchange(legacyCredential: String): HostedAuthSession =
-        session(request("exchange", credential = legacyCredential))
-
     override suspend fun renew(credential: String): HostedAuthSessionStatus {
         val response = request("session", credential = credential)
         return decode { HostedAuthSessionStatus(response.string("memberId"), Instant.parse(response.string("expiresAt"))) }

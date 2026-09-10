@@ -3,14 +3,10 @@ package ai.withmurph.companion.core
 import android.content.Intent
 import kotlinx.coroutines.CancellationException
 
-/** Temporary reader for installed sessions; it cannot create provider credentials. */
-interface LegacyAuthRestoring {
+interface AuthProvider {
     suspend fun currentState(): AuthSessionState
     suspend fun identityToken(): String
     suspend fun signOut()
-}
-
-interface AuthProvider : LegacyAuthRestoring {
     suspend fun sendCode(method: LoginMethod, destination: String)
     suspend fun confirmCode(method: LoginMethod, destination: String, code: String)
 

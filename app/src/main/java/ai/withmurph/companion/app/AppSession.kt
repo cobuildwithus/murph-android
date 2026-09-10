@@ -7356,7 +7356,6 @@ class AppSession(
             connectionIntent = intent,
             sdkVersions = mapOf(
                 "vital" to config.junctionSdkVersion,
-                "privy" to config.privySdkVersion,
             ),
             timeZone = ZoneId.systemDefault().id,
         )

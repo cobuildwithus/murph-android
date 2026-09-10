@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Looper
 import ai.withmurph.companion.api.HttpCompanionApi
 import ai.withmurph.companion.auth.LoginCoordinator
-import ai.withmurph.companion.auth.PrivyAuthService
 import ai.withmurph.companion.auth.HostedAuthApiClient
 import ai.withmurph.companion.auth.HostedAuthCredentialStore
 import ai.withmurph.companion.auth.HostedAuthService
@@ -30,7 +29,7 @@ class AppGraph private constructor(
     companion object {
         fun create(context: Context): AppGraph {
             check(Looper.myLooper() == Looper.getMainLooper()) {
-                "AppGraph and Privy must be initialized on the main thread"
+                "AppGraph must be initialized on the main thread"
             }
             val config = AppConfig.current.also(AppConfig::requireConfigured)
             val applicationScope = CoroutineScope(
@@ -39,13 +38,6 @@ class AppGraph private constructor(
             val auth = HostedAuthService(
                 api = HostedAuthApiClient(config.backendBaseUrl),
                 store = HostedAuthCredentialStore(context),
-                legacyFactory = {
-                    PrivyAuthService.create(
-                        context = context,
-                        appId = config.privyAppId,
-                        appClientId = config.privyAppClientId,
-                    )
-                },
             )
             val api = HttpCompanionApi(
                 baseUrl = config.backendBaseUrl,

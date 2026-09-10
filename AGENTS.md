@@ -1,7 +1,7 @@
 # Agent rules
 
 - Default to deletion and radical simplicity.
-- Keep Privy imports inside `auth/` and Junction/Health Connect imports inside `health/`.
+- Keep authentication behind `auth/` and Junction/Health Connect imports inside `health/`.
 - Only the app-private Android Keystore-backed auth record may persist a first-party session credential. Never place credentials in SharedPreferences, backups, logs, or URLs. Do not store or log health values, raw provider payloads, phone numbers, or email addresses.
 - Do not render “Synced” from local permission or SDK state.
 - Do not replace explicit connect/resume intent with implicit connection creation.

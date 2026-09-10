@@ -12,8 +12,6 @@ val junctionAndroidCommercialLicenseConfirmed = providers
     .gradleProperty("MURPH_JUNCTION_ANDROID_COMMERCIAL_LICENSE_CONFIRMED")
     .orElse(providers.environmentVariable("MURPH_JUNCTION_ANDROID_COMMERCIAL_LICENSE_CONFIRMED"))
     .orElse("false")
-val playPrivyAppId = providers.gradleProperty("MURPH_PRIVY_APP_ID").orElse("")
-val playPrivyAppClientId = providers.gradleProperty("MURPH_PRIVY_APP_CLIENT_ID").orElse("")
 val playProductionBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_PROD")
     .orElse("https://www.withmurph.ai")
 val playUploadCertificateSha256 = providers.environmentVariable(
@@ -43,11 +41,9 @@ val bundletoolCli = configurations.create("bundletoolCli") {
 dependencies.add(bundletoolCli.name, "com.android.tools.build:bundletool:1.18.0")
 
 fun playPublicConfigurationSha256(
-    appId: String,
-    appClientId: String,
     backend: String,
 ): String = MessageDigest.getInstance("SHA-256")
-    .digest("$appId\u0000$appClientId\u0000$backend".toByteArray(Charsets.UTF_8))
+    .digest(backend.toByteArray(Charsets.UTF_8))
     .joinToString("") { byte -> "%02x".format(byte) }
 
 fun readPomLicenses(pomFile: File): List<Map<String, String>> {
@@ -280,16 +276,6 @@ fun Exec.configurePlayArtifactEnvironment(assertionsRequired: Boolean) {
             )
         }
 
-        val publicIds = listOf(playPrivyAppId.get(), playPrivyAppClientId.get())
-        if (publicIds.any { value ->
-                value.isBlank() || value.contains("placeholder", ignoreCase = true)
-            }
-        ) {
-            throw GradleException(
-                "Play submission requires the registered production Privy public configuration.",
-            )
-        }
-
         val backend = runCatching { java.net.URI(playProductionBackend.get()) }.getOrNull()
         val host = backend?.host?.lowercase().orEmpty()
         if (
@@ -314,8 +300,6 @@ fun Exec.configurePlayArtifactEnvironment(assertionsRequired: Boolean) {
         environment(
             "MURPH_PLAY_EXPECTED_CONFIGURATION_SHA256",
             playPublicConfigurationSha256(
-                playPrivyAppId.get(),
-                playPrivyAppClientId.get(),
                 playProductionBackend.get(),
             ),
         )

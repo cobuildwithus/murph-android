@@ -52,10 +52,9 @@ class HostedAuthInterruptedWriteTest {
                     events += "verify"
                     return HostedAuthSession("member-new", "murph_auth_v1." + "b".repeat(32), instant.plusSeconds(3600))
                 }
-                override suspend fun exchange(legacyCredential: String): HostedAuthSession = error("Legacy exchange must stay retired")
                 override suspend fun renew(credential: String): HostedAuthSessionStatus = error("Fresh credential must not renew")
                 override suspend fun revoke(credential: String) = error("No committed credential to revoke")
-            }, store, { error("An orphan must never restore the SDK") }, { instant })
+            }, store, { instant })
             val local = SharedPreferencesLocalState(preferences).apply { memberKey = "previous-local-member" }
             val health = RecoveryHealth(events)
             val api = object : CompanionApi {
@@ -69,7 +68,7 @@ class HostedAuthInterruptedWriteTest {
                 override suspend fun fetchSyncStatus(memberKey: String, sourceProviderSlug: String): CompanionSyncStatus = error("No sync admission yet")
             }
             val session = AppSession(auth, api, health, localState = local, config = AppConfig(
-                "https://auth-proof.invalid", AppEnvironment.Sandbox, "synthetic-client", "synthetic-client", "1", "test", "test",
+                "https://auth-proof.invalid", AppEnvironment.Sandbox, "1", "test",
             ))
             session.start()
             assertEquals(AppPhase.NeedsLogin, session.state.value.phase)
