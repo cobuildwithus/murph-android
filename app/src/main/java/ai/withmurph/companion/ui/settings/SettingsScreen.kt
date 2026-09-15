@@ -37,6 +37,7 @@ fun SettingsScreen(
     onRefreshAddressBook: () -> Unit,
     onStopAddressBook: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onOpenAccountSettings: () -> Unit,
     onOpenHealthConnect: () -> Unit,
     onSetHealthSyncReminderEnabled: (Boolean) -> Unit,
     onOpenPrivacy: () -> Unit,
@@ -210,6 +211,14 @@ fun SettingsScreen(
         }
 
         Section("Account") {
+            SettingsRow(
+                title = "Sign-in and security",
+                detail = "Manage your sign-in methods and recovery on the web.",
+                icon = MurphIconKind.Shield,
+                showsExternalLink = true,
+                onClick = onOpenAccountSettings,
+            )
+            SettingsDivider()
             SettingsRow(
                 title = "Support",
                 icon = MurphIconKind.Envelope,

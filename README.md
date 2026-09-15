@@ -6,7 +6,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 
 ## Included
 
-- Privy phone and email OTP sign-in.
+- Murph-owned phone and email OTP sign-in, with a temporary reader for existing Privy sessions.
 - One app-level composition root; no DI framework.
 - Explicit app/session and health-sync state machines.
 - Junction/Vital Android 5.0.2 with `ConnectionPolicy.Explicit`.
@@ -80,18 +80,19 @@ for exact-head visual evidence, renders the production Compose surfaces, and
 asserts their semantics without pixel snapshots. A uniquely packaged synthetic
 build variant uses a plain `Application`, removes AndroidX Startup providers,
 and has no network, Contacts, or Health Connect data permissions. It therefore
-cannot initialize Privy, Junction, member storage, or network work. Run it on
+does not initialize live Privy, Junction or member work. Dedicated auth boundary tests use only synthetic secure records and intercepted HTTP requests. Run it on
 an attached device with:
 
 ```bash
 ./gradlew connectedSyntheticAndroidTest
 ```
 
-For the deterministic Pixel 2 / API 30 automated-test device used by GitHub
-Actions, run:
+GitHub Actions runs the synthetic suite on API 28, 29 and 30 to cover older
+platform storage behavior as well as the automated-test device. Run the same
+managed-device checks with:
 
 ```bash
-./gradlew pixel2Api30SyntheticAndroidTest
+./gradlew pixel2Api28SyntheticAndroidTest pixel2Api29SyntheticAndroidTest pixel2Api30SyntheticAndroidTest
 ```
 
 On hosts without hardware rendering, append
@@ -261,8 +262,8 @@ message.
 ## Connection lifecycle
 
 - The app does not create a Junction connection merely because a member signs in.
-- Before showing setup, the app uses the read-only status endpoint to confirm the Privy identity maps to an active, consented Murph member.
-- A session restored while offline repeats that validation when Privy becomes
+- Before showing setup, the app uses the read-only status endpoint to confirm the authenticated identity maps to an active, consented Murph member.
+- A session restored while offline repeats that validation when authentication becomes
   online-verified, even when Health Connect has never been set up.
 - Tapping **Connect Health Connect** first opens the system permission flow.
   After at least one category is granted, the app revalidates the member and
@@ -298,7 +299,7 @@ message.
 - Foreground return preserves a matching in-flight `connect` transaction;
   sign-out or an authoritative member change still invalidates and tears it down.
 - `ConnectionPolicy.Explicit` prevents permission checks from silently reviving a server-side disconnect.
-- Every app-triggered foreground sync revalidates the current Privy member and
+- Every app-triggered foreground sync revalidates the current authenticated member and
   backend consent before Junction can read or upload health data.
 - The process lease authorizes foreground-service launch only while Murph remains
   foreground. Leaving Murph invalidates the foreground claim, closes the lease,
@@ -306,7 +307,7 @@ message.
   exact resource-worker name whether or not foreground promotion already
   succeeded. A later foreground return owns any retry.
 - When the backend returns structured launch consent required, Murph keeps the
-  Privy member session, signs out only the local Junction SDK, strictly loads
+  member session, signs out only the local Junction SDK, strictly loads
   same-origin HTTPS legal and health-data documents in native UI, and posts at
   most the two canonical missing scopes with exact returned document versions.
   `CONSENT_DOCUMENT_VERSIONS_STALE` reloads server truth, partial success is
@@ -320,7 +321,7 @@ message.
   recreation only replaces the renderer; it cannot consume a pending system
   permission launch before the Activity is resumed.
 - Returning from a consent document or account-control page reloads consent and
-  rechecks the Privy member/account boundary before any paused action resumes.
+  rechecks the member/account boundary before any paused action resumes.
 - **Delete Account** first records a durable local stop boundary and static
   account-deletion handoff reason, revokes the active process lease, cancels
   every exact Vital work chain, waits for the actual delegated resource-worker
@@ -340,8 +341,8 @@ message.
   reconstructible health authorization and the active process lease, cancels
   and joins registered health and Contacts operations, settles uncertain
   address-book state with the old member's authority, and awaits zero actual
-  delegated resource executions before crossing Junction and Privy identity
-  boundaries. Startup finishes Junction-first, Privy-second teardown before any
+  delegated resource executions before crossing Junction and authentication identity
+  boundaries. Startup finishes Junction-first, authentication-second teardown before any
   session restore.
 - A failed preferences commit restores the pre-call live authorization snapshot,
   so an undurable tombstone or marker removal cannot drive SDK work.
@@ -349,7 +350,7 @@ message.
   `GET /api/device-sync/companion/address-book`; local permission never claims a
   successful share.
 - Share and Update preflight the server revision, then request Contacts access,
-  reverify the live Privy member before reading, project one bounded list, and
+  reverify the live authenticated member before reading, project one bounded list, and
   use a UUIDv4 full-list compare-and-swap replacement. A `409` is surfaced
   without overwriting the newer projection.
 - Stop can refetch and delete the latest revision because it only reduces
@@ -392,3 +393,20 @@ Before a Play release:
    deletion on at least one Pixel and one Samsung device.
 
 See `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, and `SOURCE_BASES.md` before extending the app.
+
+## Auth transition release gate
+
+The existing AndroidX Core AtomicFile stages writes consistently on API 28 and newer. An interrupted initial secure-record write, including an empty write, is recovered by committing a signed-out record. The unfinished bytes never authorize a session or SDK fallback. Failed recovery retains the orphan for retry; corrupted committed records and unavailable Keystore keys still fail closed. The existing AppSession tears down Junction before showing usable sign-in again.
+
+The current app uses the first-party companion auth endpoints. Its existing
+Privy dependency only restores, refreshes and signs out installed sessions while
+a same-member durable handoff completes. The local ownership key stays stable
+through that exchange. See [authentication ownership](ARCHITECTURE.md#authentication-ownership-and-transition)
+for storage, failure and retirement rules.
+
+Backend and shared settings qualification must precede app distribution. Real
+generated-code delivery, installed-session exchange, dormant/skipped-version
+updates, signed-device renewal and genuine browser settings remain explicit
+release checks. The old hosted E2E fixed Privy code does not qualify these paths.
+CI uses public placeholder client identifiers for compilation; it does not
+qualify the release identifiers or provider behavior.

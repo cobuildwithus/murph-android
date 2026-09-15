@@ -389,6 +389,7 @@ private fun ReadyApp(
                             },
                             onStopAddressBook = actions.onStopAddressBook,
                             onOpenAppSettings = actions.onOpenAppSettings,
+                            onOpenAccountSettings = actions.onOpenAccountSettings,
                             onOpenHealthConnect = actions.onOpenHealthConnect,
                             onSetHealthSyncReminderEnabled =
                                 actions.onSetHealthSyncReminderEnabled,
@@ -1400,6 +1401,7 @@ data class MurphActions(
     val onOpenInitialOnboardingContact: (String) -> Unit,
     val onOpenConsentDocument: (String) -> Unit,
     val onOpenAppSettings: () -> Unit,
+    val onOpenAccountSettings: () -> Unit,
     val onOpenPrivacy: () -> Unit,
     val onOpenTerms: () -> Unit,
     val onOpenHealthNotice: () -> Unit,

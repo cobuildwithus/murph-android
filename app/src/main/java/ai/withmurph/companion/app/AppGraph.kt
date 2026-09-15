@@ -5,6 +5,9 @@ import android.os.Looper
 import ai.withmurph.companion.api.HttpCompanionApi
 import ai.withmurph.companion.auth.LoginCoordinator
 import ai.withmurph.companion.auth.PrivyAuthService
+import ai.withmurph.companion.auth.HostedAuthApiClient
+import ai.withmurph.companion.auth.HostedAuthCredentialStore
+import ai.withmurph.companion.auth.HostedAuthService
 import ai.withmurph.companion.contacts.AndroidAddressBookContacts
 import ai.withmurph.companion.core.AddressBookContactSource
 import ai.withmurph.companion.health.JunctionHealthSyncService
@@ -33,10 +36,16 @@ class AppGraph private constructor(
             val applicationScope = CoroutineScope(
                 SupervisorJob() + Dispatchers.Main.immediate,
             )
-            val auth = PrivyAuthService.create(
-                context = context,
-                appId = config.privyAppId,
-                appClientId = config.privyAppClientId,
+            val auth = HostedAuthService(
+                api = HostedAuthApiClient(config.backendBaseUrl),
+                store = HostedAuthCredentialStore(context),
+                legacyFactory = {
+                    PrivyAuthService.create(
+                        context = context,
+                        appId = config.privyAppId,
+                        appClientId = config.privyAppClientId,
+                    )
+                },
             )
             val api = HttpCompanionApi(
                 baseUrl = config.backendBaseUrl,
