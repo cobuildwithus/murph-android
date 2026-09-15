@@ -14,6 +14,7 @@ The current source-derived health scope explicitly lists all 21 `VitalResource` 
 - `listing/en-US/`: truthful English listing copy and release notes. Visual assets are intentionally managed by the exact-head visual-proof lane.
 - `declarations/data-safety.md`: draft Data Safety answers tied to code paths, plus the vendor facts that still require confirmation.
 - `declarations/health-apps.md`: Health Apps and Health Connect declaration copy for every requested data type.
+- `health-connect-review.md`: permission-specific feature demonstrations and the remaining end-to-end evidence required before resubmission.
 - `declarations/contacts.md`: broad Contacts permission purpose, disclosure evidence, and the upcoming policy decision.
 - `release-checklist.md`: signing, testing, Play Console, reviewer-access, staged-rollout, and rollback steps.
 - `operator-assertions.example.json`: the private assertions bound to the exact release artifact, its bundletool-extracted manifest, and Play Console packet.

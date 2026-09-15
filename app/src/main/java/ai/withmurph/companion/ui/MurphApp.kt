@@ -1168,7 +1168,7 @@ private fun HealthConsentContent(onContinue: () -> Unit) {
             )
             ConsentRow(
                 icon = MurphIconKind.Sparkles,
-                text = "Murph uses the categories you allow to answer your questions, build longitudinal trends and baselines, and confirm that your data reached your account.",
+                text = "Ask about your shared records in your private Murph conversation at withmurph.ai or through your configured messaging channel. Review changes in your workouts, sleep, measurements, meals, and other categories you allow.",
             )
             ConsentRow(
                 icon = MurphIconKind.Sparkles,
