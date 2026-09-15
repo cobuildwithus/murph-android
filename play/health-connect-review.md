@@ -76,11 +76,13 @@ demonstrating why each type is needed. Do not infer missing observations.
 - `packages/assistant-engine/src/assistant/system-prompt.ts` directs the assistant
   to consult connected wearable and structured measurement records when answering
   a member. This establishes a code path, not successful production receipt.
-- Standalone `calories_basal` and `floors_climbed` are opt-in backend resources.
-  Floors can also arrive in activity summaries. Verify the actual production
-  resource configuration and Android provider payloads before claiming either
-  path works. Do not equate BMR in power units with daily basal energy in kcal;
-  verify the SDK's conversion and the units presented to the member.
+- Standalone `calories_basal` and `floors_climbed` are excluded from the generic
+  runtime defaults, but the current production configuration builder in
+  `packages/device-syncd/src/config/junction-config.ts` explicitly enables the
+  full allowed timeseries list, including both. Floors can also arrive in
+  activity summaries. Confirm that this backend revision is deployed and verify
+  Android provider payloads. Do not equate BMR in power units with daily basal
+  energy in kcal; verify the SDK's conversion and the units shown to the member.
 - SDK support and a generic Synced state do not prove every field survives
   provider export, webhook admission, normalization, and member queries. Power,
   speed, elevation, and reproductive detail arrays need field-level checks too.
