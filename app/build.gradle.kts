@@ -243,8 +243,7 @@ android {
                     create("pixel2Api$api") {
                         device = "Pixel 2"
                         apiLevel = api
-                        // Synthetic UI/auth tests do not initialize Google services.
-                        systemImageSource = "aosp"
+                        systemImageSource = "google"
                     }
                 }
                 create("pixel2Api30") {

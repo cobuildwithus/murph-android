@@ -36,8 +36,12 @@ jobs:
           if [[ -e /dev/kvm ]]; then
             sudo chmod 0666 /dev/kvm
           fi
-      - name: Install compile SDK
-        run: sdkmanager "platforms;android-36"
+      - name: Install compile SDK and managed-device images
+        run: >-
+          sdkmanager "platforms;android-36"
+          "system-images;android-28;google_apis;x86"
+          "system-images;android-29;google_apis;x86"
+          "system-images;android-30;aosp_atd;x86"
       - name: Run managed-device UI and auth suites on supported storage variants
         run: >-
           ./gradlew --no-daemon
