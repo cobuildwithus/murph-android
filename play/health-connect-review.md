@@ -120,10 +120,11 @@ Check the installed release against the current main and any custom store
 listings; app name is **Murph**. Do not submit an old bundle containing the letter
 icon. The Play listing icon must be the same dotted brand mark.
 
-Choose an unused version code from Console, prepare the signed AAB, and complete
+The candidate uses version code 2; recheck that it is unused immediately before
+upload. Prepare the signed AAB and complete
 `checkPlaySubmissionReadiness` with exact-artifact private assertions before
-upload. This patch does not establish the last uploaded version code, approved
-signing certificate, production SDK configuration, or physical-device results.
+upload. This patch does not establish the approved signing certificate,
+production SDK configuration, or physical-device results.
 
 Official guidance checked 2026-09-15:
 
