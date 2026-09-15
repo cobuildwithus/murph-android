@@ -1,6 +1,10 @@
 Murph is a private health companion. Sign in or create your Murph account with a phone or email one-time code, then choose Murph's contact-card look, personality, voice, and tone.
 
-Connect Health Connect so Murph can use the categories you choose across activity and fitness, exercise, sleep, body measurements and vital signs, nutrition and hydration, and menstrual and reproductive health. Category availability depends on the device, membership, and apps writing to Health Connect. The app shows backend-confirmed connection status, helps you recover when permissions change, and lets you start a sync while the app is open.
+Connect Health Connect to bring the records you choose into your Murph account. This Android companion handles permissions and syncing. Ask questions about your connected records in your private Murph conversation through your configured messaging channel or at https://www.withmurph.ai.
+
+Use your connected history to ask how your activity, workouts, or sleep have changed; review body measurements and vital-sign trends; or discuss recorded meals and hydration. If you choose to share menstrual and reproductive records, you can ask Murph to summarize those recorded observations too. Murph uses the records available in your account and identifies missing data; it does not measure these values itself.
+
+Health Connect categories include activity and fitness, exercise, sleep, body measurements and vital signs, nutrition and hydration, and menstrual and reproductive health. Availability depends on your device, membership, permissions, and apps writing to Health Connect. The Android app shows backend-confirmed connection status, helps you recover when permissions change, and lets you start a sync while the app is open.
 
 You can also choose to share privacy-minimized Friendly Names from your Android contacts. Murph reads contacts only after you tap Share, Update, or Retry. This optional feature helps group conversations use familiar names; it does not send invitations or messages to your contacts.
 
