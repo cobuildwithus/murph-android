@@ -225,6 +225,66 @@ class AppSessionTest {
     }
 
     @Test
+    fun tokenAcquisitionFailuresKeepMealDraftAndExposeRecovery() = runTest {
+        for (observed in listOf(AuthSessionState.SignedIn(MEMBER_KEY, true),
+            AuthSessionState.SignedIn(MEMBER_KEY, false), AuthSessionState.TemporarilyUnavailable)) {
+            val fixture = completedHealthFixture()
+            val photos = listOf(mealPhoto(), mealPhoto())
+            val generation = fixture.session.state.value.meals.selectionGeneration
+            fixture.session.addManualMealPhotos(generation, photos, 0)
+            fixture.api.mealUploadHandler = { throw CompanionApiException.LocalAuthUnavailable(observed) }
+            fixture.session.sendManualMealPhotos()
+            assertEquals(photos.map { it.id }, fixture.session.state.value.meals.selected.map { it.id })
+            assertEquals(generation, fixture.session.state.value.meals.selectionGeneration)
+            assertFalse(fixture.session.state.value.meals.sending)
+            assertFalse(fixture.session.state.value.authVerifiedOnline)
+            assertTrue(fixture.session.state.value.meals.sent.isEmpty())
+            fixture.api.mealUploadHandler = null
+            fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, true)
+            fixture.session.retry()
+            fixture.session.sendManualMealPhotos()
+            assertEquals(listOf(photos[0].id, photos[0].id, photos[1].id), fixture.api.mealUploads)
+            assertEquals(2, fixture.session.state.value.meals.sent.size)
+        }
+    }
+
+    @Test
+    fun uncertainPostUploadAuthPreservesEveryOriginalRetryKey() = runTest {
+        for (observed in listOf(AuthSessionState.SignedIn(MEMBER_KEY, false), AuthSessionState.TemporarilyUnavailable)) {
+            val fixture = completedHealthFixture()
+            val photos = listOf(mealPhoto(), mealPhoto())
+            val generation = fixture.session.state.value.meals.selectionGeneration
+            fixture.session.addManualMealPhotos(generation, photos, 0)
+            fixture.api.mealUploadHandler = { fixture.auth.state = observed }
+            fixture.session.sendManualMealPhotos()
+            assertEquals(photos.map { it.id }, fixture.session.state.value.meals.selected.map { it.id })
+            assertEquals(generation, fixture.session.state.value.meals.selectionGeneration)
+            assertFalse(fixture.session.state.value.meals.sending)
+            assertFalse(fixture.session.state.value.authVerifiedOnline)
+            assertTrue(fixture.session.state.value.meals.sent.isEmpty())
+            fixture.api.mealUploadHandler = null
+            fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, true)
+            fixture.session.retry()
+            fixture.session.sendManualMealPhotos()
+            assertEquals(listOf(photos[0].id, photos[0].id, photos[1].id), fixture.api.mealUploads)
+            assertEquals(2, fixture.session.state.value.meals.sent.size)
+        }
+    }
+
+    @Test
+    fun journalTokenFailureExposesAuthRecoveryBeforeRetry() = runTest {
+        val fixture = completedHealthFixture()
+        fixture.api.journalHandler = { throw CompanionApiException.LocalAuthUnavailable(AuthSessionState.TemporarilyUnavailable) }
+        fixture.session.refreshJournal()
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(ai.withmurph.companion.core.JournalState.Failed, fixture.session.state.value.journal)
+        fixture.api.journalHandler = null
+        fixture.session.refreshJournal()
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertTrue(fixture.session.state.value.journal is ai.withmurph.companion.core.JournalState.Ready)
+    }
+
+    @Test
     fun temporaryAuthLossDuringUploadReleasesBusyStateAndKeepsRetryIdentity() = runTest {
         val fixture = completedHealthFixture()
         val photo = mealPhoto()

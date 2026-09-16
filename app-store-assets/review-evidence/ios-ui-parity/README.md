@@ -31,6 +31,13 @@ The renderers are unchanged. Focused regressions reproduce temporary verificatio
 loss during pending uploads and Journal reads, and prove cleanup releases busy
 state without losing meal retry identities or changing a replacement session.
 
+The latest baseline, Meals recovery and Settings variants use synthetic APK
+SHA-256 `a345127abdefa18807dd6494d6bdf8b7419539d9814b43ce09e99a6aca84f82b`.
+Temporary token failures preserve the draft and its original retry keys, while
+verification recovery blocks uploads and unverified result publication. Settings
+recency now uses the server observation, with no recency claim when it is absent;
+stale status retains its recovery label. Focused tests cover these paths.
+
 ## Coverage
 
 Welcome, secure OTP form, contact/personality onboarding, optional reminder,
@@ -42,7 +49,7 @@ Large-text welcome actions remain reachable by scrolling the page.
 
 ## Verification and limits
 
-`./scripts/verify.sh` passes: all variant unit tests (579 Debug / 569 Release),
+`./scripts/verify.sh` passes: all variant unit tests (585 Debug / 575 Release),
 Debug/Release lint and builds, synthetic app isolation, merged-manifest and Play
 release tooling checks. Two deterministic transport tests reproduce and prevent success/failure returning before connection cleanup. Session tests cover stale responses, consent recovery,
 sign-out cancellation, explicit sends and idempotent partial retries. Device

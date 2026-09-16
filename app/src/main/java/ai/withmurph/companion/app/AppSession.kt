@@ -243,11 +243,12 @@ class AppSession(
                     }
                     currentCoroutineContext().ensureActive()
                     if (!owns()) return
-                    val observed = auth.currentState()
+                    val observed = try { auth.currentState() }
+                    catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { AuthSessionState.TemporarilyUnavailable }
                     if (!owns()) return
                     if (observed !is AuthSessionState.SignedIn || !observed.verifiedOnline || observed.memberKey != member) {
-                        clearManualMeals()
-                        handleAuthoritativeLocalAuthObservation(observed)
+                        handleCompanionContentAuthLoss(member, epoch, observed)
                         return
                     }
                     val preview = SentMealPhoto(photo.id, photo.thumbnail, photo.capturedAt)
@@ -262,7 +263,7 @@ class AppSession(
                     )) }
                 } catch (error: CancellationException) { throw error }
                 catch (error: Exception) {
-                    if (!owns()) return
+                    if (!ownsDraft()) return
                     failed = true
                     when {
                         error is CompanionApiException.ConsentRequired -> {
@@ -274,8 +275,7 @@ class AppSession(
                             return
                         }
                         error is CompanionApiException.LocalAuthUnavailable -> {
-                            clearManualMeals()
-                            handleAuthoritativeLocalAuthObservation(error.observedState)
+                            handleCompanionContentAuthLoss(member, epoch, error.observedState)
                             return
                         }
                         error is CompanionApiException.AccountConflict -> { publishAccountConflictFailure(); return }
@@ -328,11 +328,13 @@ class AppSession(
             }
             currentCoroutineContext().ensureActive()
             if (!ownsCompanionContentRequest(memberKey, epoch)) return
-            val observed = auth.currentState()
+            val observed = try { auth.currentState() }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { AuthSessionState.TemporarilyUnavailable }
             if (!ownsCompanionContentRequest(memberKey, epoch)) return
             if (observed !is AuthSessionState.SignedIn || !observed.verifiedOnline || observed.memberKey != memberKey) {
                 _state.update { it.copy(journal = JournalState.Failed) }
-                handleAuthoritativeLocalAuthObservation(observed)
+                handleCompanionContentAuthLoss(memberKey, epoch, observed)
                 return
             }
             _state.update { it.copy(journal = JournalState.Ready(response)) }
@@ -342,7 +344,7 @@ class AppSession(
             }
             throw error
         } catch (error: Exception) {
-            if (!ownsCompanionContentRequest(memberKey, epoch)) return
+            if (!ownsCompanionContentState(memberKey, epoch)) return
             _state.update { it.copy(journal = JournalState.Failed) }
             when {
                 error is CompanionApiException.ConsentRequired -> {
@@ -356,7 +358,7 @@ class AppSession(
                     observed?.let { handleAuthoritativeLocalAuthObservation(it) }
                 }
                 error is CompanionApiException.LocalAuthUnavailable ->
-                    handleAuthoritativeLocalAuthObservation(error.observedState)
+                    handleCompanionContentAuthLoss(memberKey, epoch, error.observedState)
                 error is CompanionApiException.AccountConflict -> publishAccountConflictFailure()
                 error is CompanionApiException && isTerminalMemberBoundaryError(error) ->
                     publishTerminalMemberBoundaryFailure(error)
@@ -366,6 +368,14 @@ class AppSession(
             if (ownsCompanionContentState(memberKey, epoch) && _state.value.journal == JournalState.Loading) {
                 _state.update { it.copy(journal = JournalState.Failed) }
             }
+        }
+    }
+
+    private suspend fun handleCompanionContentAuthLoss(memberKey: String, epoch: Int, observed: AuthSessionState) {
+        if (!ownsCompanionContentState(memberKey, epoch)) return
+        if (handleAuthoritativeLocalAuthObservation(observed)) return
+        if (ownsCompanionContentState(memberKey, epoch)) {
+            _state.update { it.copy(authVerifiedOnline = false, healthStatusIsStale = healthWasRequested()) }
         }
     }
 

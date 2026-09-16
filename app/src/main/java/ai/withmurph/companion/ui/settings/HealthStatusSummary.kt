@@ -18,17 +18,7 @@ import java.time.Instant
 
 @Composable
 internal fun HealthStatusSummary(state: AppUiState, onSync: () -> Unit, onConnect: () -> Unit) {
-    val status = when {
-        state.healthReconnectRequired -> "Reconnect to resume syncing"
-        state.healthStatusIsStale -> "Last checked online"
-        else -> when (val sync = state.healthSync) {
-            HealthSyncState.NotConnected -> "Not connected"
-            HealthSyncState.AwaitingFirstData -> "Waiting for your first data"
-            is HealthSyncState.Synced -> "Synced · " + relativeHealthTime(sync.lastDataReceivedAt)
-            is HealthSyncState.Delayed -> "Sync is on its way"
-            is HealthSyncState.NeedsAttention -> "Worth a quick check"
-        }
-    }
+    val status = healthStatusSummaryText(state)
     Column(Modifier.fillMaxWidth().background(MurphColors.Card, RoundedCornerShape(20.dp)).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -51,8 +41,20 @@ internal fun HealthStatusSummary(state: AppUiState, onSync: () -> Unit, onConnec
     }
 }
 
-private fun relativeHealthTime(at: Instant): String {
-    val age = Duration.between(at, Instant.now()).coerceAtLeast(Duration.ZERO)
+internal fun healthStatusSummaryText(state: AppUiState): String = when {
+    state.healthReconnectRequired -> "Reconnect to resume syncing"
+    state.healthStatusIsStale -> "Last checked online"
+    else -> when (val sync = state.healthSync) {
+        HealthSyncState.NotConnected -> "Not connected"
+        HealthSyncState.AwaitingFirstData -> "Waiting for your first data"
+        is HealthSyncState.Synced -> state.healthStatusObservedAt?.let { "Synced · ${relativeHealthTime(sync.lastDataReceivedAt, it)}" } ?: "Synced"
+        is HealthSyncState.Delayed -> "Sync is on its way"
+        is HealthSyncState.NeedsAttention -> "Worth a quick check"
+    }
+}
+
+private fun relativeHealthTime(at: Instant, observedAt: Instant): String {
+    val age = Duration.between(at, observedAt).coerceAtLeast(Duration.ZERO)
     return when {
         age.toMinutes() < 1 -> "Just now"
         age.toHours() < 1 -> "${age.toMinutes()} min ago"
