@@ -33,6 +33,10 @@ import ai.withmurph.companion.core.InitialOnboardingStatus
 import ai.withmurph.companion.core.LaunchConsentAcceptanceRequest
 import ai.withmurph.companion.core.LaunchConsentScope
 import ai.withmurph.companion.core.LaunchConsentStatus
+import ai.withmurph.companion.core.JournalState
+import ai.withmurph.companion.core.ManualMealPhoto
+import ai.withmurph.companion.core.ManualMealsState
+import ai.withmurph.companion.core.SentMealPhoto
 import ai.withmurph.companion.core.LocalState
 import ai.withmurph.companion.core.NoopHealthSyncReminderLifecycle
 import ai.withmurph.companion.core.PendingHealthSyncFailure
@@ -68,6 +72,7 @@ class AppSession(
     private val contacts: AddressBookContactSource = UnsupportedAddressBookContactSource,
     private val localState: LocalState,
     private val config: AppConfig,
+    private val mealHistory: ai.withmurph.companion.core.SentMealHistory = ai.withmurph.companion.core.NoopSentMealHistory,
     private val healthSyncReminder: HealthSyncReminderLifecycle =
         NoopHealthSyncReminderLifecycle,
     private val newMutationId: () -> String = { UUID.randomUUID().toString() },
@@ -89,6 +94,10 @@ class AppSession(
     private var lastCompletedValidatedHealthSyncSequence = 0L
     private var healthSyncLaunchRejected = false
     private var sessionEpoch = 0
+    private var journalRequestEpoch: Int? = null
+    private var journalRead: Job? = null
+    private var manualMealUpload: Job? = null
+    private var manualMealPreparation: Job? = null
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
     private var pendingAddressBookPermissionFlow: PendingAddressBookPermissionFlow? = null
@@ -111,6 +120,272 @@ class AppSession(
         AppUiState(totalResourceCount = health.totalResourceCount),
     )
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    suspend fun refreshSentMeals() {
+        val member = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        if (!ownsCompanionContentRequest(member, epoch) || _state.value.meals.sending) return
+        val generation = _state.value.meals.selectionGeneration
+        val existing = _state.value.meals.sent
+        if (existing.isNotEmpty()) {
+            _state.update { state -> state.copy(meals = state.meals.copy(
+                sent = state.meals.sent.filter { it.sentAt >= Instant.now().minusSeconds(14L * 24 * 60 * 60) },
+            )) }
+            return
+        }
+        val history = try { mealHistory.load(member) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { return }
+        if (!ownsCompanionContentRequest(member, epoch) || generation != _state.value.meals.selectionGeneration || _state.value.meals.sending) return
+        // A load that started before a new receipt must not replace that receipt.
+        if (_state.value.meals.sent !== existing) return
+        if (history.isNotEmpty()) _state.update { it.copy(meals = it.meals.copy(sent = history)) }
+    }
+
+    suspend fun prepareManualMealPhotos(
+        generation: String,
+        count: Int,
+        prepare: suspend (Int) -> ManualMealPhoto,
+        cleanup: () -> Unit = {},
+    ) {
+        val job = currentCoroutineContext()[Job]
+        val member = currentMemberKey
+        val epoch = sessionEpoch
+        fun owns() = member != null && ownsCompanionContentRequest(member, epoch) &&
+            _state.value.meals.selectionGeneration == generation
+        try {
+            val meals = _state.value.meals
+            if (!owns() || meals.preparing || meals.sending || meals.partialFailure) return
+            manualMealPreparation = job
+            _state.update { it.copy(meals = it.meals.copy(preparing = true, message = null)) }
+            val photos = mutableListOf<ManualMealPhoto>()
+            var failures = 0
+            repeat(count.coerceIn(0, 10)) { index ->
+                currentCoroutineContext().ensureActive()
+                if (!owns()) return
+                try { photos += prepare(index) }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { failures += 1 }
+            }
+            currentCoroutineContext().ensureActive()
+            if (owns()) addManualMealPhotos(generation, photos, failures)
+        } finally {
+            if (manualMealPreparation === job) {
+                manualMealPreparation = null
+                if (_state.value.meals.selectionGeneration == generation) {
+                    _state.update { it.copy(meals = it.meals.copy(preparing = false)) }
+                }
+            }
+            cleanup()
+        }
+    }
+
+    fun addManualMealPhotos(generation: String, photos: List<ManualMealPhoto>, failedCount: Int) {
+        val member = currentMemberKey ?: return
+        if (!ownsCompanionContentRequest(member, sessionEpoch)) return
+        _state.update { state ->
+            val meals = state.meals
+            if (meals.selectionGeneration != generation || meals.sending || meals.partialFailure) return@update state
+            val unique = photos.distinctBy { it.id }.filter { photo -> meals.selected.none { it.id == photo.id } }
+            val accepted = unique.take((10 - meals.selected.size).coerceAtLeast(0))
+            state.copy(meals = meals.copy(selected = meals.selected + accepted, message = when {
+                failedCount > 0 && accepted.isEmpty() -> "That photo couldn't be prepared. Choose another."
+                failedCount > 0 -> "Some photos couldn't be prepared. The others are ready to send."
+                accepted.size < unique.size -> "You can send up to 10 photos at a time."
+                else -> null
+            }))
+        }
+    }
+
+    fun removeManualMealPhoto(id: String) {
+        _state.update { state ->
+            if (state.meals.sending) state else {
+                val remaining = state.meals.selected.filterNot { it.id == id }
+                state.copy(meals = state.meals.copy(selected = remaining,
+                    partialFailure = state.meals.partialFailure && remaining.isNotEmpty(),
+                    message = if (remaining.isEmpty()) null else state.meals.message))
+            }
+        }
+    }
+
+    fun discardManualMealDraft() {
+        if (_state.value.meals.sending || _state.value.meals.partialFailure) return
+        manualMealPreparation?.cancel()
+        manualMealPreparation = null
+        _state.update { state ->
+            if (state.meals.sending || state.meals.partialFailure) state
+            else state.copy(meals = ManualMealsState(sent = state.meals.sent))
+        }
+    }
+
+    suspend fun sendManualMealPhotos() {
+        val member = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        if (!ownsCompanionContentRequest(member, epoch)) return
+        val initial = _state.value.meals
+        if (initial.sending || initial.preparing || initial.selected.isEmpty()) return
+        val generation = initial.selectionGeneration
+        fun ownsDraft(): Boolean = ownsCompanionContentState(member, epoch) &&
+            _state.value.meals.selectionGeneration == generation
+        fun owns(): Boolean = ownsDraft() && ownsCompanionContentRequest(member, epoch)
+        _state.update { it.copy(meals = it.meals.copy(sending = true, current = 0,
+            total = initial.selected.size, partialFailure = false, message = null)) }
+        var failed = false
+        try {
+            for ((index, photo) in initial.selected.withIndex()) {
+                if (!owns()) return
+                _state.update { it.copy(meals = it.meals.copy(current = index + 1)) }
+                try {
+                    coroutineScope {
+                        val upload = async { api.uploadManualMealPhoto(member, photo) }
+                        manualMealUpload = upload
+                        try { upload.await() } finally { if (manualMealUpload === upload) manualMealUpload = null }
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (!owns()) return
+                    val observed = try { auth.currentState() }
+                    catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { AuthSessionState.TemporarilyUnavailable }
+                    if (!owns()) return
+                    if (observed !is AuthSessionState.SignedIn || !observed.verifiedOnline || observed.memberKey != member) {
+                        handleCompanionContentAuthLoss(member, epoch, observed)
+                        return
+                    }
+                    val preview = SentMealPhoto(photo.id, photo.thumbnail, photo.capturedAt)
+                    try { mealHistory.append(member, preview, ::owns) }
+                    catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { /* A cache failure never changes an accepted upload into a retry. */ }
+                    if (!owns()) return
+                    _state.update { state -> state.copy(meals = state.meals.copy(
+                        selected = state.meals.selected.filterNot { it.id == photo.id },
+                        sent = (listOf(preview) + state.meals.sent)
+                            .filter { it.sentAt >= Instant.now().minusSeconds(14L * 24 * 60 * 60) }.take(24),
+                    )) }
+                } catch (error: CancellationException) { throw error }
+                catch (error: Exception) {
+                    if (!ownsDraft()) return
+                    failed = true
+                    when {
+                        error is CompanionApiException.ConsentRequired -> {
+                            clearManualMeals()
+                            var observed: AuthSessionState? = null
+                            beginLaunchConsentRecovery(epoch, member, LaunchConsentFollowUp.Reconcile,
+                                onAuthoritativeLocalAuth = { observed = it })
+                            observed?.let { handleAuthoritativeLocalAuthObservation(it) }
+                            return
+                        }
+                        error is CompanionApiException.LocalAuthUnavailable -> {
+                            handleCompanionContentAuthLoss(member, epoch, error.observedState)
+                            return
+                        }
+                        error is CompanionApiException.AccountConflict -> { publishAccountConflictFailure(); return }
+                        error is CompanionApiException && isTerminalMemberBoundaryError(error) -> {
+                            publishTerminalMemberBoundaryFailure(error); return
+                        }
+                    }
+                }
+            }
+            if (owns()) _state.update { state -> state.copy(meals = state.meals.copy(
+                partialFailure = failed,
+                message = if (failed) "Some photos couldn't be sent. Try again."
+                    else if (initial.selected.size == 1) "Photo sent to Murph." else "Photos sent to Murph.",
+            )) }
+        } finally {
+            // Temporary verification loss blocks uploads, but must release this draft's busy state.
+            if (ownsDraft()) _state.update { state -> state.copy(meals = state.meals.copy(sending = false,
+                partialFailure = state.meals.selected.isNotEmpty(),
+                message = state.meals.message ?: if (state.meals.selected.isNotEmpty()) "Some photos couldn't be sent. Try again." else null)) }
+        }
+    }
+
+    private fun clearManualMeals() {
+        manualMealPreparation?.cancel()
+        manualMealPreparation = null
+        manualMealUpload?.cancel()
+        manualMealUpload = null
+        _state.update { it.copy(meals = ManualMealsState()) }
+    }
+
+    suspend fun refreshJournal() {
+        val memberKey = currentMemberKey ?: return
+        val epoch = sessionEpoch
+        if (journalRequestEpoch == epoch || _state.value.phase != AppPhase.Ready ||
+            hasActiveLaunchConsentRecovery() || localState.signOutPending) return
+        journalRequestEpoch = epoch
+        try {
+            if (!_state.value.authVerifiedOnline) retry()
+            if (!ownsCompanionContentRequest(memberKey, epoch)) {
+                if (memberKey == currentMemberKey && epoch == sessionEpoch && _state.value.phase == AppPhase.Ready) {
+                    _state.update { it.copy(journal = JournalState.Failed) }
+                }
+                return
+            }
+            _state.update { it.copy(journal = JournalState.Loading) }
+            val response = coroutineScope {
+                val read = async { api.fetchJournal(memberKey) }
+                journalRead = read
+                try { read.await() } finally { if (journalRead === read) journalRead = null }
+            }
+            currentCoroutineContext().ensureActive()
+            if (!ownsCompanionContentRequest(memberKey, epoch)) return
+            val observed = try { auth.currentState() }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { AuthSessionState.TemporarilyUnavailable }
+            if (!ownsCompanionContentRequest(memberKey, epoch)) return
+            if (observed !is AuthSessionState.SignedIn || !observed.verifiedOnline || observed.memberKey != memberKey) {
+                _state.update { it.copy(journal = JournalState.Failed) }
+                handleCompanionContentAuthLoss(memberKey, epoch, observed)
+                return
+            }
+            _state.update { it.copy(journal = JournalState.Ready(response)) }
+        } catch (error: CancellationException) {
+            if (ownsCompanionContentRequest(memberKey, epoch)) {
+                _state.update { it.copy(journal = JournalState.Idle) }
+            }
+            throw error
+        } catch (error: Exception) {
+            if (!ownsCompanionContentState(memberKey, epoch)) return
+            _state.update { it.copy(journal = JournalState.Failed) }
+            when {
+                error is CompanionApiException.ConsentRequired -> {
+                    var observed: AuthSessionState? = null
+                    beginLaunchConsentRecovery(
+                        expectedEpoch = epoch,
+                        memberKey = memberKey,
+                        followUp = LaunchConsentFollowUp.Reconcile,
+                        onAuthoritativeLocalAuth = { observed = it },
+                    )
+                    observed?.let { handleAuthoritativeLocalAuthObservation(it) }
+                }
+                error is CompanionApiException.LocalAuthUnavailable ->
+                    handleCompanionContentAuthLoss(memberKey, epoch, error.observedState)
+                error is CompanionApiException.AccountConflict -> publishAccountConflictFailure()
+                error is CompanionApiException && isTerminalMemberBoundaryError(error) ->
+                    publishTerminalMemberBoundaryFailure(error)
+            }
+        } finally {
+            if (journalRequestEpoch == epoch) journalRequestEpoch = null
+            if (ownsCompanionContentState(memberKey, epoch) && _state.value.journal == JournalState.Loading) {
+                _state.update { it.copy(journal = JournalState.Failed) }
+            }
+        }
+    }
+
+    private suspend fun handleCompanionContentAuthLoss(memberKey: String, epoch: Int, observed: AuthSessionState) {
+        if (!ownsCompanionContentState(memberKey, epoch)) return
+        if (handleAuthoritativeLocalAuthObservation(observed)) return
+        if (ownsCompanionContentState(memberKey, epoch)) {
+            _state.update { it.copy(authVerifiedOnline = false, healthStatusIsStale = healthWasRequested()) }
+        }
+    }
+
+    private fun ownsCompanionContentState(memberKey: String, epoch: Int): Boolean =
+        epoch == sessionEpoch && memberKey == currentMemberKey && memberKey == localState.memberKey
+
+    private fun ownsCompanionContentRequest(memberKey: String, epoch: Int): Boolean =
+        ownsCompanionContentState(memberKey, epoch) && !localState.signOutPending &&
+            _state.value.phase == AppPhase.Ready && _state.value.authVerifiedOnline &&
+            !hasActiveLaunchConsentRecovery()
 
     suspend fun start() {
         val foregroundClaim = currentForegroundClaim()
@@ -1684,7 +1959,7 @@ class AppSession(
                         }
                     }
                     val hadLiveHealthSession = health.isSignedIn()
-                    invalidateSessionEpoch()
+                    invalidateSessionEpoch(preserveMealDraft = true)
                     val preparationEpoch = sessionEpoch
                     if (hadCompletedSetup || hadLiveHealthSession) {
                         _state.update {
@@ -2803,6 +3078,7 @@ class AppSession(
         val startedAddressBookReplacement = cancelAndDrainForegroundAddressBookOperation()
         invalidateSessionEpoch()
         _state.update { it.copy(phase = AppPhase.Launching, healthMessage = null) }
+        try { mealHistory.clear() } catch (_: Exception) { /* Auth teardown remains authoritative. */ }
         startMutex.withLock {
             if (localState.signOutPending) {
                 finishPendingSignOut(startedAddressBookReplacement)
@@ -2844,6 +3120,7 @@ class AppSession(
                 (previousMemberKey != null && previousMemberKey != authState.memberKey)
         if (mustDistrustPersistedHealthSession) {
             if (!resetHealthSdkAtTrustBoundary(revokeAuthorization = true)) return
+            try { mealHistory.clear() } catch (_: Exception) { /* Account binding still prevents disclosure. */ }
             clearInitialOnboardingState()
         }
         currentMemberKey = authState.memberKey
@@ -2915,7 +3192,10 @@ class AppSession(
                     }
                     return
                 }
-                if (!resetHealthSdkAtTrustBoundary(acceptedConsentOwner)) return
+                if (!resetHealthSdkAtTrustBoundary(
+                        acceptedConsentOwner = acceptedConsentOwner,
+                        preserveMealDraft = true,
+                    )) return
                 epoch = sessionEpoch
                 null
             } catch (error: CompanionApiException.LocalAuthUnavailable) {
@@ -3163,7 +3443,8 @@ class AppSession(
         finishSignedOut()
     }
 
-    private fun finishSignedOut() {
+    private suspend fun finishSignedOut() {
+        try { mealHistory.clear() } catch (_: Exception) { /* Auth teardown remains authoritative. */ }
         currentMemberKey = null
         clearMemberScopedStateAndReminder()
         clearInitialOnboardingState()
@@ -4228,7 +4509,7 @@ class AppSession(
         }
 
         healthSyncReminder.cancel()
-        invalidateSessionEpoch()
+        invalidateSessionEpoch(preserveMealDraft = true)
         val sdkReset = try {
             health.signOutSdk()
             true
@@ -4961,6 +5242,7 @@ class AppSession(
     private suspend fun resetHealthSdkAtTrustBoundary(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
         revokeAuthorization: Boolean = false,
+        preserveMealDraft: Boolean = false,
     ): Boolean {
         if (revokeAuthorization) {
             return resetMemberAtTrustBoundary(
@@ -4968,7 +5250,7 @@ class AppSession(
                 acceptedConsentOwner = acceptedConsentOwner,
             )
         }
-        invalidateSessionEpoch(acceptedConsentOwner)
+        invalidateSessionEpoch(acceptedConsentOwner, preserveMealDraft = preserveMealDraft)
         return try {
             revokeWorkAndSignOutHealthSdk()
             true
@@ -5216,6 +5498,8 @@ class AppSession(
                 addressBookHasInterruptedReplacement =
                     localState.pendingAddressBookReplacement != null,
                 isAddressBookBusy = false,
+                journal = JournalState.Idle,
+                meals = ManualMealsState(),
                 launchConsentRecovery = LaunchConsentRecoveryUiState(
                     phase = LaunchConsentRecoveryPhase.Pausing,
                     message = "Pausing health sync before loading consent.",
@@ -5636,6 +5920,8 @@ class AppSession(
         if (!ownsLaunchConsentRecovery(pending)) return
         _state.update { current ->
             current.copy(
+                journal = JournalState.Idle,
+                meals = ManualMealsState(),
                 launchConsentRecovery = LaunchConsentRecoveryUiState(
                     phase = LaunchConsentRecoveryPhase.Required,
                     status = status,
@@ -5653,6 +5939,8 @@ class AppSession(
         if (!ownsLaunchConsentRecovery(pending)) return
         _state.update { current ->
             current.copy(
+                journal = JournalState.Idle,
+                meals = ManualMealsState(),
                 launchConsentRecovery = LaunchConsentRecoveryUiState(
                     phase = LaunchConsentRecoveryPhase.LoadFailed,
                     status = current.launchConsentRecovery?.status,
@@ -7047,11 +7335,29 @@ class AppSession(
 
     private fun invalidateSessionEpoch(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+        preserveMealDraft: Boolean = false,
     ) {
         val preservedConsentOwner = acceptedConsentOwner?.takeIf {
             ownsAcceptedConsentContinuation(it)
         }
         sessionEpoch += 1
+        if (preserveMealDraft) {
+            manualMealPreparation?.cancel()
+            manualMealPreparation = null
+            manualMealUpload?.cancel()
+            manualMealUpload = null
+            _state.update { state -> state.copy(meals = state.meals.copy(
+                preparing = false, sending = false, current = 0, total = 0,
+                partialFailure = state.meals.selected.isNotEmpty(),
+                message = if (state.meals.selected.isNotEmpty()) "Your photos are ready to retry." else state.meals.message,
+            )) }
+        } else {
+            clearManualMeals()
+        }
+        journalRead?.cancel()
+        journalRead = null
+        journalRequestEpoch = null
+        _state.update { it.copy(journal = JournalState.Idle) }
         healthSyncLaunchRejected = false
         preservedConsentOwner?.let { pending ->
             synchronized(pending) {

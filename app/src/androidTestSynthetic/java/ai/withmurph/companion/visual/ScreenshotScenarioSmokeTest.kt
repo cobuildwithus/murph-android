@@ -6,10 +6,12 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -30,8 +32,80 @@ class ScreenshotScenarioSmokeTest {
     val compose = createEmptyComposeRule()
 
     @Test
+    fun optionalReminderRequiresExplicitChoiceAndCanBeSkipped() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "notifications")
+        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.onNodeWithText("One sync reminder").assertIsDisplayed()
+            scenario.onActivity { assertTrue(it.healthSyncReminderPreferenceRequests.isEmpty()) }
+            compose.onNodeWithText("Keep notifications off").performScrollTo().performClick()
+            scenario.onActivity {
+                assertTrue(it.reminderSetupDismissed)
+                assertTrue(it.healthSyncReminderPreferenceRequests.isEmpty())
+            }
+            compose.onAllNodesWithText("One sync reminder").assertCountEquals(0)
+        }
+    }
+
+    @Test
+    fun optionalReminderAllowInvokesExistingPreferenceAction() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "notifications")
+        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.onNodeWithText("Allow reminder").performScrollTo().performClick()
+            scenario.onActivity { assertEquals(listOf(true), it.healthSyncReminderPreferenceRequests) }
+            compose.onNodeWithText("Setting up…").assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun offlineJournalAndMealsShowRecoveryAndDisablePhotoAcquisition() = withScenario("mealsOffline") {
+        onNodeWithText("Journal couldn't load").assertIsDisplayed()
+        onNodeWithText("Try again").assertHasClickAction()
+        onNodeWithText("Meals").performClick()
+        onNodeWithText("Reconnect to add or send meal photos.").assertIsDisplayed()
+        onNodeWithContentDescription("Add meal photos").assertIsNotEnabled()
+        onNodeWithText("Try again").assertHasClickAction()
+    }
+
+    @Test
+    fun unavailableJournalOffersRetryAndKeepsNavigation() = withScenario("journalUnavailable") {
+        onNodeWithText("Your journal isn't ready yet").assertIsDisplayed()
+        onNodeWithText("Try again").assertHasClickAction()
+        onNodeWithText("Meals").performClick()
+        onNodeWithText("No meal photos yet").assertIsDisplayed()
+    }
+
+    @Test
+    fun journalEmptyOpensMealsAndKeepsThreeTabNavigation() = withScenario("journalEmpty") {
+        onNodeWithText("Your journal\nstarts here.").assertIsDisplayed()
+        onNodeWithText("Open Meals").performScrollTo().performClick()
+        onNodeWithText("No meal photos yet").assertIsDisplayed()
+        onNodeWithContentDescription("Add meal photos").performClick()
+        onNodeWithText("Camera").assertIsDisplayed()
+        onNodeWithText("Photos").assertIsDisplayed()
+    }
+
+    @Test
+    fun journalEntryOpensItsCanonicalRecordDetails() = withScenario("journalFilled") {
+        onAllNodesWithText("Sleep")[0].performClick()
+        onNodeWithText("RECORDS").performScrollTo().assertIsDisplayed()
+        onNodeWithText("Health Connect").assertIsDisplayed()
+    }
+
+    @Test
+    fun welcomeOpensTheSameSecureLoginForm() = withScenario("welcome") {
+        onNodeWithText("Join for free").performScrollTo().performClick()
+        onNodeWithText("Use your phone number or email to continue.").assertIsDisplayed()
+        onNodeWithContentDescription("Back to welcome").performClick()
+        onNodeWithText("Join for free").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
     fun loginFixtureRendersProductionLoginSurface() = withScenario("login") {
-        onNodeWithText("Health challenges with friends.").assertIsDisplayed()
+        onNodeWithText("Use your phone number or email to continue.").assertIsDisplayed()
         onNodeWithText("Send code").assertIsDisplayed()
     }
 
@@ -121,8 +195,9 @@ class ScreenshotScenarioSmokeTest {
 
     @Test
     fun syncedFixtureRendersBackendConfirmedStatusSurface() = withScenario("synced") {
-        onNodeWithText("Synced").assertIsDisplayed()
-        onNodeWithText("Check for new data").assertIsDisplayed()
+        onNodeWithText("Settings").performClick()
+        onNodeWithText("Synced ·", substring = true).assertIsDisplayed()
+        onNodeWithContentDescription("Check for new data").assertIsDisplayed()
     }
 
     @Test
@@ -228,10 +303,10 @@ class ScreenshotScenarioSmokeTest {
             }
 
             compose.onNodeWithText("Home").performClick()
-            compose.onNodeWithText("Check for new data").assertIsDisplayed()
+            compose.onNodeWithText("Today").assertIsDisplayed()
             scenario.recreate()
             compose.waitForIdle()
-            compose.onNodeWithText("Check for new data").assertIsDisplayed()
+            compose.onNodeWithText("Today").assertIsDisplayed()
 
             scenario.onActivity { it.requestOpenSettings() }
             compose.waitForIdle()

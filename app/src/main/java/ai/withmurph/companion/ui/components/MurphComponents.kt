@@ -70,7 +70,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun MurphLogo(
     modifier: Modifier = Modifier,
-    painter: Painter = painterResource(R.drawable.murph_logo),
+    painter: Painter = painterResource(if (MurphColors.Cream.red < 0.5f) R.drawable.murph_logo_dark else R.drawable.murph_logo),
 ) {
     Image(
         painter = painter,
@@ -109,9 +109,9 @@ fun MurphPrimaryButton(
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = MurphColors.SageDark,
-            contentColor = Color.White,
+            contentColor = MurphColors.OnPrimary,
             disabledContainerColor = MurphColors.SageDark,
-            disabledContentColor = Color.White,
+            disabledContentColor = MurphColors.OnPrimary,
         ),
     ) {
         Row(
@@ -231,6 +231,7 @@ fun MurphTextField(
     enabled: Boolean = true,
     autofillContentType: ContentType? = null,
 ) {
+    val palette = ai.withmurph.companion.ui.theme.LocalMurphPalette.current
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(22.dp)
 
@@ -246,13 +247,13 @@ fun MurphTextField(
             .drawWithContent {
                 val radius = 22.dp.toPx()
                 drawRoundRect(
-                    color = MurphColors.Card.copy(alpha = 0.9f),
+                    color = palette.Card.copy(alpha = 0.9f),
                     cornerRadius = CornerRadius(radius),
                 )
                 if (focused) {
                     val ringWidth = 3.dp.toPx()
                     drawRoundRect(
-                        color = MurphColors.Ring.copy(alpha = 0.5f),
+                        color = palette.Ring.copy(alpha = 0.5f),
                         topLeft = Offset(-ringWidth / 2f, -ringWidth / 2f),
                         size = Size(size.width + ringWidth, size.height + ringWidth),
                         cornerRadius = CornerRadius(radius + ringWidth / 2f),
@@ -260,7 +261,7 @@ fun MurphTextField(
                     )
                     val borderWidth = 1.dp.toPx()
                     drawRoundRect(
-                        color = MurphColors.Ring,
+                        color = palette.Ring,
                         topLeft = Offset(borderWidth / 2f, borderWidth / 2f),
                         size = Size(
                             width = size.width - borderWidth,
@@ -272,7 +273,7 @@ fun MurphTextField(
                 } else {
                     val borderWidth = 1.dp.toPx()
                     drawRoundRect(
-                        color = MurphColors.BorderWarm,
+                        color = palette.BorderWarm,
                         topLeft = Offset(borderWidth / 2f, borderWidth / 2f),
                         size = Size(size.width - borderWidth, size.height - borderWidth),
                         cornerRadius = CornerRadius(radius - borderWidth / 2f),
@@ -311,6 +312,7 @@ fun MurphTextField(
 }
 
 enum class MurphIconKind {
+    Meal,
     HealthCard,
     Refresh,
     CheckCircle,
@@ -350,6 +352,10 @@ fun MurphIcon(
     backgroundColor: Color = Color.Transparent,
     contentDescription: String? = null,
 ) {
+    if (kind == MurphIconKind.Meal) {
+        ai.withmurph.companion.ui.journal.JournalIcon("meal", modifier, tint)
+        return
+    }
     val semanticsModifier = if (contentDescription == null) {
         modifier
     } else {
@@ -366,6 +372,7 @@ fun MurphIcon(
         )
 
         when (kind) {
+            MurphIconKind.Meal -> Unit
             MurphIconKind.HealthCard -> {
                 drawRoundRect(
                     color = tint,

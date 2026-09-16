@@ -67,6 +67,8 @@ class ScreenshotActivity : ComponentActivity() {
     internal var signOutRequests = 0
         private set
     internal val healthSyncReminderPreferenceRequests = mutableListOf<Boolean>()
+    internal var reminderSetupDismissed by mutableStateOf(false)
+        private set
     private var showsReadyApp by mutableStateOf(true)
     private var healthSyncReminderTargetEnabled by mutableStateOf<Boolean?>(null)
 
@@ -109,6 +111,8 @@ class ScreenshotActivity : ComponentActivity() {
                 Box(modifier = fixtureModifier) {
                     MurphApp(
                         appState = appState,
+                        showReminderSetup = scenario == ScreenshotScenario.Notifications && !reminderSetupDismissed,
+                        showLoginFormInitially = scenario != ScreenshotScenario.Welcome,
                         loginState = scenario.loginState(),
                         healthSyncNotificationsAllowed =
                             scenario != ScreenshotScenario.ReminderBlocked &&
@@ -128,6 +132,7 @@ class ScreenshotActivity : ComponentActivity() {
                                 healthSyncReminderTargetEnabled = enabled
                             },
                             onSignOut = { signOutRequests += 1 },
+                            onDismissReminderSetup = { reminderSetupDismissed = true },
                         ),
                         initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
                     )
@@ -184,6 +189,22 @@ class ScreenshotActivity : ComponentActivity() {
 }
 
 internal enum class ScreenshotScenario {
+    Welcome,
+    Notifications,
+    JournalFilled,
+    JournalEmpty,
+    JournalLoading,
+    JournalFailure,
+    JournalUnavailable,
+    JournalStale,
+    MealsEmpty,
+    MealsOffline,
+    MealsPreparing,
+    MealsReview,
+    MealsSending,
+    MealsHealthReset,
+    MealsPartialFailure,
+    MealsSent,
     Login,
     Email,
     Otp,
@@ -226,7 +247,20 @@ internal enum class ScreenshotScenario {
     Failure;
 
     fun appState(now: Instant): AppUiState = when (this) {
-        Login, Email, Otp, OtpResending -> AppUiState(phase = AppPhase.NeedsLogin)
+        Welcome, Login, Email, Otp, OtpResending -> AppUiState(phase = AppPhase.NeedsLogin)
+        Notifications -> ready(HealthSyncState.Synced(now), observedAt = now)
+        JournalFilled -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ParityFixtures.journal(now))
+        JournalUnavailable -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Ready(ai.withmurph.companion.core.JournalResponse(null, "stale")))
+        JournalStale -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ParityFixtures.journal(now).let { ai.withmurph.companion.core.JournalState.Ready(it.response.copy(freshness = "stale")) })
+        JournalEmpty -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Ready(ai.withmurph.companion.core.JournalResponse(ai.withmurph.companion.core.Journal(emptyList(), 120), "fresh")))
+        JournalLoading -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Loading)
+        JournalFailure -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Failed)
+        MealsOffline -> ready(HealthSyncState.NotConnected).copy(authVerifiedOnline = false)
+        MealsPreparing -> ready(HealthSyncState.NotConnected).copy(meals = ai.withmurph.companion.core.ManualMealsState(preparing = true))
+        MealsEmpty, MealsReview, MealsSending, MealsHealthReset, MealsPartialFailure, MealsSent -> ready(HealthSyncState.Synced(now), observedAt = now).copy(
+            journal = ai.withmurph.companion.core.JournalState.Ready(ai.withmurph.companion.core.JournalResponse(ai.withmurph.companion.core.Journal(emptyList(), 120), "fresh")),
+            meals = ParityFixtures.meals(this),
+        )
         Setup -> ready(HealthSyncState.NotConnected).copy(
             initialSetupStep = InitialSetupStep.HealthConnect,
         )
@@ -387,6 +421,8 @@ internal enum class ScreenshotScenario {
             isInFlight = true,
         )
         Email -> LoginUiState(method = LoginMethod.Email)
+        Welcome, Notifications, JournalFilled, JournalEmpty, JournalLoading, JournalFailure, JournalUnavailable, JournalStale,
+        MealsEmpty, MealsOffline, MealsPreparing, MealsReview, MealsSending, MealsHealthReset, MealsPartialFailure, MealsSent,
         Login,
         Setup,
         Disconnected,

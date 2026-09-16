@@ -1,8 +1,6 @@
 # Murph Android Companion
 
-A native Kotlin + Jetpack Compose companion that signs an existing Murph member in and bridges Health Connect into Murph through Junction.
-
-This repository is intentionally narrow. It is not a general Murph mobile client.
+A native Kotlin + Jetpack Compose companion with the iOS app’s Home Journal, manual Meals, and Settings structure, plus Android Health Connect through Junction.
 
 ## Included
 
@@ -17,12 +15,24 @@ This repository is intentionally narrow. It is not a general Murph mobile client
 - Native launch-consent recovery for signed-in members when the backend returns structured hosted-consent-required responses.
 - Provider-neutral Health Connect setup and recovery guidance.
 - Optional, server-backed familiar-name projection for unregistered phone participants in groups.
+- A swipeable signed-out welcome and adaptive system light/dark styling.
+- Read-only Home Journal from the authenticated companion endpoint: calendar,
+  seven-day summaries, daily events and source record details. Projections stay
+  in session memory and are cleared at auth and consent boundaries.
+- Manual Meals: Android camera and system photo picker, at most ten selections,
+  explicit sending, sanitized JPEGs (1280px / 1 MiB), and idempotent partial retry.
+- Accepted-photo history: at most 24 encrypted 420px / 256 KiB thumbnails for
+  14 days, bound to the admitted member and excluded from backup. It stores no
+  original images or upload keys and is cleared on sign-out. A camera handoff
+  uses a temporary private cache file, removed after preparation or abandonment.
+  Preparation belongs to the application session and survives activity recreation;
+  sign-out, member changes, and explicit draft abandonment cancel it.
 - Settings, legal links, deletion, support, and sign-out.
 - No local health/contact database and no token, health-value, contact-value, or provider-response logging.
 
 ## Deliberately excluded
 
-- Automatic meal-photo capture and a Meals tab.
+- Automatic meal-photo capture.
 - Chat, vault browsing, challenges, or a general Murph client.
 - Direct wearable-provider OAuth.
 - A direct Samsung Health SDK integration; supported Samsung Health records may relay through Health Connect.
@@ -30,7 +40,7 @@ This repository is intentionally narrow. It is not a general Murph mobile client
   identity proof, signup prefill, or contact-derived routing authority.
 - App-owned Hilt, Room, Retrofit, analytics, and crash-reporting SDKs. Junction
   transitively includes AndroidX WorkManager and its Room
-  runtime; Murph defines no Room database or health-value cache.
+  runtime; Murph defines no Room database or Health Connect record cache.
 
 ## First setup
 
@@ -335,8 +345,17 @@ message.
   an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online
   account verification is temporarily unavailable.
-- Login destinations and OTP digits are protected from Android task snapshots,
-  and a successful OTP is cleared before the app enters the signed-in session.
+- Production `MainActivity` sets `FLAG_SECURE` before graph initialization and
+  rendering, and retains it through every session phase. Journal records, photo
+  previews, login destinations, and OTP digits stay out of screenshots and task
+  previews; modal windows inherit that protection. A successful OTP is cleared
+  before the app enters the signed-in session. The separate synthetic screenshot
+  activity remains capturable for visual verification.
+- Same-member Health Connect preparation and health-only reconnect resets cancel
+  pending meal transports into a nonbusy retry state, retaining unresolved photos
+  and their original upload IDs. Accepted photos remain excluded from retry.
+  Actual account and consent boundaries still clear content and invalidate late
+  completions.
 - Signing out atomically records a durable pending-sign-out tombstone, revokes
   reconstructible health authorization and the active process lease, cancels
   and joins registered health and Contacts operations, settles uncertain

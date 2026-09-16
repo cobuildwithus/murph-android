@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -94,6 +95,7 @@ fun LoginScreen(
     onChangeDestination: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     var showsCountryPicker by rememberSaveable { mutableStateOf(false) }
     var hasFocusedOnce by remember { mutableStateOf(false) }
@@ -120,6 +122,7 @@ fun LoginScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
+            .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding(),
     ) {
@@ -143,6 +146,13 @@ fun LoginScreen(
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Column {
+                onBack?.let { back ->
+                    androidx.compose.material3.IconButton(onClick = back, enabled = !state.isInFlight,
+                        modifier = Modifier.size(44.dp).background(MurphColors.Card, androidx.compose.foundation.shape.CircleShape)
+                            .semantics { contentDescription = "Back to welcome" }) {
+                        Text("‹", color = MurphColors.Slate, fontSize = 28.sp)
+                    }
+                }
                 Spacer(Modifier.height(topSpacing))
 
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -172,7 +182,7 @@ fun LoginScreen(
                             contentAlignment = Alignment.CenterStart,
                         ) {
                             Text(
-                                text = "Health challenges with friends.",
+                                text = "Use your phone number or email to continue.",
                                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                 color = MurphColors.SlateMuted,
                             )
@@ -355,16 +365,17 @@ private fun CountryButton(
             style = MaterialTheme.typography.bodyLarge,
             color = MurphColors.Slate,
         )
+        val chevronColor = MurphColors.SlateMuted
         Canvas(Modifier.size(12.dp)) {
             drawLine(
-                color = MurphColors.SlateMuted,
+                color = chevronColor,
                 start = Offset(size.width * 0.18f, size.height * 0.38f),
                 end = Offset(size.width * 0.5f, size.height * 0.68f),
                 strokeWidth = 1.8.dp.toPx(),
                 cap = StrokeCap.Round,
             )
             drawLine(
-                color = MurphColors.SlateMuted,
+                color = chevronColor,
                 start = Offset(size.width * 0.5f, size.height * 0.68f),
                 end = Offset(size.width * 0.82f, size.height * 0.38f),
                 strokeWidth = 1.8.dp.toPx(),
