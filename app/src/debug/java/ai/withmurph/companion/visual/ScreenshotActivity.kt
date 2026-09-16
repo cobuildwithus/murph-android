@@ -198,6 +198,8 @@ internal enum class ScreenshotScenario {
     JournalUnavailable,
     JournalStale,
     MealsEmpty,
+    MealsOffline,
+    MealsPreparing,
     MealsReview,
     MealsSending,
     MealsPartialFailure,
@@ -252,6 +254,8 @@ internal enum class ScreenshotScenario {
         JournalEmpty -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Ready(ai.withmurph.companion.core.JournalResponse(ai.withmurph.companion.core.Journal(emptyList(), 120), "fresh")))
         JournalLoading -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Loading)
         JournalFailure -> ready(HealthSyncState.Synced(now), observedAt = now).copy(journal = ai.withmurph.companion.core.JournalState.Failed)
+        MealsOffline -> ready(HealthSyncState.NotConnected).copy(authVerifiedOnline = false)
+        MealsPreparing -> ready(HealthSyncState.NotConnected).copy(meals = ai.withmurph.companion.core.ManualMealsState(preparing = true))
         MealsEmpty, MealsReview, MealsSending, MealsPartialFailure, MealsSent -> ready(HealthSyncState.Synced(now), observedAt = now).copy(
             journal = ai.withmurph.companion.core.JournalState.Ready(ai.withmurph.companion.core.JournalResponse(ai.withmurph.companion.core.Journal(emptyList(), 120), "fresh")),
             meals = ParityFixtures.meals(this),
@@ -417,7 +421,7 @@ internal enum class ScreenshotScenario {
         )
         Email -> LoginUiState(method = LoginMethod.Email)
         Welcome, Notifications, JournalFilled, JournalEmpty, JournalLoading, JournalFailure, JournalUnavailable, JournalStale,
-        MealsEmpty, MealsReview, MealsSending, MealsPartialFailure, MealsSent,
+        MealsEmpty, MealsOffline, MealsPreparing, MealsReview, MealsSending, MealsPartialFailure, MealsSent,
         Login,
         Setup,
         Disconnected,

@@ -21,6 +21,7 @@ data class ManualMealsState(
     val selectionGeneration: String = UUID.randomUUID().toString(),
     val selected: List<ManualMealPhoto> = emptyList(),
     val sent: List<SentMealPhoto> = emptyList(),
+    val preparing: Boolean = false,
     val sending: Boolean = false,
     val current: Int = 0,
     val total: Int = 0,

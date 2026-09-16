@@ -42,11 +42,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) {
-            java.io.File(cacheDir, "meal-camera").listFiles()?.forEach { file ->
-                if (file.isFile && file.name.startsWith("capture-")) file.delete()
-            }
-        }
         openSettingsRequestId = savedInstanceState?.getInt(
             STATE_OPEN_SETTINGS_REQUEST_ID,
         ) ?: 0
@@ -239,7 +234,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onDismissReminderSetup = ::dismissReminderSetup,
                         onRefreshSentMeals = { graph.applicationScope.launch { graph.session.refreshSentMeals() } },
-                        onAddMealPhotos = graph.session::addManualMealPhotos,
+                        onPrepareMealPhotos = { generation, uris, file -> graph.prepareMealPhotos(applicationContext, generation, uris, file) },
                         onRemoveMealPhoto = graph.session::removeManualMealPhoto,
                         onDiscardMealDraft = graph.session::discardManualMealDraft,
                         onSendMealPhotos = { graph.applicationScope.launch { graph.session.sendManualMealPhotos() } },

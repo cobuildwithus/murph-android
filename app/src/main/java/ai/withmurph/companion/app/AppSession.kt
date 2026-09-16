@@ -97,6 +97,7 @@ class AppSession(
     private var journalRequestEpoch: Int? = null
     private var journalRead: Job? = null
     private var manualMealUpload: Job? = null
+    private var manualMealPreparation: Job? = null
     private var currentMemberKey: String? = null
     private var pendingHealthConnection: PendingHealthConnection? = null
     private var pendingAddressBookPermissionFlow: PendingAddressBookPermissionFlow? = null
@@ -141,6 +142,44 @@ class AppSession(
         if (history.isNotEmpty()) _state.update { it.copy(meals = it.meals.copy(sent = history)) }
     }
 
+    suspend fun prepareManualMealPhotos(
+        generation: String,
+        count: Int,
+        prepare: suspend (Int) -> ManualMealPhoto,
+        cleanup: () -> Unit = {},
+    ) {
+        val job = currentCoroutineContext()[Job]
+        val member = currentMemberKey
+        val epoch = sessionEpoch
+        fun owns() = member != null && ownsCompanionContentRequest(member, epoch) &&
+            _state.value.meals.selectionGeneration == generation
+        try {
+            val meals = _state.value.meals
+            if (!owns() || meals.preparing || meals.sending || meals.partialFailure) return
+            manualMealPreparation = job
+            _state.update { it.copy(meals = it.meals.copy(preparing = true, message = null)) }
+            val photos = mutableListOf<ManualMealPhoto>()
+            var failures = 0
+            repeat(count.coerceIn(0, 10)) { index ->
+                currentCoroutineContext().ensureActive()
+                if (!owns()) return
+                try { photos += prepare(index) }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { failures += 1 }
+            }
+            currentCoroutineContext().ensureActive()
+            if (owns()) addManualMealPhotos(generation, photos, failures)
+        } finally {
+            if (manualMealPreparation === job) {
+                manualMealPreparation = null
+                if (_state.value.meals.selectionGeneration == generation) {
+                    _state.update { it.copy(meals = it.meals.copy(preparing = false)) }
+                }
+            }
+            cleanup()
+        }
+    }
+
     fun addManualMealPhotos(generation: String, photos: List<ManualMealPhoto>, failedCount: Int) {
         val member = currentMemberKey ?: return
         if (!ownsCompanionContentRequest(member, sessionEpoch)) return
@@ -170,6 +209,9 @@ class AppSession(
     }
 
     fun discardManualMealDraft() {
+        if (_state.value.meals.sending || _state.value.meals.partialFailure) return
+        manualMealPreparation?.cancel()
+        manualMealPreparation = null
         _state.update { state ->
             if (state.meals.sending || state.meals.partialFailure) state
             else state.copy(meals = ManualMealsState(sent = state.meals.sent))
@@ -181,7 +223,7 @@ class AppSession(
         val epoch = sessionEpoch
         if (!ownsCompanionContentRequest(member, epoch)) return
         val initial = _state.value.meals
-        if (initial.sending || initial.selected.isEmpty()) return
+        if (initial.sending || initial.preparing || initial.selected.isEmpty()) return
         val generation = initial.selectionGeneration
         fun owns(): Boolean = ownsCompanionContentRequest(member, epoch) && _state.value.meals.selectionGeneration == generation
         _state.update { it.copy(meals = it.meals.copy(sending = true, current = 0,
@@ -254,6 +296,8 @@ class AppSession(
     }
 
     private fun clearManualMeals() {
+        manualMealPreparation?.cancel()
+        manualMealPreparation = null
         manualMealUpload?.cancel()
         manualMealUpload = null
         _state.update { it.copy(meals = ManualMealsState()) }
@@ -262,10 +306,18 @@ class AppSession(
     suspend fun refreshJournal() {
         val memberKey = currentMemberKey ?: return
         val epoch = sessionEpoch
-        if (!ownsCompanionContentRequest(memberKey, epoch) || journalRequestEpoch == epoch) return
+        if (journalRequestEpoch == epoch || _state.value.phase != AppPhase.Ready ||
+            hasActiveLaunchConsentRecovery() || localState.signOutPending) return
         journalRequestEpoch = epoch
-        _state.update { it.copy(journal = JournalState.Loading) }
         try {
+            if (!_state.value.authVerifiedOnline) retry()
+            if (!ownsCompanionContentRequest(memberKey, epoch)) {
+                if (memberKey == currentMemberKey && epoch == sessionEpoch && _state.value.phase == AppPhase.Ready) {
+                    _state.update { it.copy(journal = JournalState.Failed) }
+                }
+                return
+            }
+            _state.update { it.copy(journal = JournalState.Loading) }
             val response = coroutineScope {
                 val read = async { api.fetchJournal(memberKey) }
                 journalRead = read

@@ -84,6 +84,90 @@ class AppSessionTest {
         ai.withmurph.companion.core.ManualMealPhoto(byteArrayOf(1), byteArrayOf(2), Instant.now(), id)
 
     @Test
+    fun mealPreparationSurvivesUiObserverReplacementAndWaitsForExplicitSend() = runTest {
+        val fixture = completedHealthFixture()
+        val generation = fixture.session.state.value.meals.selectionGeneration
+        val gate = CompletableDeferred<Unit>()
+        val photo = mealPhoto()
+        var cleaned = false
+        val preparation = launch {
+            fixture.session.prepareManualMealPhotos(generation, 1,
+                prepare = { gate.await(); photo }, cleanup = { cleaned = true })
+        }
+        val firstUi = launch { fixture.session.state.collect {} }
+        runCurrent()
+        assertTrue(fixture.session.state.value.meals.preparing)
+        firstUi.cancelAndJoin()
+        val recreatedUi = launch { fixture.session.state.collect {} }
+        runCurrent()
+        assertFalse(cleaned)
+        assertTrue(preparation.isActive)
+        gate.complete(Unit)
+        preparation.join()
+        assertTrue(cleaned)
+        assertFalse(fixture.session.state.value.meals.preparing)
+        assertEquals(listOf(photo.id), fixture.session.state.value.meals.selected.map { it.id })
+        assertTrue(fixture.api.mealUploads.isEmpty())
+        recreatedUi.cancelAndJoin()
+    }
+
+    @Test
+    fun abandoningDraftCancelsPreparationAndCleansItsSource() = runTest {
+        val fixture = completedHealthFixture()
+        val generation = fixture.session.state.value.meals.selectionGeneration
+        var cleaned = false
+        val preparation = launch {
+            fixture.session.prepareManualMealPhotos(generation, 1,
+                prepare = { CompletableDeferred<Unit>().await(); mealPhoto() }, cleanup = { cleaned = true })
+        }
+        runCurrent()
+        fixture.session.discardManualMealDraft()
+        preparation.join()
+        assertTrue(preparation.isCancelled)
+        assertTrue(cleaned)
+        assertFalse(fixture.session.state.value.meals.preparing)
+        assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+        assertFalse(generation == fixture.session.state.value.meals.selectionGeneration)
+    }
+
+    @Test
+    fun memberSwitchRejectsLatePreparationAndCleansItsSource() = runTest {
+        val fixture = completedHealthFixture()
+        val generation = fixture.session.state.value.meals.selectionGeneration
+        val gate = CompletableDeferred<Unit>()
+        var cleaned = false
+        val preparation = launch {
+            fixture.session.prepareManualMealPhotos(generation, 1,
+                prepare = {
+                    withContext(kotlinx.coroutines.NonCancellable) { gate.await() }
+                    mealPhoto()
+                }, cleanup = { cleaned = true })
+        }
+        runCurrent()
+        fixture.auth.state = AuthSessionState.SignedIn("synthetic-other-member", verifiedOnline = true)
+        fixture.session.didLogin()
+        gate.complete(Unit)
+        preparation.join()
+        assertTrue(cleaned)
+        assertTrue(preparation.isCancelled)
+        assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+        assertTrue(fixture.api.mealUploads.isEmpty())
+    }
+
+    @Test
+    fun unverifiedSessionRejectsPhotoPreparationBeforeReadingAndCleansSource() = runTest {
+        val fixture = offlineRestoredFixture()
+        fixture.session.start()
+        var reads = 0
+        var cleaned = false
+        fixture.session.prepareManualMealPhotos(fixture.session.state.value.meals.selectionGeneration, 1,
+            prepare = { reads += 1; mealPhoto() }, cleanup = { cleaned = true })
+        assertEquals(0, reads)
+        assertTrue(cleaned)
+        assertFalse(fixture.session.state.value.meals.preparing)
+    }
+
+    @Test
     fun mealUploadRequiresExplicitSendAndOnlyAcknowledgedPhotosEnterHistory() = runTest {
         val fixture = completedHealthFixture()
         val photo = mealPhoto()
@@ -154,6 +238,21 @@ class AppSessionTest {
         assertTrue(send.isCancelled)
         assertTrue(fixture.session.state.value.meals.sent.isEmpty())
         assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+    }
+
+    @Test
+    fun journalRefreshRecoversOfflineRestoreWithoutAnotherForegroundEvent() = runTest {
+        val fixture = offlineRestoredFixture()
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.session.start()
+        fixture.session.refreshJournal()
+        assertEquals(ai.withmurph.companion.core.JournalState.Failed, fixture.session.state.value.journal)
+        assertTrue(fixture.api.journalMembers.isEmpty())
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.refreshJournal()
+        assertTrue(fixture.session.state.value.authVerifiedOnline)
+        assertEquals(listOf(MEMBER_KEY), fixture.api.journalMembers)
+        assertTrue(fixture.session.state.value.journal is ai.withmurph.companion.core.JournalState.Ready)
     }
 
     @Test

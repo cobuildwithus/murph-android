@@ -20,6 +20,11 @@ The UI renderers are unchanged by that fix. Three additional raw 1080 × 1920
 (9:16) captures show welcome, Journal and manual Meals for the Play listing,
 using the same synthetic APK and no member data.
 
+The final recovery baseline and offline/preparation states were captured from
+synthetic APK SHA-256 `e30563c47bd886160a75edeeeec743fe105f6aee89ee36735adfe48a2e8dcaf4`.
+The other captures retain their original rendering evidence; these changes add
+recovery eligibility and retained preparation ownership.
+
 ## Coverage
 
 Welcome, secure OTP form, contact/personality onboarding, optional reminder,
@@ -31,13 +36,20 @@ Large-text welcome actions remain reachable by scrolling the page.
 
 ## Verification and limits
 
-`./scripts/verify.sh` passes: all variant unit tests (572 Debug / 562 Release),
+`./scripts/verify.sh` passes: all variant unit tests (577 Debug / 567 Release),
 Debug/Release lint and builds, synthetic app isolation, merged-manifest and Play
 release tooling checks. Two deterministic transport tests reproduce and prevent success/failure returning before connection cleanup. Session tests cover stale responses, consent recovery,
 sign-out cancellation, explicit sends and idempotent partial retries. Device
 privacy tests cover JPEG sanitization and encrypted, expiring thumbnail storage.
+An offline-restored session test proves explicit Journal refresh revalidates
+admission without another foreground event. Preparation tests cover replaced UI
+observers, abandonment, member switching, source cleanup, and late results. The
+emulator delivers a synthetic picker result, recreates the activity while its
+retained callback is blocked, then prepares the real JPEG exactly once without
+sending it. This isolates UI result ownership; the session tests separately cover
+operation cancellation. Camera providers are excluded from the isolated fixture.
 The complete `:app:connectedSyntheticAndroidTest` suite passes with zero failures;
-the protected live hosted journey is intentionally skipped without its protected
+54 tests passed, with the protected live hosted journey intentionally skipped without its protected
 configuration.
 
 These images prove rendering of synthetic state. They do not prove production

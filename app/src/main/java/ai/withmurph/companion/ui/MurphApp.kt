@@ -377,7 +377,7 @@ private fun ReadyApp(
                             )
                         } else if (state.initialSetupStep == InitialSetupStep.Complete && state.launchConsentRecovery == null) {
                             ai.withmurph.companion.ui.journal.JournalScreen(
-                                state = state.journal,
+                                state = if (state.authVerifiedOnline) state.journal else ai.withmurph.companion.core.JournalState.Failed,
                                 onRefresh = actions.onRefreshJournal,
                                 onOpenMeals = { selectedTab = AppTab.Meals },
                                 reserveStatusBarInset = bannerRecovery == null,
@@ -408,7 +408,9 @@ private fun ReadyApp(
                         }
                         AppTab.Meals -> ai.withmurph.companion.ui.meals.MealsScreen(
                             state = state.meals,
-                            onAddPhotos = actions.onAddMealPhotos,
+                            onPreparePhotos = actions.onPrepareMealPhotos,
+                            canAcquirePhotos = state.authVerifiedOnline && state.launchConsentRecovery == null,
+                            onRecover = { if (state.launchConsentRecovery == null) actions.onRetry() else actions.onShowLaunchConsent() },
                             onRemove = actions.onRemoveMealPhoto,
                             onSend = actions.onSendMealPhotos,
                             onRefresh = actions.onRefreshSentMeals,
@@ -1404,7 +1406,7 @@ data class MurphActions(
     val onDismissReminderSetup: () -> Unit = {},
     val onSyncNow: () -> Unit,
     val onRefreshJournal: () -> Unit = {},
-    val onAddMealPhotos: (String, List<ai.withmurph.companion.core.ManualMealPhoto>, Int) -> Unit = { _, _, _ -> },
+    val onPrepareMealPhotos: (String, List<android.net.Uri>, java.io.File?) -> Unit = { _, _, _ -> },
     val onRemoveMealPhoto: (String) -> Unit = {},
     val onSendMealPhotos: () -> Unit = {},
     val onRefreshSentMeals: () -> Unit = {},

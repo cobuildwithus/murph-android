@@ -25,6 +25,8 @@ A native Kotlin + Jetpack Compose companion with the iOS app’s Home Journal, m
   14 days, bound to the admitted member and excluded from backup. It stores no
   original images or upload keys and is cleared on sign-out. A camera handoff
   uses a temporary private cache file, removed after preparation or abandonment.
+  Preparation belongs to the application session and survives activity recreation;
+  sign-out, member changes, and explicit draft abandonment cancel it.
 - Settings, legal links, deletion, support, and sign-out.
 - No local health/contact database and no token, health-value, contact-value, or provider-response logging.
 

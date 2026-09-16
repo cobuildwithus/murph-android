@@ -27,10 +27,37 @@ class AppGraph private constructor(
     val config: AppConfig,
     val applicationScope: CoroutineScope,
 ) {
+    fun prepareMealPhotos(context: Context, generation: String, uris: List<android.net.Uri>, cameraFile: java.io.File?) {
+        val appContext = context.applicationContext
+        val selected = uris.distinct().take(10)
+        applicationScope.launch {
+            session.prepareManualMealPhotos(
+                generation = generation,
+                count = selected.size,
+                prepare = { index ->
+                    ai.withmurph.companion.meals.MealPhotoSanitizer.prepare(appContext.contentResolver, selected[index])
+                },
+                cleanup = {
+                    if (cameraFile != null) {
+                        selected.forEach { uri ->
+                            appContext.revokeUriPermission(uri,
+                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        }
+                        cameraFile.delete()
+                    }
+                },
+            )
+        }
+    }
+
     companion object {
         fun create(context: Context): AppGraph {
             check(Looper.myLooper() == Looper.getMainLooper()) {
                 "AppGraph and Privy must be initialized on the main thread"
+            }
+            // This graph is constructed once per process, before any photo draft exists.
+            java.io.File(context.cacheDir, "meal-camera").listFiles()?.forEach { file ->
+                if (file.isFile && file.name.startsWith("capture-")) file.delete()
             }
             val config = AppConfig.current.also(AppConfig::requireConfigured)
             val applicationScope = CoroutineScope(

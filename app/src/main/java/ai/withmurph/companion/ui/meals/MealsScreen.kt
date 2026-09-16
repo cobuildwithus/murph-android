@@ -1,8 +1,6 @@
 package ai.withmurph.companion.ui.meals
 
-import ai.withmurph.companion.core.ManualMealPhoto
 import ai.withmurph.companion.core.ManualMealsState
-import ai.withmurph.companion.meals.MealPhotoSanitizer
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.journal.JournalIcon
 import ai.withmurph.companion.ui.theme.MurphColors
@@ -35,14 +33,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 import java.io.File
 
 @Composable
 fun MealsScreen(
     state: ManualMealsState,
-    onAddPhotos: (String, List<ManualMealPhoto>, Int) -> Unit,
+    onPreparePhotos: (String, List<Uri>, File?) -> Unit,
+    canAcquirePhotos: Boolean = true,
+    onRecover: () -> Unit = {},
     onRemove: (String) -> Unit,
     onSend: () -> Unit,
     onRefresh: () -> Unit = {},
@@ -50,19 +48,14 @@ fun MealsScreen(
 ) {
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { onRefresh() }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
-    var preparing by remember { mutableStateOf(false) }
     var localMessage by remember { mutableStateOf<String?>(null) }
     var pickerGeneration by rememberSaveable { mutableStateOf(state.selectionGeneration) }
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
-    val currentOnAdd by rememberUpdatedState(onAddPhotos)
-    val currentGeneration by rememberUpdatedState(state.selectionGeneration)
-    val currentCameraPath by rememberUpdatedState(cameraPath)
     DisposableEffect(state.selectionGeneration) {
         onDispose {
             if ((context as? android.app.Activity)?.isChangingConfigurations != true) {
-                currentCameraPath?.let(::File)?.let { file ->
+                cameraPath?.let(::File)?.let { file ->
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.meal-camera", file)
                     context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     file.delete()
@@ -72,28 +65,9 @@ fun MealsScreen(
     }
     fun prepare(uris: List<Uri>, cameraFile: File? = null) {
         val generation = pickerGeneration
-        if (generation != currentGeneration) { cameraFile?.delete(); return }
-        preparing = true
-        localMessage = null
-        scope.launch {
-            val photos = mutableListOf<ManualMealPhoto>()
-            var failures = 0
-            try {
-                for (uri in uris.distinct().take(10)) {
-                    try { photos += MealPhotoSanitizer.prepare(context.contentResolver, uri) }
-                    catch (error: CancellationException) { throw error }
-                    catch (_: Exception) { failures += 1 }
-                }
-                currentOnAdd(generation, photos, failures)
-            } finally {
-                preparing = false
-                cameraFile?.delete()
-                if (cameraFile != null) {
-                    uris.forEach { context.revokeUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-                    cameraPath = null
-                }
-            }
-        }
+        // Transfer camera ownership before the retained operation starts.
+        if (cameraFile != null) cameraPath = null
+        onPreparePhotos(generation, uris, cameraFile)
     }
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
         if (uris.isNotEmpty()) prepare(uris)
@@ -104,6 +78,7 @@ fun MealsScreen(
             prepare(listOf(FileProvider.getUriForFile(context, "${context.packageName}.meal-camera", file)), file)
         } else { file?.delete(); cameraPath = null }
     }
+    LaunchedEffect(canAcquirePhotos) { if (!canAcquirePhotos) menu = false }
     LaunchedEffect(state.selectionGeneration) { localMessage = null; menu = false }
     Column(Modifier.fillMaxSize().background(MurphColors.Cream)
         .then(if (reserveStatusBarInset) Modifier.statusBarsPadding() else Modifier)
@@ -111,7 +86,7 @@ fun MealsScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Meals", Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.headlineLarge, color = MurphColors.Slate)
             Box {
-                IconButton(onClick = { menu = true }, enabled = !preparing && !state.sending && !state.partialFailure && state.selected.size < 10,
+                IconButton(onClick = { menu = true }, enabled = canAcquirePhotos && !state.preparing && !state.sending && !state.partialFailure && state.selected.size < 10,
                     modifier = Modifier.size(44.dp).background(MurphColors.MutedSurface, CircleShape).semantics { contentDescription = "Add meal photos" }) {
                     Text("+", color = MurphColors.Slate, fontSize = 26.sp)
                 }
@@ -138,7 +113,11 @@ fun MealsScreen(
                 }
             }
         }
-        if (preparing) {
+        if (!canAcquirePhotos) {
+            Text("Reconnect to add or send meal photos.", color = MurphColors.SlateMuted)
+            MurphPrimaryButton("Try again", onClick = onRecover)
+        }
+        if (state.preparing) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 Text("Preparing photos…", color = MurphColors.SlateMuted)
@@ -163,14 +142,14 @@ fun MealsScreen(
                     color = MurphColors.SlateMuted, style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                 if (state.sending) LinearProgressIndicator(progress = { state.current.toFloat() / state.total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())
-                MurphPrimaryButton("Send to Murph", onClick = onSend, enabled = !state.sending && !preparing)
+                MurphPrimaryButton("Send to Murph", onClick = onSend, enabled = canAcquirePhotos && !state.sending && !state.preparing)
             }
         }
         (localMessage ?: state.message)?.let { message ->
             Text(message, color = if (state.partialFailure) MurphColors.Sienna else MurphColors.SlateMuted,
                 style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         }
-        if (state.selected.isEmpty() && state.sent.isEmpty() && !preparing) {
+        if (state.selected.isEmpty() && state.sent.isEmpty() && !state.preparing) {
             Column(Modifier.fillMaxWidth().padding(vertical = 36.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 JournalIcon("meal", Modifier.size(34.dp))

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -57,6 +58,16 @@ class ScreenshotScenarioSmokeTest {
             scenario.onActivity { assertEquals(listOf(true), it.healthSyncReminderPreferenceRequests) }
             compose.onNodeWithText("Setting up…").assertIsDisplayed()
         }
+    }
+
+    @Test
+    fun offlineJournalAndMealsShowRecoveryAndDisablePhotoAcquisition() = withScenario("mealsOffline") {
+        onNodeWithText("Journal couldn't load").assertIsDisplayed()
+        onNodeWithText("Try again").assertHasClickAction()
+        onNodeWithText("Meals").performClick()
+        onNodeWithText("Reconnect to add or send meal photos.").assertIsDisplayed()
+        onNodeWithContentDescription("Add meal photos").assertIsNotEnabled()
+        onNodeWithText("Try again").assertHasClickAction()
     }
 
     @Test
