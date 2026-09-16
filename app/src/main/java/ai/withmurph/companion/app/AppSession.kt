@@ -3192,7 +3192,10 @@ class AppSession(
                     }
                     return
                 }
-                if (!resetHealthSdkAtTrustBoundary(acceptedConsentOwner)) return
+                if (!resetHealthSdkAtTrustBoundary(
+                        acceptedConsentOwner = acceptedConsentOwner,
+                        preserveMealDraft = true,
+                    )) return
                 epoch = sessionEpoch
                 null
             } catch (error: CompanionApiException.LocalAuthUnavailable) {
@@ -5239,6 +5242,7 @@ class AppSession(
     private suspend fun resetHealthSdkAtTrustBoundary(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
         revokeAuthorization: Boolean = false,
+        preserveMealDraft: Boolean = false,
     ): Boolean {
         if (revokeAuthorization) {
             return resetMemberAtTrustBoundary(
@@ -5246,7 +5250,7 @@ class AppSession(
                 acceptedConsentOwner = acceptedConsentOwner,
             )
         }
-        invalidateSessionEpoch(acceptedConsentOwner)
+        invalidateSessionEpoch(acceptedConsentOwner, preserveMealDraft = preserveMealDraft)
         return try {
             revokeWorkAndSignOutHealthSdk()
             true

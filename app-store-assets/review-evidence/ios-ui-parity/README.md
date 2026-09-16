@@ -63,6 +63,13 @@ Health-only epoch changes release upload/preparation busy state while retaining
 unresolved IDs. Gated tests cover both an unresolved first upload and a partially
 accepted batch, reject late completions, and retry only unresolved photos.
 
+The resume-recovery baseline and retained-photo state were refreshed from APK
+SHA-256 `a1be153ad83091367ee9374dcc4ddfe12a1b6ad2bb2a7cdaf805ae178bce2f25`.
+A regression reproduces same-member authentication recovery followed by a server
+reconnect response specifically for Health Connect resume. Pending partial-batch
+photos, selection generation and original retry IDs survive; acknowledged photos
+are not sent again. Consent-boundary clearing remains covered.
+
 ## Coverage
 
 Welcome, secure OTP form, contact/personality onboarding, optional reminder,
@@ -74,7 +81,7 @@ Large-text welcome actions remain reachable by scrolling the page.
 
 ## Verification and limits
 
-`./scripts/verify.sh` passes: all variant unit tests (587 Debug / 577 Release),
+`./scripts/verify.sh` passes: all variant unit tests (588 Debug / 578 Release),
 Debug/Release lint and builds, synthetic app isolation, merged-manifest and Play
 release tooling checks. Two deterministic transport tests reproduce and prevent success/failure returning before connection cleanup. Session tests cover stale responses, consent recovery,
 sign-out cancellation, explicit sends and idempotent partial retries. Device

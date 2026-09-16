@@ -284,6 +284,42 @@ class AppSessionTest {
     }
 
     @Test
+    fun healthResumeReconnectPreservesPartialMealRetryIdentity() = runTest {
+        for (observed in listOf(AuthSessionState.SignedIn(MEMBER_KEY, false), AuthSessionState.TemporarilyUnavailable)) {
+            val fixture = completedHealthFixture()
+            val photos = listOf(mealPhoto(), mealPhoto(), mealPhoto())
+            val generation = fixture.session.state.value.meals.selectionGeneration
+            fixture.session.addManualMealPhotos(generation, photos, 0)
+            fixture.api.mealUploadHandler = { photo ->
+                if (photo.id == photos[1].id) fixture.auth.state = observed
+            }
+            fixture.session.sendManualMealPhotos()
+            val unresolvedIds = photos.drop(1).map { it.id }
+            assertEquals(unresolvedIds, fixture.session.state.value.meals.selected.map { it.id })
+            assertEquals(listOf(photos[0].id), fixture.session.state.value.meals.sent.map { it.id })
+            assertFalse(fixture.session.state.value.authVerifiedOnline)
+            fixture.api.intents.clear()
+            fixture.api.signInError = CompanionApiException.ReconnectRequired
+            fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, true)
+            fixture.session.retry()
+            assertEquals(listOf(ConnectionIntent.Resume), fixture.api.intents)
+            assertTrue(fixture.session.state.value.healthReconnectRequired)
+            assertTrue(fixture.session.state.value.authVerifiedOnline)
+            assertEquals(generation, fixture.session.state.value.meals.selectionGeneration)
+            assertEquals(unresolvedIds, fixture.session.state.value.meals.selected.map { it.id })
+            assertEquals(listOf(photos[0].id), fixture.session.state.value.meals.sent.map { it.id })
+            assertFalse(fixture.session.state.value.meals.preparing)
+            assertFalse(fixture.session.state.value.meals.sending)
+            assertTrue(fixture.session.state.value.meals.partialFailure)
+            fixture.api.mealUploadHandler = null
+            fixture.session.sendManualMealPhotos()
+            assertEquals(photos.take(2).map { it.id } + unresolvedIds, fixture.api.mealUploads)
+            assertEquals(photos.map { it.id }.toSet(), fixture.session.state.value.meals.sent.map { it.id }.toSet())
+            assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+        }
+    }
+
+    @Test
     fun tokenAcquisitionFailuresKeepMealDraftAndExposeRecovery() = runTest {
         for (observed in listOf(AuthSessionState.SignedIn(MEMBER_KEY, true),
             AuthSessionState.SignedIn(MEMBER_KEY, false), AuthSessionState.TemporarilyUnavailable)) {
@@ -450,8 +486,12 @@ class AppSessionTest {
     @Test
     fun journalConsentFailureHidesRecordsAndStartsRecovery() = runTest {
         val fixture = completedHealthFixture()
+        val generation = fixture.session.state.value.meals.selectionGeneration
+        fixture.session.addManualMealPhotos(generation, listOf(mealPhoto()), 0)
         fixture.api.journalHandler = { throw CompanionApiException.ConsentRequired }
         fixture.session.refreshJournal()
+        assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+        assertFalse(generation == fixture.session.state.value.meals.selectionGeneration)
         assertNotNull(fixture.session.state.value.launchConsentRecovery)
         assertEquals(ai.withmurph.companion.core.JournalState.Idle, fixture.session.state.value.journal)
     }
