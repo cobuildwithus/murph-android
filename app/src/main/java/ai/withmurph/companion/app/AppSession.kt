@@ -225,7 +225,9 @@ class AppSession(
         val initial = _state.value.meals
         if (initial.sending || initial.preparing || initial.selected.isEmpty()) return
         val generation = initial.selectionGeneration
-        fun owns(): Boolean = ownsCompanionContentRequest(member, epoch) && _state.value.meals.selectionGeneration == generation
+        fun ownsDraft(): Boolean = ownsCompanionContentState(member, epoch) &&
+            _state.value.meals.selectionGeneration == generation
+        fun owns(): Boolean = ownsDraft() && ownsCompanionContentRequest(member, epoch)
         _state.update { it.copy(meals = it.meals.copy(sending = true, current = 0,
             total = initial.selected.size, partialFailure = false, message = null)) }
         var failed = false
@@ -289,7 +291,8 @@ class AppSession(
                     else if (initial.selected.size == 1) "Photo sent to Murph." else "Photos sent to Murph.",
             )) }
         } finally {
-            if (owns()) _state.update { state -> state.copy(meals = state.meals.copy(sending = false,
+            // Temporary verification loss blocks uploads, but must release this draft's busy state.
+            if (ownsDraft()) _state.update { state -> state.copy(meals = state.meals.copy(sending = false,
                 partialFailure = state.meals.selected.isNotEmpty(),
                 message = state.meals.message ?: if (state.meals.selected.isNotEmpty()) "Some photos couldn't be sent. Try again." else null)) }
         }
@@ -360,12 +363,17 @@ class AppSession(
             }
         } finally {
             if (journalRequestEpoch == epoch) journalRequestEpoch = null
+            if (ownsCompanionContentState(memberKey, epoch) && _state.value.journal == JournalState.Loading) {
+                _state.update { it.copy(journal = JournalState.Failed) }
+            }
         }
     }
 
+    private fun ownsCompanionContentState(memberKey: String, epoch: Int): Boolean =
+        epoch == sessionEpoch && memberKey == currentMemberKey && memberKey == localState.memberKey
+
     private fun ownsCompanionContentRequest(memberKey: String, epoch: Int): Boolean =
-        epoch == sessionEpoch && memberKey == currentMemberKey &&
-            memberKey == localState.memberKey && !localState.signOutPending &&
+        ownsCompanionContentState(memberKey, epoch) && !localState.signOutPending &&
             _state.value.phase == AppPhase.Ready && _state.value.authVerifiedOnline &&
             !hasActiveLaunchConsentRecovery()
 

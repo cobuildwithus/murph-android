@@ -225,6 +225,34 @@ class AppSessionTest {
     }
 
     @Test
+    fun temporaryAuthLossDuringUploadReleasesBusyStateAndKeepsRetryIdentity() = runTest {
+        val fixture = completedHealthFixture()
+        val photo = mealPhoto()
+        val gate = CompletableDeferred<Unit>()
+        fixture.api.mealUploadHandler = { gate.await(); throw CompanionApiException.Network }
+        fixture.session.addManualMealPhotos(fixture.session.state.value.meals.selectionGeneration, listOf(photo), 0)
+        val send = launch { fixture.session.sendManualMealPhotos() }
+        runCurrent()
+        assertTrue(fixture.session.state.value.meals.sending)
+        fixture.session.didEnterBackground()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = false)
+        fixture.session.didBecomeActive()
+        assertFalse(fixture.session.state.value.authVerifiedOnline)
+        gate.complete(Unit)
+        send.join()
+        assertFalse(fixture.session.state.value.meals.sending)
+        assertTrue(fixture.session.state.value.meals.partialFailure)
+        assertEquals(listOf(photo.id), fixture.session.state.value.meals.selected.map { it.id })
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.retry()
+        fixture.api.mealUploadHandler = null
+        fixture.session.sendManualMealPhotos()
+        assertEquals(listOf(photo.id, photo.id), fixture.api.mealUploads)
+        assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+        assertEquals(listOf(photo.id), fixture.session.state.value.meals.sent.map { it.id })
+    }
+
+    @Test
     fun signOutCancelsAnInFlightMealUploadAndCannotPublishAReceipt() = runTest {
         val fixture = completedHealthFixture()
         val entered = CompletableDeferred<Unit>()
@@ -253,6 +281,23 @@ class AppSessionTest {
         assertTrue(fixture.session.state.value.authVerifiedOnline)
         assertEquals(listOf(MEMBER_KEY), fixture.api.journalMembers)
         assertTrue(fixture.session.state.value.journal is ai.withmurph.companion.core.JournalState.Ready)
+    }
+
+    @Test
+    fun temporaryAuthLossDuringJournalReadDoesNotLeaveAStaleLoadingState() = runTest {
+        val fixture = completedHealthFixture()
+        val gate = CompletableDeferred<Unit>()
+        fixture.api.journalHandler = { gate.await(); throw CompanionApiException.Network }
+        val read = launch { fixture.session.refreshJournal() }
+        runCurrent()
+        fixture.session.didEnterBackground()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = false)
+        fixture.session.didBecomeActive()
+        gate.complete(Unit)
+        read.join()
+        fixture.auth.state = AuthSessionState.SignedIn(MEMBER_KEY, verifiedOnline = true)
+        fixture.session.retry()
+        assertEquals(ai.withmurph.companion.core.JournalState.Failed, fixture.session.state.value.journal)
     }
 
     @Test

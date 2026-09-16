@@ -25,6 +25,12 @@ synthetic APK SHA-256 `e30563c47bd886160a75edeeeec743fe105f6aee89ee36735adfe48a2
 The other captures retain their original rendering evidence; these changes add
 recovery eligibility and retained preparation ownership.
 
+The baseline was refreshed again after session request finalization changed,
+using APK SHA-256 `c5e1bf39b55f88c7314cdca359db5c31b38f1c5aa1e9e49fea6867335c437711`.
+The renderers are unchanged. Focused regressions reproduce temporary verification
+loss during pending uploads and Journal reads, and prove cleanup releases busy
+state without losing meal retry identities or changing a replacement session.
+
 ## Coverage
 
 Welcome, secure OTP form, contact/personality onboarding, optional reminder,
@@ -36,7 +42,7 @@ Large-text welcome actions remain reachable by scrolling the page.
 
 ## Verification and limits
 
-`./scripts/verify.sh` passes: all variant unit tests (577 Debug / 567 Release),
+`./scripts/verify.sh` passes: all variant unit tests (579 Debug / 569 Release),
 Debug/Release lint and builds, synthetic app isolation, merged-manifest and Play
 release tooling checks. Two deterministic transport tests reproduce and prevent success/failure returning before connection cleanup. Session tests cover stale responses, consent recovery,
 sign-out cancellation, explicit sends and idempotent partial retries. Device
