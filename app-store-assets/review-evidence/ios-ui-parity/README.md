@@ -10,9 +10,15 @@ source; affected states were recaptured after the final visual fixes.
 - Android Emulator API 36, arm64 Google APIs; 1080 × 2400 at 420 dpi.
 - System light/dark appearance; normal text and 1.6× font scale.
 - Synthetic app version code 3. No production session or member data.
-- Synthetic APK SHA-256: `96da6909bdd51ad349e736b8c4d14020832c9b6ce3417220e64463e0ed648605`.
+- Initial visual-capture APK SHA-256: `96da6909bdd51ad349e736b8c4d14020832c9b6ce3417220e64463e0ed648605`.
 - PNG structure validated with the trusted visual-proof parser: raw 8-bit RGBA,
   only IHDR, sRGB, sBIT, IDAT and IEND chunks. Every image was visually inspected.
+
+The Journal baseline was recaptured after the transport cleanup fix from
+synthetic APK SHA-256 `f2ed4c237d418b8838906b76aac888613f7d534dbfa22bd26bbc6530af9c2e9c`.
+The UI renderers are unchanged by that fix. Three additional raw 1080 × 1920
+(9:16) captures show welcome, Journal and manual Meals for the Play listing,
+using the same synthetic APK and no member data.
 
 ## Coverage
 
@@ -25,9 +31,9 @@ Large-text welcome actions remain reachable by scrolling the page.
 
 ## Verification and limits
 
-`./scripts/verify.sh` passes: all variant unit tests (570 Debug / 560 Release),
+`./scripts/verify.sh` passes: all variant unit tests (572 Debug / 562 Release),
 Debug/Release lint and builds, synthetic app isolation, merged-manifest and Play
-release tooling checks. Session tests cover stale responses, consent recovery,
+release tooling checks. Two deterministic transport tests reproduce and prevent success/failure returning before connection cleanup. Session tests cover stale responses, consent recovery,
 sign-out cancellation, explicit sends and idempotent partial retries. Device
 privacy tests cover JPEG sanitization and encrypted, expiring thumbnail storage.
 The complete `:app:connectedSyntheticAndroidTest` suite passes with zero failures;

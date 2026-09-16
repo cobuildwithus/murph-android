@@ -48,8 +48,6 @@ import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class HttpCompanionApi private constructor(
     baseUrl: String,
@@ -390,7 +388,7 @@ internal suspend fun executeHttpRequest(
     val activeRequest = CancellableHttpRequest()
     continuation.invokeOnCancellation { activeRequest.cancel() }
     Dispatchers.IO.dispatch(continuation.context) {
-        try {
+        val result: Result<HttpResponse> = try {
             if (!continuation.isActive) return@dispatch
             val connection = openConnection(url)
             if (!activeRequest.attachConnection(connection)) return@dispatch
@@ -434,7 +432,7 @@ internal suspend fun executeHttpRequest(
                 maxChars = maxResponseChars,
             )
             if (!continuation.isActive) return@dispatch
-            continuation.resume(HttpResponse(status, text))
+            Result.success(HttpResponse(status, text))
         } catch (error: Exception) {
             if (!continuation.isActive) return@dispatch
             val mapped = when (error) {
@@ -443,10 +441,11 @@ internal suspend fun executeHttpRequest(
                 is IOException -> CompanionApiException.Network
                 else -> error
             }
-            continuation.resumeWithException(mapped)
+            Result.failure(mapped)
         } finally {
             activeRequest.finish()
         }
+        if (continuation.isActive) continuation.resumeWith(result)
     }
 }
 

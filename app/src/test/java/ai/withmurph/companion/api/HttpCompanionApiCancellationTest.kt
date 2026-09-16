@@ -19,6 +19,41 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class HttpCompanionApiCancellationTest {
     @Test
+    fun successReturnsOnlyAfterConnectionCleanup() = runBlocking(Dispatchers.Unconfined) {
+        val connection = object : ObservableConnection() {
+            override fun getResponseCode(): Int = 200
+            override fun getContentLengthLong(): Long = 0
+            override fun getInputStream(): InputStream = java.io.ByteArrayInputStream(byteArrayOf())
+        }
+        executeHttpRequest(
+            openConnection = { connection },
+            url = connection.url,
+            method = "GET",
+            token = null,
+            body = null,
+        )
+        assertEquals("Response must not escape before disconnect", 0L, connection.disconnectObserved.count)
+    }
+
+    @Test
+    fun failureReturnsOnlyAfterConnectionCleanup() = runBlocking(Dispatchers.Unconfined) {
+        val connection = object : ObservableConnection() {
+            override fun getResponseCode(): Int = throw IOException("synthetic transport failure")
+        }
+        val result = runCatching {
+            executeHttpRequest(
+                openConnection = { connection },
+                url = connection.url,
+                method = "GET",
+                token = null,
+                body = null,
+            )
+        }
+        assertTrue(result.isFailure)
+        assertEquals("Failure must not escape before disconnect", 0L, connection.disconnectObserved.count)
+    }
+
+    @Test
     fun cancellationWhileWaitingForIdentityTokenNeverOpensAConnection() = runBlocking {
         val tokenEntered = CompletableDeferred<Unit>()
         val tokenGate = CompletableDeferred<String>()

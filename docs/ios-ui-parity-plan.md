@@ -34,7 +34,7 @@ at `e608d67`; Journal, Meals and Settings remain the live destinations. Referenc
 
 ## Evidence / limitations
 
-The parity implementation passes all 570 Debug unit tests and the repository
+The parity implementation passes all 572 Debug unit tests and the repository
 verification script (all variant unit tests, Debug/Release lint and assembly,
 synthetic fixture isolation, and Play tooling checks). Focused image privacy
 tests also verify JPEG metadata removal, dimension/byte bounds, member-bound
@@ -42,5 +42,5 @@ Keystore encryption, expiry, and stale-write rejection. The complete API 36 emul
 live hosted journey is intentionally skipped without its protected configuration.
 Thirty-five raw, inspected synthetic screenshots cover the final UI in light,
 dark and 1.6× text. See `app-store-assets/review-evidence/ios-ui-parity/`.
-Physical Android, OEM/provider and live account journeys remain unverified.
+The hosted API 28 suite exposed an HTTP completion/cleanup race. Two deterministic regression tests fail before the ordering fix and pass after it; the caller now resumes only after cleanup. Physical Android, OEM/provider and live account journeys remain unverified.
 Version code 2 is already uploaded; the replacement uses version code 3.
