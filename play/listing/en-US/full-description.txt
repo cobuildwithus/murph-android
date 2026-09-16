@@ -6,6 +6,8 @@ Use your connected history to ask how your activity, workouts, or sleep have cha
 
 Health Connect categories include activity and fitness, exercise, sleep, body measurements and vital signs, nutrition and hydration, and menstrual and reproductive health. Availability depends on your device, membership, permissions, and apps writing to Health Connect. The Android app shows backend-confirmed connection status, helps you recover when permissions change, and lets you start a sync while the app is open.
 
+Browse your daily Journal, choose a date, and open sleep, movement, meal, and other saved entries with their source details. Send meal photos whenever you choose using your camera or the system photo picker: review selections, remove photos, and tap Send to Murph. Automatic meal capture is not included. The app follows your system light or dark appearance.
+
 You can also choose to share privacy-minimized Friendly Names from your Android contacts. Murph reads contacts only after you tap Share, Update, or Retry. This optional feature helps group conversations use familiar names; it does not send invitations or messages to your contacts.
 
 You stay in control:

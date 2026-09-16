@@ -96,7 +96,7 @@ class NativeHostedE2ETest {
                 reporter,
             ) {
                 scenario = ActivityScenario.launch(MainActivity::class.java)
-                waitForText("Send code", 60_000)
+                showLoginForm()
             }
 
             perform(
@@ -240,7 +240,7 @@ class NativeHostedE2ETest {
         requestRejected: NativeHostedE2EFailureCode,
         codeRejected: NativeHostedE2EFailureCode,
     ) {
-        waitForText("Send code", 45_000)
+        showLoginForm()
         if (hasClickableText("Use phone number instead")) {
             clickText("Use phone number instead", 20_000)
         }
@@ -305,6 +305,12 @@ class NativeHostedE2ETest {
         compose.waitForIdle()
         clickText(identity.country.localizedName, 20_000, scroll = true)
         waitUntil(20_000) { nodeCount(hasContentDescription(targetDescription)) == 1 }
+    }
+
+    private fun showLoginForm() {
+        waitUntil(60_000) { hasVisibleText("Log in") || hasVisibleText("Send code") }
+        if (hasVisibleText("Log in")) clickText("Log in", 20_000)
+        waitForText("Send code", 60_000)
     }
 
     private fun hasVerificationCodeField(): Boolean =
@@ -647,6 +653,10 @@ class NativeHostedE2ETest {
         val deadline = System.currentTimeMillis() + 300_000
         while (System.currentTimeMillis() < deadline) {
             if (isConnectedHealthState()) {
+                if (hasClickableText("Keep notifications off")) {
+                    clickText("Keep notifications off", 20_000)
+                    continue
+                }
                 if (hasClickableText("Not now")) {
                     clickText("Not now", 20_000)
                     continue
@@ -668,10 +678,13 @@ class NativeHostedE2ETest {
             throw JourneyFailure(NativeHostedE2EFailureCode.SignOutActionUnavailable)
         }
 
+        if (!clickTextOrTimeout("Sign Out and Stop Syncing", 20_000)) {
+            throw JourneyFailure(NativeHostedE2EFailureCode.SignOutActionUnavailable)
+        }
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {
             val phase = currentAppPhase()
-            if (phase == AppPhase.NeedsLogin && hasVisibleText("Send code")) return
+            if (phase == AppPhase.NeedsLogin && (hasVisibleText("Send code") || hasVisibleText("Log in"))) return
             if (phase is AppPhase.Failed) {
                 throw JourneyFailure(nativeHostedE2ESignOutAppFailure(phase.message))
             }
@@ -727,8 +740,15 @@ class NativeHostedE2ETest {
     private fun isReadyShell(): Boolean =
         hasClickableText("Home") && hasClickableText("Settings")
 
-    private fun isConnectedHealthState(): Boolean =
-        nativeHostedE2EHasCompletedHealthSetup(::hasAppOwnedText)
+    private fun isConnectedHealthState(): Boolean {
+        if (nativeHostedE2EHasCompletedHealthSetup(::hasAppOwnedText)) return true
+        // Journal replaces the old Home status card; verify the admitted app's
+        // canonical connected state while its actual three-tab shell is visible.
+        val state = (targetContext.applicationContext as MurphApplication).graph.session.state.value
+        return isReadyShell() && state.phase == AppPhase.Ready &&
+            state.authVerifiedOnline && !state.healthReconnectRequired &&
+            state.launchConsentRecovery == null && state.healthSync != HealthSyncState.NotConnected
+    }
 
     private fun hasAppOwnedText(text: String): Boolean =
         nativeHostedE2EHasAppOwnedText(

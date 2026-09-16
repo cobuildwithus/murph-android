@@ -82,6 +82,33 @@ class HttpCompanionApi private constructor(
         require(uri.host != null) { "Murph backend URL must have a host" }
     }
 
+    override suspend fun uploadManualMealPhoto(memberKey: String, photo: ai.withmurph.companion.core.ManualMealPhoto) {
+        val token = identityTokenForMember(memberKey)
+        currentCoroutineContext().ensureActive()
+        val response = executeHttpRequest(
+            openConnection = connectionFactory::open,
+            url = baseUri.resolve("/api/device-sync/companion/meal-photos").toURL(),
+            method = "POST", token = token, body = null,
+            binaryBody = photo.jpeg,
+            headers = mapOf(
+                "Content-Type" to "image/jpeg",
+                "X-Murph-Meal-Capture-Schema" to "1",
+                "Idempotency-Key" to photo.id,
+                "X-Murph-Captured-At" to photo.capturedAt.toString(),
+            ),
+            readTimeoutMillis = 45_000,
+        )
+        if (response.status !in 200..299) throw mapCompanionApiError(response.status, response.text, false)
+    }
+
+    override suspend fun fetchJournal(memberKey: String): ai.withmurph.companion.core.JournalResponse =
+        JournalApiJson.parse(requestJson(
+            method = "GET",
+            path = "/api/device-sync/companion/journal",
+            maxResponseChars = 4 * 1024 * 1024,
+            authenticate = { identityTokenForMember(memberKey) },
+        ))
+
     override suspend fun admitCompanion(memberKey: String, timeZone: String) {
         val response = requestJson(
             method = "POST",
@@ -277,6 +304,7 @@ class HttpCompanionApi private constructor(
         revisionConflict: Boolean = false,
         connectTimeoutMillis: Int = 15_000,
         readTimeoutMillis: Int = 30_000,
+        maxResponseChars: Int = MAX_RESPONSE_CHARS,
     ): JSONObject {
         val token = withContext(Dispatchers.IO) {
             authenticate?.let { tokenProvider ->
@@ -302,6 +330,7 @@ class HttpCompanionApi private constructor(
             body = body?.toString(),
             connectTimeoutMillis = connectTimeoutMillis,
             readTimeoutMillis = readTimeoutMillis,
+            maxResponseChars = maxResponseChars,
         )
         return withContext(Dispatchers.IO) {
             if (response.status !in 200..299) {
@@ -354,6 +383,9 @@ internal suspend fun executeHttpRequest(
     body: String?,
     connectTimeoutMillis: Int = 15_000,
     readTimeoutMillis: Int = 30_000,
+    binaryBody: ByteArray? = null,
+    headers: Map<String, String> = emptyMap(),
+    maxResponseChars: Int = MAX_RESPONSE_CHARS,
 ): HttpResponse = suspendCancellableCoroutine { continuation ->
     val activeRequest = CancellableHttpRequest()
     continuation.invokeOnCancellation { activeRequest.cancel() }
@@ -372,19 +404,20 @@ internal suspend fun executeHttpRequest(
                 if (token != null) {
                     setRequestProperty("Authorization", "Bearer $token")
                 }
-                if (body != null) {
+                if (body != null || binaryBody != null) {
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                 }
+                headers.forEach { (name, value) -> setRequestProperty(name, value) }
             }
             if (!continuation.isActive) return@dispatch
 
-            if (body != null) {
+            if (body != null || binaryBody != null) {
                 val stream = connection.outputStream
                 if (!activeRequest.attachStream(stream)) return@dispatch
                 try {
                     if (!continuation.isActive) return@dispatch
-                    stream.write(body.toByteArray(StandardCharsets.UTF_8))
+                    stream.write(binaryBody ?: requireNotNull(body).toByteArray(StandardCharsets.UTF_8))
                 } finally {
                     activeRequest.closeStream(stream)
                 }
@@ -398,6 +431,7 @@ internal suspend fun executeHttpRequest(
                 status = status,
                 onStreamOpened = activeRequest::attachStream,
                 onStreamClosed = activeRequest::releaseStream,
+                maxChars = maxResponseChars,
             )
             if (!continuation.isActive) return@dispatch
             continuation.resume(HttpResponse(status, text))
@@ -424,8 +458,10 @@ internal fun readResponseBody(
     status: Int,
     onStreamOpened: (InputStream) -> Boolean = { true },
     onStreamClosed: (InputStream) -> Unit = {},
+    maxChars: Int = MAX_RESPONSE_CHARS,
 ): String {
-    if (connection.contentLengthLong > MAX_RESPONSE_CHARS * MAX_UTF8_BYTES_PER_RESPONSE_CHAR) {
+    require(maxChars in 1..4 * 1024 * 1024)
+    if (connection.contentLengthLong > maxChars * MAX_UTF8_BYTES_PER_RESPONSE_CHAR) {
         throw CompanionApiException.InvalidResponse
     }
 
@@ -440,7 +476,7 @@ internal fun readResponseBody(
             val body = StringBuilder()
             val chunk = CharArray(DEFAULT_BUFFER_SIZE)
             while (true) {
-                val remaining = MAX_RESPONSE_CHARS - body.length
+                val remaining = maxChars - body.length
                 val read = reader.read(chunk, 0, minOf(chunk.size, remaining + 1))
                 if (read < 0) break
                 if (read > remaining) throw CompanionApiException.InvalidResponse

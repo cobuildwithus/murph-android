@@ -6,7 +6,7 @@
     "namespace": "ai.withmurph.companion",
     "minSdk": 28,
     "targetSdk": 36,
-    "versionCode": 2,
+    "versionCode": 3,
     "versionName": "0.1.0"
   },
   "appManifestRequestedPermissions": [
@@ -323,6 +323,15 @@
         "component": "ai.withmurph.companion.reminders.HealthSyncReminderReceiver",
         "attributes": {
           "android:exported": "false"
+        }
+      },
+      {
+        "componentType": "providers",
+        "component": "androidx.core.content.FileProvider",
+        "attributes": {
+          "android:authorities": "ai.withmurph.app.meal-camera",
+          "android:exported": "false",
+          "android:grantUriPermissions": "true"
         }
       }
     ],

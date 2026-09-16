@@ -36,17 +36,25 @@ class MainActivity : ComponentActivity() {
     private lateinit var graph: AppGraph
     private var healthSyncNotificationsAllowed by mutableStateOf(false)
     private var healthSyncNotificationRecoveryNeeded by mutableStateOf(false)
+    private var reminderSetupDismissed by mutableStateOf(false)
     private var openSettingsRequestId by mutableIntStateOf(0)
     private var lastHandledReminderDeliveryId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) {
+            java.io.File(cacheDir, "meal-camera").listFiles()?.forEach { file ->
+                if (file.isFile && file.name.startsWith("capture-")) file.delete()
+            }
+        }
         openSettingsRequestId = savedInstanceState?.getInt(
             STATE_OPEN_SETTINGS_REQUEST_ID,
         ) ?: 0
         lastHandledReminderDeliveryId = savedInstanceState?.getString(
             STATE_LAST_HANDLED_REMINDER_DELIVERY_ID,
         )
+        reminderSetupDismissed = getSharedPreferences("murph_ui_state", MODE_PRIVATE)
+            .getBoolean("sync_reminder_setup_dismissed", false)
         graph = (application as MurphApplication).graph
         graph.healthSyncReminder.didEnterForeground()
         healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
@@ -75,6 +83,7 @@ class MainActivity : ComponentActivity() {
             if (granted) graph.healthSyncReminder.prepareNotificationChannel()
             healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
             healthSyncNotificationRecoveryNeeded = !granted
+            if (!granted) dismissReminderSetup()
             if (granted && healthSyncNotificationsAllowed) {
                 saveHealthSyncReminderSetting(true)
             } else {
@@ -154,6 +163,9 @@ class MainActivity : ComponentActivity() {
             MurphTheme {
                 MurphApp(
                     appState = appState,
+                    showReminderSetup = !reminderSetupDismissed && !healthSyncNotificationsAllowed &&
+                        !healthSyncNotificationRecoveryNeeded && !appState.healthSyncReminderEnabled &&
+                        appState.authVerifiedOnline && !appState.healthStatusIsStale,
                     loginState = loginState,
                     healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
                     healthSyncNotificationRecoveryNeeded =
@@ -189,6 +201,7 @@ class MainActivity : ComponentActivity() {
                             graph.applicationScope.launch { graph.login.resendCode() }
                         },
                         onChangeLoginDestination = graph.login::changeDestination,
+                        onLeaveLogin = graph.login::reset,
                         onConnectHealth = {
                             graph.applicationScope.launch {
                                 graph.session.prepareHealthConnection()
@@ -223,6 +236,15 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                        },
+                        onDismissReminderSetup = ::dismissReminderSetup,
+                        onRefreshSentMeals = { graph.applicationScope.launch { graph.session.refreshSentMeals() } },
+                        onAddMealPhotos = graph.session::addManualMealPhotos,
+                        onRemoveMealPhoto = graph.session::removeManualMealPhoto,
+                        onDiscardMealDraft = graph.session::discardManualMealDraft,
+                        onSendMealPhotos = { graph.applicationScope.launch { graph.session.sendManualMealPhotos() } },
+                        onRefreshJournal = {
+                            graph.applicationScope.launch { graph.session.refreshJournal() }
                         },
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
@@ -445,8 +467,16 @@ class MainActivity : ComponentActivity() {
         graph.applicationScope.launch {
             if (!graph.session.setHealthSyncReminderEnabled(enabled)) {
                 showReminderMessage(R.string.health_sync_reminder_save_failed)
+            } else if (enabled) {
+                dismissReminderSetup()
             }
         }
+    }
+
+    private fun dismissReminderSetup() {
+        reminderSetupDismissed = true
+        getSharedPreferences("murph_ui_state", MODE_PRIVATE).edit()
+            .putBoolean("sync_reminder_setup_dismissed", true).apply()
     }
 
     private fun showReminderMessage(messageId: Int) {

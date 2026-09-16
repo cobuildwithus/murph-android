@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.sp
 
 internal enum class AppTab {
     Home,
+    Meals,
     Settings,
 }
 
@@ -170,24 +171,15 @@ fun MurphApp(
     onOpenSettingsRequestConsumed: (Int) -> Unit = {},
     actions: MurphActions,
     initialOnboardingContactAvatarPainters: Map<String, Painter> = emptyMap(),
+    showLoginFormInitially: Boolean = false,
+    showReminderSetup: Boolean = false,
 ) {
     when (val phase = appState.phase) {
         AppPhase.Launching -> LoadingScreen()
-        AppPhase.NeedsLogin -> LoginScreen(
-            state = loginState,
-            onMethodChanged = actions.onLoginMethodChanged,
-            onPhoneCountryChanged = actions.onPhoneCountryChanged,
-            onDestinationChanged = actions.onLoginDestinationChanged,
-            onCodeChanged = actions.onLoginCodeChanged,
-            onSendCode = actions.onSendLoginCode,
-            onConfirmCode = actions.onConfirmLoginCode,
-            onResendCode = actions.onResendLoginCode,
-            onChangeDestination = actions.onChangeLoginDestination,
-            onOpenPrivacy = actions.onOpenPrivacy,
-            onOpenTerms = actions.onOpenTerms,
-        )
+        AppPhase.NeedsLogin -> SignedOutApp(loginState, actions, showLoginFormInitially)
         AppPhase.Ready -> ReadyApp(
             state = appState,
+            showReminderSetup = showReminderSetup,
             healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
             healthSyncNotificationRecoveryNeeded = healthSyncNotificationRecoveryNeeded,
             openSettingsRequestId = openSettingsRequestId,
@@ -199,10 +191,41 @@ fun MurphApp(
     }
 }
 
+@Composable
+private fun SignedOutApp(state: LoginUiState, actions: MurphActions, showLoginFormInitially: Boolean) {
+    var showForm by rememberSaveable { mutableStateOf(showLoginFormInitially || state.codeSent) }
+    val back = {
+        if (!state.isInFlight) {
+            actions.onLeaveLogin()
+            showForm = false
+        }
+    }
+    androidx.activity.compose.BackHandler(enabled = showForm) { back() }
+    if (!showForm) {
+        ai.withmurph.companion.ui.login.AuthWelcomeScreen(
+            onContinue = { showForm = true }, onOpenPrivacy = actions.onOpenPrivacy, onOpenTerms = actions.onOpenTerms,
+        )
+    } else LoginScreen(
+        state = state,
+        onMethodChanged = actions.onLoginMethodChanged,
+        onPhoneCountryChanged = actions.onPhoneCountryChanged,
+        onDestinationChanged = actions.onLoginDestinationChanged,
+        onCodeChanged = actions.onLoginCodeChanged,
+        onSendCode = actions.onSendLoginCode,
+        onConfirmCode = actions.onConfirmLoginCode,
+        onResendCode = actions.onResendLoginCode,
+        onChangeDestination = actions.onChangeLoginDestination,
+        onOpenPrivacy = actions.onOpenPrivacy,
+        onOpenTerms = actions.onOpenTerms,
+        onBack = back,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ReadyApp(
     state: AppUiState,
+    showReminderSetup: Boolean,
     healthSyncNotificationsAllowed: Boolean,
     healthSyncNotificationRecoveryNeeded: Boolean,
     openSettingsRequestId: Int,
@@ -281,7 +304,10 @@ private fun ReadyApp(
             if (shellState.showsTabBar) {
                 MurphTabBar(
                     selectedTab = selectedTab,
-                    onSelect = { selectedTab = it },
+                    onSelect = {
+                        if (selectedTab == AppTab.Meals && it != AppTab.Meals) actions.onDiscardMealDraft()
+                        selectedTab = it
+                    },
                 )
             }
         },
@@ -292,31 +318,6 @@ private fun ReadyApp(
                     recovery = recovery,
                     onOpen = actions.onShowLaunchConsent,
                     modifier = Modifier.statusBarsPadding(),
-                )
-            }
-            if (shellState.showsFriendlyNamesSetup) {
-                FriendlyNamesSetupBanner(
-                    state = state,
-                    onSetUp = {
-                        if (state.contactsPermissionDenied) {
-                            actions.onOpenAppSettings()
-                        } else if (state.launchConsentRecovery == null) {
-                            addressBookConsentAction = AddressBookConsentAction.InitialSetup
-                            showsAddressBookConsent = true
-                        } else {
-                            actions.onShowLaunchConsent()
-                        }
-                    },
-                    onSecondaryAction = if (state.addressBookHasInterruptedReplacement) {
-                        actions.onStopAddressBook
-                    } else {
-                        actions.onDeferAddressBookSharingInitialSetup
-                    },
-                    modifier = if (bannerRecovery == null) {
-                        Modifier.statusBarsPadding()
-                    } else {
-                        Modifier
-                    },
                 )
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -343,6 +344,44 @@ private fun ReadyApp(
                                 actions = actions,
                                 contactAvatarPainters = initialOnboardingContactAvatarPainters,
                             )
+                        } else if (shellState.showsFriendlyNamesSetup) {
+                            FriendlyNamesSetupScreen(
+                                state = state,
+                                onSetUp = {
+                                    if (state.contactsPermissionDenied) {
+                                        actions.onOpenAppSettings()
+                                    } else if (state.launchConsentRecovery == null) {
+                                        addressBookConsentAction = AddressBookConsentAction.InitialSetup
+                                        showsAddressBookConsent = true
+                                    } else {
+                                        actions.onShowLaunchConsent()
+                                    }
+                                },
+                                onSecondaryAction = if (state.addressBookHasInterruptedReplacement) {
+                                    actions.onStopAddressBook
+                                } else {
+                                    actions.onDeferAddressBookSharingInitialSetup
+                                },
+                                modifier = if (bannerRecovery == null) {
+                                    Modifier.statusBarsPadding()
+                                } else {
+                                    Modifier
+                                },
+                            )
+                        } else if (showReminderSetup && state.initialSetupStep == InitialSetupStep.Complete &&
+                            state.healthSync != HealthSyncState.NotConnected && state.launchConsentRecovery == null) {
+                            ai.withmurph.companion.ui.home.NotificationSetupScreen(
+                                busy = state.healthSyncReminderTargetEnabled != null,
+                                onAllow = { actions.onSetHealthSyncReminderEnabled(true) },
+                                onSkip = actions.onDismissReminderSetup,
+                            )
+                        } else if (state.initialSetupStep == InitialSetupStep.Complete && state.launchConsentRecovery == null) {
+                            ai.withmurph.companion.ui.journal.JournalScreen(
+                                state = state.journal,
+                                onRefresh = actions.onRefreshJournal,
+                                onOpenMeals = { selectedTab = AppTab.Meals },
+                                reserveStatusBarInset = bannerRecovery == null,
+                            )
                         } else {
                             HomeScreen(
                                 state = state,
@@ -367,8 +406,18 @@ private fun ReadyApp(
                                         !shellState.showsFriendlyNamesSetup,
                             )
                         }
+                        AppTab.Meals -> ai.withmurph.companion.ui.meals.MealsScreen(
+                            state = state.meals,
+                            onAddPhotos = actions.onAddMealPhotos,
+                            onRemove = actions.onRemoveMealPhoto,
+                            onSend = actions.onSendMealPhotos,
+                            onRefresh = actions.onRefreshSentMeals,
+                            reserveStatusBarInset = bannerRecovery == null,
+                        )
                         AppTab.Settings -> SettingsScreen(
                             state = state,
+                            onSyncNow = { if (state.launchConsentRecovery == null) actions.onSyncNow() else actions.onShowLaunchConsent() },
+                            onConnectHealth = { if (state.launchConsentRecovery == null) showsHealthConsent = true else actions.onShowLaunchConsent() },
                             healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
                             healthSyncNotificationRecoveryNeeded =
                                 healthSyncNotificationRecoveryNeeded,
@@ -603,82 +652,47 @@ private fun LaunchConsentBanner(
 }
 
 @Composable
-private fun FriendlyNamesSetupBanner(
+private fun FriendlyNamesSetupScreen(
     state: AppUiState,
     onSetUp: () -> Unit,
     onSecondaryAction: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = MurphColors.Card,
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MurphIcon(
-                    kind = MurphIconKind.People,
-                    modifier = Modifier.size(24.dp),
-                    contentDescription = null,
-                )
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Text(
-                        text = "Friendly Names are optional",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MurphColors.Slate,
-                    )
-                    Text(
-                        text = if (state.addressBookHasInterruptedReplacement) {
-                            "A previous update needs attention."
-                        } else {
-                            "Add familiar labels for group chats."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MurphColors.SlateMuted,
-                    )
+    Box(modifier.fillMaxSize().background(MurphColors.Cream).padding(horizontal = 24.dp)) {
+        Column(Modifier.align(Alignment.Center).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp)) {
+            Text("FRIENDLY NAMES · 2 OF 3", style = MaterialTheme.typography.labelMedium, color = MurphColors.SlateMuted)
+            MurphIcon(MurphIconKind.People, Modifier.size(42.dp))
+            Text("Murph can know who's in the chat.", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 28.sp),
+                color = MurphColors.Slate, modifier = Modifier.semantics { heading() })
+            Text("Share your contacts so Murph can tell who's who when you start a group chat with friends.",
+                style = MaterialTheme.typography.bodyLarge, color = MurphColors.SlateMuted)
+            Column(Modifier.fillMaxWidth().background(MurphColors.MutedSurface, RoundedCornerShape(12.dp)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("No invitations or automatic messages", "Phone numbers aren't stored in readable form",
+                    "Names may appear in group replies others can see").forEach {
+                    Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.Slate)
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MurphLinkButton(
-                    text = if (state.addressBookHasInterruptedReplacement) {
-                        "Stop and delete"
-                    } else {
-                        "Not now"
-                    },
-                    onClick = onSecondaryAction,
-                    enabled = !state.isAddressBookBusy && state.launchConsentRecovery == null,
-                )
-                MurphLinkButton(
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                MurphPrimaryButton(
                     text = when {
                         state.contactsPermissionDenied -> "Open settings"
                         state.isAddressBookBusy -> "Working…"
                         state.addressBookHasInterruptedReplacement -> "Retry"
-                        else -> "Set up"
-                    },
-                    onClick = onSetUp,
-                    enabled = !state.isAddressBookBusy,
+                        else -> "Share contacts"
+                    }, onClick = onSetUp, enabled = !state.isAddressBookBusy,
+                )
+                MurphLinkButton(
+                    text = if (state.addressBookHasInterruptedReplacement) "Stop and delete" else "Not now",
+                    onClick = onSecondaryAction,
+                    enabled = !state.isAddressBookBusy && state.launchConsentRecovery == null,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
-            state.addressBookMessage?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MurphColors.SlateMuted,
-                )
+            state.addressBookMessage?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MurphColors.SlateMuted)
             }
-            HorizontalDivider(color = MurphColors.BorderWarm)
         }
     }
 }
@@ -1025,6 +1039,7 @@ private fun MurphTabBar(
     selectedTab: AppTab,
     onSelect: (AppTab) -> Unit,
 ) {
+    val largeText = androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.4f
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1035,8 +1050,8 @@ private fun MurphTabBar(
     ) {
         Surface(
             modifier = Modifier
-                .width(250.dp)
-                .height(72.dp)
+                .then(if (largeText) Modifier.fillMaxWidth(.94f) else Modifier.width(300.dp))
+                .height(if (largeText) 112.dp else 72.dp)
                 .shadow(
                     elevation = 14.dp,
                     shape = RoundedCornerShape(36.dp),
@@ -1045,7 +1060,7 @@ private fun MurphTabBar(
                 ),
             shape = RoundedCornerShape(36.dp),
             color = MurphColors.NavigationSurface,
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.75f)),
+            border = BorderStroke(1.dp, MurphColors.BorderWarm),
         ) {
             Row(
                 modifier = Modifier.fillMaxSize().padding(6.dp).selectableGroup(),
@@ -1056,6 +1071,13 @@ private fun MurphTabBar(
                     icon = MurphIconKind.Home,
                     selected = selectedTab == AppTab.Home,
                     onClick = { onSelect(AppTab.Home) },
+                    modifier = Modifier.weight(1f),
+                )
+                MurphTab(
+                    label = "Meals",
+                    icon = MurphIconKind.Meal,
+                    selected = selectedTab == AppTab.Meals,
+                    onClick = { onSelect(AppTab.Meals) },
                     modifier = Modifier.weight(1f),
                 )
                 MurphTab(
@@ -1366,6 +1388,7 @@ private fun FailureScreen(
 }
 
 data class MurphActions(
+    val onLeaveLogin: () -> Unit = {},
     val onLoginMethodChanged: (LoginMethod) -> Unit,
     val onPhoneCountryChanged: (CountryDialCode) -> Unit,
     val onLoginDestinationChanged: (String) -> Unit,
@@ -1378,7 +1401,14 @@ data class MurphActions(
     val onDeferHealthConnectInitialSetup: () -> Unit,
     val onOpenHealthConnect: () -> Unit,
     val onSetHealthSyncReminderEnabled: (Boolean) -> Unit = {},
+    val onDismissReminderSetup: () -> Unit = {},
     val onSyncNow: () -> Unit,
+    val onRefreshJournal: () -> Unit = {},
+    val onAddMealPhotos: (String, List<ai.withmurph.companion.core.ManualMealPhoto>, Int) -> Unit = { _, _, _ -> },
+    val onRemoveMealPhoto: (String) -> Unit = {},
+    val onSendMealPhotos: () -> Unit = {},
+    val onRefreshSentMeals: () -> Unit = {},
+    val onDiscardMealDraft: () -> Unit = {},
     val onPrepareInitialAddressBookSharing: () -> Unit,
     val onDeferAddressBookSharingInitialSetup: () -> Unit,
     val onShareAddressBook: () -> Unit,

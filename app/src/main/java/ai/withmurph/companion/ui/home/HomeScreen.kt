@@ -98,7 +98,7 @@ private fun InitialHealthSetupContent(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                text = "HEALTH CONNECT · 1 OF 2",
+                text = "HEALTH CONNECT · 1 OF 3",
                 style = MaterialTheme.typography.labelMedium,
                 color = MurphColors.SlateMuted,
             )

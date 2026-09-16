@@ -405,7 +405,7 @@ internal fun nativeHostedE2EHasCompletedHealthSetup(
     "Worth a quick check",
     // Initial setup advances to this committed next step before the health
     // status card is guaranteed to remain visible in the reduced viewport.
-    "Friendly Names are optional",
+    "Murph can know who's in the chat.",
 ).any(hasVisibleText)
 
 internal fun nativeHostedE2EHasAppOwnedText(

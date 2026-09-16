@@ -67,6 +67,7 @@ class AppGraph private constructor(
                 localState = localState,
                 config = config,
                 healthSyncReminder = healthSyncReminder,
+                mealHistory = ai.withmurph.companion.meals.EncryptedSentMealHistory(context),
             )
             return AppGraph(
                 session = session,
