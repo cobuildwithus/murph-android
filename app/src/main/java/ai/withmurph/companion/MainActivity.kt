@@ -12,7 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -23,7 +22,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
-import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import ai.withmurph.companion.ui.MurphActions
@@ -42,6 +40,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         openSettingsRequestId = savedInstanceState?.getInt(
             STATE_OPEN_SETTINGS_REQUEST_ID,
         ) ?: 0
@@ -105,9 +104,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
-            SideEffect {
-                setLoginSnapshotProtection(appState.phase == AppPhase.NeedsLogin)
-            }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
                 lifecycle.withResumed {
@@ -476,14 +472,6 @@ class MainActivity : ComponentActivity() {
 
     private fun showReminderMessage(messageId: Int) {
         Toast.makeText(this, getString(messageId), Toast.LENGTH_LONG).show()
-    }
-
-    private fun setLoginSnapshotProtection(enabled: Boolean) {
-        if (enabled) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
     }
 
     private fun isHealthPermissionRationaleIntent(intent: Intent?): Boolean {

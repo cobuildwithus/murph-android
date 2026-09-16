@@ -26,6 +26,7 @@ internal object ParityFixtures {
     fun meals(scenario: ScreenshotScenario): ManualMealsState = when (scenario) {
         ScreenshotScenario.MealsReview -> ManualMealsState(selected = listOf(photo))
         ScreenshotScenario.MealsSending -> ManualMealsState(selected = listOf(photo), sending = true, current = 1, total = 1)
+        ScreenshotScenario.MealsHealthReset -> ManualMealsState(selected = listOf(photo), partialFailure = true, message = "Your photos are ready to retry.")
         ScreenshotScenario.MealsPartialFailure -> ManualMealsState(selected = listOf(photo), partialFailure = true, message = "Some photos couldn't be sent. Try again.")
         ScreenshotScenario.MealsSent -> ManualMealsState(sent = listOf(SentMealPhoto(photo.id, photo.thumbnail, photo.capturedAt)), message = "Photo sent to Murph.")
         else -> ManualMealsState()

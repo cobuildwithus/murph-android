@@ -38,6 +38,31 @@ verification recovery blocks uploads and unverified result publication. Settings
 recency now uses the server observation, with no recency claim when it is absent;
 stale status retains its recovery label. Focused tests cover these paths.
 
+Production-window privacy evidence uses an isolated production-canary APK
+SHA-256 `c77bc8239bfc862919c63335b99e3ea21f0081136943acd9a54f947948de35d5` with
+an invalid backend address and synthetic in-memory projections. The actual
+`MainActivity` and Journal/Meals renderers were exercised, including the record
+modal, activity recreation and Recents. Window-flag and blank-screen assertions
+passed for all four sensitive surfaces; the four raw Recents captures show the
+protected task card. An adjacent visible card belongs to the separate synthetic
+fixture app. This is API 36 emulator proof; equivalent API 28 production-window
+and physical-device/OEM snapshot exercises remain unverified.
+
+The production-window test runs separately from the isolated synthetic suite:
+
+```sh
+./gradlew :app:connectedProductionCanaryAndroidTest \
+  -PMURPH_ANDROID_TEST_BUILD_TYPE=productionCanary \
+  -PMURPH_BACKEND_BASE_URL_PROD=https://example.invalid \
+  -Pandroid.testInstrumentationRunnerArguments.class=ai.withmurph.companion.privacy.ProductionSnapshotProtectionTest
+```
+
+The final Journal baseline and the health-reset retry state were captured from
+synthetic APK SHA-256 `c6431c007f222ba8b1273a8a544ca90de79e87a93ab7cf37964a5371681c6e1f`.
+Health-only epoch changes release upload/preparation busy state while retaining
+unresolved IDs. Gated tests cover both an unresolved first upload and a partially
+accepted batch, reject late completions, and retry only unresolved photos.
+
 ## Coverage
 
 Welcome, secure OTP form, contact/personality onboarding, optional reminder,
@@ -49,7 +74,7 @@ Large-text welcome actions remain reachable by scrolling the page.
 
 ## Verification and limits
 
-`./scripts/verify.sh` passes: all variant unit tests (585 Debug / 575 Release),
+`./scripts/verify.sh` passes: all variant unit tests (587 Debug / 577 Release),
 Debug/Release lint and builds, synthetic app isolation, merged-manifest and Play
 release tooling checks. Two deterministic transport tests reproduce and prevent success/failure returning before connection cleanup. Session tests cover stale responses, consent recovery,
 sign-out cancellation, explicit sends and idempotent partial retries. Device

@@ -345,8 +345,17 @@ message.
   an older Health Connect receipt cannot prove the fresh connection worked.
 - Complete local permission revocation renders Not connected even while online
   account verification is temporarily unavailable.
-- Login destinations and OTP digits are protected from Android task snapshots,
-  and a successful OTP is cleared before the app enters the signed-in session.
+- Production `MainActivity` sets `FLAG_SECURE` before graph initialization and
+  rendering, and retains it through every session phase. Journal records, photo
+  previews, login destinations, and OTP digits stay out of screenshots and task
+  previews; modal windows inherit that protection. A successful OTP is cleared
+  before the app enters the signed-in session. The separate synthetic screenshot
+  activity remains capturable for visual verification.
+- Same-member Health Connect preparation and health-only reconnect resets cancel
+  pending meal transports into a nonbusy retry state, retaining unresolved photos
+  and their original upload IDs. Accepted photos remain excluded from retry.
+  Actual account and consent boundaries still clear content and invalidate late
+  completions.
 - Signing out atomically records a durable pending-sign-out tombstone, revokes
   reconstructible health authorization and the active process lease, cancels
   and joins registered health and Contacts operations, settles uncertain

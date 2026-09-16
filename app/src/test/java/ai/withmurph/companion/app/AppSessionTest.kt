@@ -225,6 +225,65 @@ class AppSessionTest {
     }
 
     @Test
+    fun healthSetupPreservesPendingMealIdsAndRejectsLateUploadCompletion() = runTest {
+        for (acceptFirst in listOf(false, true)) {
+            val fixture = fixture()
+            fixture.localState.initialSetupStep = InitialSetupStep.Complete
+            fixture.session.start()
+            val photos = listOf(mealPhoto(), mealPhoto(), mealPhoto())
+            val generation = fixture.session.state.value.meals.selectionGeneration
+            fixture.session.addManualMealPhotos(generation, photos, 0)
+            val blockedIndex = if (acceptFirst) 1 else 0
+            val gate = CompletableDeferred<Unit>()
+            fixture.api.mealUploadHandler = { photo ->
+                if (photo.id == photos[blockedIndex].id) {
+                    withContext(kotlinx.coroutines.NonCancellable) { gate.await() }
+                }
+            }
+            val sending = launch { fixture.session.sendManualMealPhotos() }
+            val unresolvedIds = photos.drop(blockedIndex).map { it.id }
+            try {
+                runCurrent()
+                assertTrue(fixture.session.state.value.meals.sending)
+                assertEquals(unresolvedIds, fixture.session.state.value.meals.selected.map { it.id })
+                assertTrue(fixture.session.prepareHealthConnection())
+                assertEquals(unresolvedIds, fixture.session.state.value.meals.selected.map { it.id })
+                assertFalse(fixture.session.state.value.meals.sending)
+                assertTrue(fixture.session.state.value.meals.partialFailure)
+            } finally {
+                gate.complete(Unit)
+                sending.join()
+            }
+            assertEquals(unresolvedIds, fixture.session.state.value.meals.selected.map { it.id })
+            assertEquals(blockedIndex, fixture.session.state.value.meals.sent.size)
+            fixture.session.cancelHealthPermissionFlow()
+            fixture.api.mealUploadHandler = null
+            fixture.session.sendManualMealPhotos()
+            assertTrue(fixture.session.state.value.meals.selected.isEmpty())
+            assertEquals(photos.take(blockedIndex + 1).map { it.id } + unresolvedIds, fixture.api.mealUploads)
+        }
+    }
+
+    @Test
+    fun healthSetupPreservesAnAlreadyFailedPartialMealBatch() = runTest {
+        val fixture = fixture()
+        fixture.localState.initialSetupStep = InitialSetupStep.Complete
+        fixture.session.start()
+        val photos = listOf(mealPhoto(), mealPhoto())
+        fixture.session.addManualMealPhotos(fixture.session.state.value.meals.selectionGeneration, photos, 0)
+        fixture.api.mealUploadHandler = { if (it.id == photos[1].id) throw CompanionApiException.Network }
+        fixture.session.sendManualMealPhotos()
+        assertEquals(listOf(photos[1].id), fixture.session.state.value.meals.selected.map { it.id })
+        assertTrue(fixture.session.prepareHealthConnection())
+        fixture.session.cancelHealthPermissionFlow()
+        assertEquals(listOf(photos[1].id), fixture.session.state.value.meals.selected.map { it.id })
+        assertFalse(fixture.session.state.value.meals.sending)
+        fixture.api.mealUploadHandler = null
+        fixture.session.sendManualMealPhotos()
+        assertEquals(listOf(photos[0].id, photos[1].id, photos[1].id), fixture.api.mealUploads)
+    }
+
+    @Test
     fun tokenAcquisitionFailuresKeepMealDraftAndExposeRecovery() = runTest {
         for (observed in listOf(AuthSessionState.SignedIn(MEMBER_KEY, true),
             AuthSessionState.SignedIn(MEMBER_KEY, false), AuthSessionState.TemporarilyUnavailable)) {

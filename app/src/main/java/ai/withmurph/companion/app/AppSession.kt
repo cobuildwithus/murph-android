@@ -1959,7 +1959,7 @@ class AppSession(
                         }
                     }
                     val hadLiveHealthSession = health.isSignedIn()
-                    invalidateSessionEpoch()
+                    invalidateSessionEpoch(preserveMealDraft = true)
                     val preparationEpoch = sessionEpoch
                     if (hadCompletedSetup || hadLiveHealthSession) {
                         _state.update {
@@ -4506,7 +4506,7 @@ class AppSession(
         }
 
         healthSyncReminder.cancel()
-        invalidateSessionEpoch()
+        invalidateSessionEpoch(preserveMealDraft = true)
         val sdkReset = try {
             health.signOutSdk()
             true
@@ -7331,14 +7331,27 @@ class AppSession(
 
     private fun invalidateSessionEpoch(
         acceptedConsentOwner: PendingLaunchConsentRecovery? = null,
+        preserveMealDraft: Boolean = false,
     ) {
         val preservedConsentOwner = acceptedConsentOwner?.takeIf {
             ownsAcceptedConsentContinuation(it)
         }
-        clearManualMeals()
+        sessionEpoch += 1
+        if (preserveMealDraft) {
+            manualMealPreparation?.cancel()
+            manualMealPreparation = null
+            manualMealUpload?.cancel()
+            manualMealUpload = null
+            _state.update { state -> state.copy(meals = state.meals.copy(
+                preparing = false, sending = false, current = 0, total = 0,
+                partialFailure = state.meals.selected.isNotEmpty(),
+                message = if (state.meals.selected.isNotEmpty()) "Your photos are ready to retry." else state.meals.message,
+            )) }
+        } else {
+            clearManualMeals()
+        }
         journalRead?.cancel()
         journalRead = null
-        sessionEpoch += 1
         journalRequestEpoch = null
         _state.update { it.copy(journal = JournalState.Idle) }
         healthSyncLaunchRejected = false
