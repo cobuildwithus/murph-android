@@ -448,10 +448,10 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
-    fun friendlyNamesBannerProvesInitialHealthSetupCompleted() {
+    fun friendlyNamesStepProvesInitialHealthSetupCompleted() {
         assertTrue(
             nativeHostedE2EHasCompletedHealthSetup { visibleText ->
-                visibleText == "Friendly Names are optional"
+                visibleText == "Murph can know who's in the chat."
             },
         )
     }
@@ -460,9 +460,9 @@ class NativeHostedE2EContractTest {
     fun appOwnedTextSurvivesAComposeBridgeMissAfterExternalReturn() {
         assertTrue(
             nativeHostedE2EHasAppOwnedText(
-                text = "Friendly Names are optional",
+                text = "Murph can know who's in the chat.",
                 composeHasVisibleText = { false },
-                hierarchyHasVisibleText = { it == "Friendly Names are optional" },
+                hierarchyHasVisibleText = { it == "Murph can know who's in the chat." },
             ),
         )
         assertTrue(

@@ -50,6 +50,12 @@ interface AuthProvider {
 }
 
 interface CompanionApi {
+    suspend fun uploadManualMealPhoto(memberKey: String, photo: ManualMealPhoto): Unit =
+        throw CompanionApiException.InvalidResponse
+
+    suspend fun fetchJournal(memberKey: String): JournalResponse =
+        throw CompanionApiException.InvalidResponse
+
     suspend fun admitCompanion(memberKey: String, timeZone: String)
 
     suspend fun createJunctionSignInToken(

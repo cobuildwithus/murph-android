@@ -1,1 +1,1 @@
-Connect Health Connect data and keep Murph's health context current.
+Connect your health data for personalized wellness conversations with Murph.

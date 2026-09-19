@@ -16,6 +16,7 @@ const RELEASE_PACKET_PATHS = [
   "play/listing/en-US/release-notes-1.txt",
   "play/declarations/data-safety.md",
   "play/declarations/health-apps.md",
+  "play/health-connect-review.md",
   "play/declarations/contacts.md",
   "play/release-checklist.md",
 ];

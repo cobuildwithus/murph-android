@@ -12,7 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -23,7 +22,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import ai.withmurph.companion.app.AppGraph
 import ai.withmurph.companion.app.AppLinks
-import ai.withmurph.companion.app.AppPhase
 import ai.withmurph.companion.core.HealthPermissionRequestResult
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import ai.withmurph.companion.ui.MurphActions
@@ -36,17 +34,21 @@ class MainActivity : ComponentActivity() {
     private lateinit var graph: AppGraph
     private var healthSyncNotificationsAllowed by mutableStateOf(false)
     private var healthSyncNotificationRecoveryNeeded by mutableStateOf(false)
+    private var reminderSetupDismissed by mutableStateOf(false)
     private var openSettingsRequestId by mutableIntStateOf(0)
     private var lastHandledReminderDeliveryId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         openSettingsRequestId = savedInstanceState?.getInt(
             STATE_OPEN_SETTINGS_REQUEST_ID,
         ) ?: 0
         lastHandledReminderDeliveryId = savedInstanceState?.getString(
             STATE_LAST_HANDLED_REMINDER_DELIVERY_ID,
         )
+        reminderSetupDismissed = getSharedPreferences("murph_ui_state", MODE_PRIVATE)
+            .getBoolean("sync_reminder_setup_dismissed", false)
         graph = (application as MurphApplication).graph
         graph.healthSyncReminder.didEnterForeground()
         healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
@@ -75,6 +77,7 @@ class MainActivity : ComponentActivity() {
             if (granted) graph.healthSyncReminder.prepareNotificationChannel()
             healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
             healthSyncNotificationRecoveryNeeded = !granted
+            if (!granted) dismissReminderSetup()
             if (granted && healthSyncNotificationsAllowed) {
                 saveHealthSyncReminderSetting(true)
             } else {
@@ -101,9 +104,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
-            SideEffect {
-                setLoginSnapshotProtection(appState.phase == AppPhase.NeedsLogin)
-            }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
                 lifecycle.withResumed {
@@ -154,6 +154,9 @@ class MainActivity : ComponentActivity() {
             MurphTheme {
                 MurphApp(
                     appState = appState,
+                    showReminderSetup = !reminderSetupDismissed && !healthSyncNotificationsAllowed &&
+                        !healthSyncNotificationRecoveryNeeded && !appState.healthSyncReminderEnabled &&
+                        appState.authVerifiedOnline && !appState.healthStatusIsStale,
                     loginState = loginState,
                     healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
                     healthSyncNotificationRecoveryNeeded =
@@ -189,6 +192,7 @@ class MainActivity : ComponentActivity() {
                             graph.applicationScope.launch { graph.login.resendCode() }
                         },
                         onChangeLoginDestination = graph.login::changeDestination,
+                        onLeaveLogin = graph.login::reset,
                         onConnectHealth = {
                             graph.applicationScope.launch {
                                 graph.session.prepareHealthConnection()
@@ -223,6 +227,15 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                        },
+                        onDismissReminderSetup = ::dismissReminderSetup,
+                        onRefreshSentMeals = { graph.applicationScope.launch { graph.session.refreshSentMeals() } },
+                        onPrepareMealPhotos = { generation, uris, file -> graph.prepareMealPhotos(applicationContext, generation, uris, file) },
+                        onRemoveMealPhoto = graph.session::removeManualMealPhoto,
+                        onDiscardMealDraft = graph.session::discardManualMealDraft,
+                        onSendMealPhotos = { graph.applicationScope.launch { graph.session.sendManualMealPhotos() } },
+                        onRefreshJournal = {
+                            graph.applicationScope.launch { graph.session.refreshJournal() }
                         },
                         onSyncNow = {
                             graph.applicationScope.launch { graph.session.syncNow() }
@@ -445,20 +458,20 @@ class MainActivity : ComponentActivity() {
         graph.applicationScope.launch {
             if (!graph.session.setHealthSyncReminderEnabled(enabled)) {
                 showReminderMessage(R.string.health_sync_reminder_save_failed)
+            } else if (enabled) {
+                dismissReminderSetup()
             }
         }
     }
 
-    private fun showReminderMessage(messageId: Int) {
-        Toast.makeText(this, getString(messageId), Toast.LENGTH_LONG).show()
+    private fun dismissReminderSetup() {
+        reminderSetupDismissed = true
+        getSharedPreferences("murph_ui_state", MODE_PRIVATE).edit()
+            .putBoolean("sync_reminder_setup_dismissed", true).apply()
     }
 
-    private fun setLoginSnapshotProtection(enabled: Boolean) {
-        if (enabled) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
+    private fun showReminderMessage(messageId: Int) {
+        Toast.makeText(this, getString(messageId), Toast.LENGTH_LONG).show()
     }
 
     private fun isHealthPermissionRationaleIntent(intent: Intent?): Boolean {
