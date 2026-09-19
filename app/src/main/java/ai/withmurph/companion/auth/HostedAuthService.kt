@@ -7,7 +7,6 @@ import ai.withmurph.companion.core.AuthProvider
 import ai.withmurph.companion.core.AuthProviderException
 import ai.withmurph.companion.core.AuthSessionState
 import ai.withmurph.companion.core.CompanionApiException
-import ai.withmurph.companion.core.LegacyAuthRestoring
 import ai.withmurph.companion.core.LoginMethod
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -20,17 +19,15 @@ import java.time.Instant
 class HostedAuthService(
     private val api: HostedAuthServing,
     private val store: HostedAuthCredentialStoring,
-    private val legacyFactory: () -> LegacyAuthRestoring,
     private val now: () -> Instant = Instant::now,
 ) : AuthProvider {
     private val mutex = Mutex()
-    private val legacy by lazy(legacyFactory)
     private var retryAfter = Instant.MIN
 
     override suspend fun currentState(): AuthSessionState = mutex.withLock {
         try {
             when (val record = store.load()) {
-                null -> legacy.currentState()
+                null -> AuthSessionState.SignedOut
                 is HostedAuthStoredState.SignedOut -> AuthSessionState.SignedOut
                 is HostedAuthStoredState.Active -> {
                     if (record.expiresAt <= now()) {
@@ -59,7 +56,7 @@ class HostedAuthService(
     override suspend fun confirmCode(method: LoginMethod, destination: String, code: String) = diagnosed {
         mutex.withLock {
             val binding = store.load()?.binding
-            // Retire fallback before consuming this one-use proof. A failed
+            // Retire the previous credential before consuming this one-use proof. A failed
             // secure write leaves the code available for an explicit retry.
             store.save(HostedAuthStoredState.SignedOut(binding))
             val issued = api.verifyCode(method, destination.trim(), code.trim())
@@ -70,50 +67,9 @@ class HostedAuthService(
 
     override suspend fun identityToken(): String = mutex.withLock {
         when (val record = store.load()) {
-            null -> exchange()
+            null -> throw HostedAuthException.CredentialsUnavailable
             is HostedAuthStoredState.SignedOut -> throw HostedAuthException.CredentialsUnavailable
             is HostedAuthStoredState.Active -> renew(record)
-        }
-    }
-
-    private suspend fun exchange(): String {
-        val before = legacy.currentState() as? AuthSessionState.SignedIn
-            ?: throw HostedAuthException.CredentialsUnavailable
-        val credential = legacy.identityToken()
-        requireLegacyMember(before.memberKey)
-        if (now() < retryAfter) return credential
-        val issued = try {
-            api.exchange(credential)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            requireLegacyMember(before.memberKey)
-            if (isTransient(error) || error is HostedAuthException.Response && error.status == 409) {
-                retryAfter = now().plusSeconds(60)
-                return credential
-            }
-            throw error
-        }
-        currentCoroutineContext().ensureActive()
-        requireLegacyMember(before.memberKey)
-        try {
-            save(issued, before.memberKey)
-        } catch (error: HostedAuthException) {
-            // A durable write failure must not discard a still-valid SDK
-            // session. Once any record exists, SDK fallback stays retired.
-            if (error == HostedAuthException.CredentialsUnavailable && store.load() == null) {
-                retryAfter = now().plusSeconds(60)
-                return credential
-            }
-            throw error
-        }
-        return issued.token
-    }
-
-    private suspend fun requireLegacyMember(expected: String) {
-        val current = legacy.currentState()
-        if (current !is AuthSessionState.SignedIn || !current.verifiedOnline || current.memberKey != expected) {
-            throw HostedAuthException.CredentialsUnavailable
         }
     }
 
@@ -143,7 +99,7 @@ class HostedAuthService(
     override suspend fun signOut() = mutex.withLock {
         val record = store.load()
         when (record) {
-            null -> legacy.signOut()
+            null -> Unit
             is HostedAuthStoredState.Active -> api.revoke(record.credential)
             is HostedAuthStoredState.SignedOut -> Unit
         }

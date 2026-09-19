@@ -2071,11 +2071,8 @@ class AddressBookSessionTest {
             config = AppConfig(
                 backendBaseUrl = "https://example.test",
                 environment = AppEnvironment.Sandbox,
-                privyAppId = "privy-app",
-                privyAppClientId = "privy-client",
                 appVersion = "0.1.0",
                 junctionSdkVersion = "5.0.2",
-                privySdkVersion = "0.12.0",
             ),
             newMutationId = {
                 mutationSequence += 1

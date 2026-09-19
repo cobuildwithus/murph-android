@@ -15,7 +15,7 @@ data class HostedAuthSession(
 
 data class HostedAuthSessionStatus(val memberId: String, val expiresAt: Instant)
 
-/** One secure record owns both active authority and the decision to retire SDK fallback. */
+/** One secure record owns both active authority and its retirement. */
 sealed interface HostedAuthStoredState {
     val binding: HostedAuthBinding?
 
@@ -40,7 +40,6 @@ interface HostedAuthCredentialStoring {
 interface HostedAuthServing {
     suspend fun sendCode(method: LoginMethod, value: String)
     suspend fun verifyCode(method: LoginMethod, value: String, code: String): HostedAuthSession
-    suspend fun exchange(legacyCredential: String): HostedAuthSession
     suspend fun renew(credential: String): HostedAuthSessionStatus
     suspend fun revoke(credential: String)
 }
