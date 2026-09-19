@@ -33,6 +33,8 @@ enum class FailureSupplementalActions {
 
 data class AppUiState(
     val phase: AppPhase = AppPhase.Launching,
+    val meals: ai.withmurph.companion.core.ManualMealsState = ai.withmurph.companion.core.ManualMealsState(),
+    val journal: ai.withmurph.companion.core.JournalState = ai.withmurph.companion.core.JournalState.Idle,
     val initialSetupStep: InitialSetupStep = InitialSetupStep.HealthConnect,
     val healthAvailability: HealthConnectAvailability = HealthConnectAvailability.TemporarilyUnavailable,
     val healthSync: HealthSyncState = HealthSyncState.NotConnected,

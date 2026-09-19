@@ -73,6 +73,12 @@ The centralized Android scope explicitly lists every resource exposed by the pin
 
 ## Permission justifications
 
+Use the [individual permission explanations and demonstration plan](../health-connect-review.md)
+when completing the live Console form. The grouped summary below describes the
+SDK wiring; it is not sufficient evidence of a member-facing feature by itself.
+The operator must demonstrate each requested type in the exact candidate and
+deployed service before asserting that the declaration is ready.
+
 | Data family | Permissions and Junction resources | Proposed Play Console explanation |
 | --- | --- | --- |
 | Exercise | `android.permission.health.READ_EXERCISE`, `android.permission.health.READ_ELEVATION_GAINED`, `android.permission.health.READ_POWER`, `android.permission.health.READ_SPEED`; `VitalResource.Workout` | Reads authorized exercise sessions and supported workout details so Murph can use the member's workout context and confirm when connected data reaches Murph. Vital activates workout synchronization only when Exercise is granted; elevation, power, or speed alone cannot activate the aggregate resource. |

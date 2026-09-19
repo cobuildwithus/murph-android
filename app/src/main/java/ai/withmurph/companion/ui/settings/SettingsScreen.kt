@@ -24,6 +24,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -48,7 +52,11 @@ fun SettingsScreen(
     onDeleteAccount: () -> Unit,
     onSignOut: () -> Unit,
     reserveStatusBarInset: Boolean = true,
+    onSyncNow: () -> Unit = {},
+    onConnectHealth: () -> Unit = {},
 ) {
+    var confirmSignOut by remember { mutableStateOf(false) }
+    var confirmStopContacts by remember { mutableStateOf(false) }
     val addressBook = addressBookSettingsModel(state)
     Column(
         modifier = Modifier
@@ -65,56 +73,7 @@ fun SettingsScreen(
             color = MurphColors.Slate,
         )
 
-        Section(
-            title = "Address book",
-            footer = "Optional labels for group chats. Murph never messages contacts or stores readable phone numbers.",
-        ) {
-            SettingsRow(
-                title = "Familiar group names",
-                detail = addressBook.status,
-                icon = MurphIconKind.Checklist,
-                actionLabel = addressBook.primaryLabel,
-                enabled = addressBook.canUsePrimaryAction,
-                onClick = {
-                    when (addressBook.primaryAction) {
-                        AddressBookSettingsAction.Share,
-                        AddressBookSettingsAction.Update,
-                        AddressBookSettingsAction.Retry -> onShareAddressBook()
-                        AddressBookSettingsAction.Refresh -> onRefreshAddressBook()
-                        null -> Unit
-                    }
-                },
-            )
-            if (addressBook.showsStop) {
-                SettingsDivider()
-                SettingsRow(
-                    title = "Stop and delete",
-                    detail = "Delete the server projection.",
-                    icon = MurphIconKind.Trash,
-                    actionLabel = "Stop",
-                    enabled = addressBook.canStop,
-                    onClick = onStopAddressBook,
-                )
-            }
-            if (addressBook.showsOpenAppSettings) {
-                SettingsDivider()
-                SettingsRow(
-                    title = "Contacts permission",
-                    detail = "Access is off. Other Murph features are unaffected.",
-                    icon = MurphIconKind.Gear,
-                    actionLabel = "Open settings",
-                    onClick = onOpenAppSettings,
-                )
-            }
-        }
-
-        state.addressBookMessage?.let { message ->
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MurphColors.SlateMuted,
-            )
-        }
+        HealthStatusSummary(state, onSyncNow, onConnectHealth)
 
         val healthConnected = state.healthSync != HealthSyncState.NotConnected
         val reminderCanEnable =
@@ -180,6 +139,57 @@ fun SettingsScreen(
             }
         }
 
+        Section(
+            title = "Contacts",
+            footer = "Optional labels for group chats. Murph never messages contacts or stores readable phone numbers.",
+        ) {
+            SettingsRow(
+                title = "Familiar group names",
+                detail = addressBook.status,
+                icon = MurphIconKind.Checklist,
+                actionLabel = addressBook.primaryLabel,
+                enabled = addressBook.canUsePrimaryAction,
+                onClick = {
+                    when (addressBook.primaryAction) {
+                        AddressBookSettingsAction.Share,
+                        AddressBookSettingsAction.Update,
+                        AddressBookSettingsAction.Retry -> onShareAddressBook()
+                        AddressBookSettingsAction.Refresh -> onRefreshAddressBook()
+                        null -> Unit
+                    }
+                },
+            )
+            if (addressBook.showsStop) {
+                SettingsDivider()
+                SettingsRow(
+                    title = "Stop and delete",
+                    detail = "Delete the server projection.",
+                    icon = MurphIconKind.Trash,
+                    actionLabel = "Stop",
+                    enabled = addressBook.canStop,
+                    onClick = { confirmStopContacts = true },
+                )
+            }
+            if (addressBook.showsOpenAppSettings) {
+                SettingsDivider()
+                SettingsRow(
+                    title = "Contacts permission",
+                    detail = "Access is off. Other Murph features are unaffected.",
+                    icon = MurphIconKind.Gear,
+                    actionLabel = "Open settings",
+                    onClick = onOpenAppSettings,
+                )
+            }
+        }
+
+        state.addressBookMessage?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MurphColors.SlateMuted,
+            )
+        }
+
         Section("Legal") {
             SettingsRow(
                 title = "Privacy Policy",
@@ -236,14 +246,26 @@ fun SettingsScreen(
             SettingsRow(
                 title = "Sign Out",
                 icon = MurphIconKind.SignOut,
-                onClick = onSignOut,
+                onClick = { confirmSignOut = true },
             )
         }
 
-        Text(
-            text = "Murph stores no health database inside this app. Health data stays in Health Connect and moves through Junction only after the permissions you approve.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MurphColors.SlateMuted,
+    }
+    if (confirmSignOut || confirmStopContacts) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmSignOut = false; confirmStopContacts = false },
+            title = { Text(if (confirmSignOut) "Sign out and stop syncing?" else "Stop sharing contacts?") },
+            text = { Text(if (confirmSignOut) "Health syncing will stop on this device until you sign in and reconnect."
+                else "Murph will delete the shared projection and stop future name lookups. Names already included in messages can't be recalled.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    if (confirmSignOut) onSignOut() else onStopAddressBook()
+                    confirmSignOut = false; confirmStopContacts = false
+                }) { Text(if (confirmSignOut) "Sign Out and Stop Syncing" else "Stop and Delete") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmSignOut = false; confirmStopContacts = false }) { Text("Cancel") }
+            },
         )
     }
 }

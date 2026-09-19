@@ -13,6 +13,14 @@ import java.nio.charset.StandardCharsets
 
 class HttpCompanionApiResponseBodyTest {
     @Test
+    fun journalCanRequestALargerBoundWithoutRelaxingTheDefaultResponseLimit() {
+        val body = "x".repeat(MAX_RESPONSE_CHARS + 1)
+        assertInvalidResponse { readResponseBody(FakeHttpURLConnection(200, body, -1), 200) }
+        assertEquals(body, readResponseBody(FakeHttpURLConnection(200, body, -1), 200, maxChars = 4 * 1024 * 1024))
+        assertInvalidResponse { readResponseBody(FakeHttpURLConnection(200, body, -1), 200, maxChars = MAX_RESPONSE_CHARS) }
+    }
+
+    @Test
     fun successAndErrorBodiesBelowAndAtTheLimitAreReturnedWhole() {
         listOf(MAX_RESPONSE_CHARS - 1, MAX_RESPONSE_CHARS).forEach { size ->
             listOf(200, 400).forEach { status ->
