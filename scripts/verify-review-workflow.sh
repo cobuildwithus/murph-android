@@ -35,13 +35,13 @@ if (pkg.scripts?.["review:pr"] !== "bash scripts/review-pr.sh") {
 if (pkg.scripts?.["review:validate"] !== "bash scripts/validate-review-gpt-response.sh") {
   throw new Error("review:validate must use the exact-head response validator");
 }
-if (pkg.devDependencies?.["@cobuild/review-gpt"] !== "0.5.124") {
+if (pkg.devDependencies?.["@cobuild/review-gpt"] !== "0.5.151") {
   throw new Error("@cobuild/review-gpt must stay exactly pinned");
 }
 NODE
 
 installed_review_version="$(node -p 'require("@cobuild/review-gpt/package.json").version')"
-[[ "$installed_review_version" == "0.5.124" ]]
+[[ "$installed_review_version" == "0.5.151" ]]
 if bash scripts/review-pr.sh 1 output-packages/review.md --prompt bypass >/dev/null 2>&1; then
   echo "Fixed PR review runner accepted pass-through arguments." >&2
   exit 1
