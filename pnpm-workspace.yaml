@@ -1,0 +1,3 @@
+# Exact review-tool recovery release already qualified by the public repository.
+minimumReleaseAgeExclude:
+  - '@cobuild/review-gpt@0.5.151'
