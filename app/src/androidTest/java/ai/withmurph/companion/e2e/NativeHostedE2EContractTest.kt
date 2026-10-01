@@ -128,6 +128,22 @@ class NativeHostedE2EContractTest {
     }
 
     @Test
+    fun productionRequiresRealInboxEvenWithLegacySecrets() {
+        val arguments = validArguments().apply { putString("murphHostedE2eMode", "production_canary") }
+        assertThrows(IllegalArgumentException::class.java) {
+            NativeHostedE2EProtectedIdentity.require(arguments)
+        }
+        arguments.putString("murphHostedE2eLoginEmail", "android@canary.example")
+        arguments.putString("murphHostedE2eEmailSender", "auth@example.com")
+        arguments.putString("murphHostedE2eResendApiKey", "re_synthetic_test_key")
+        assertEquals("android@canary.example", NativeHostedE2EProtectedIdentity.require(arguments).inbox?.address)
+        arguments.remove("murphHostedE2eResendApiKey")
+        assertThrows(IllegalArgumentException::class.java) {
+            NativeHostedE2EProtectedIdentity.require(arguments)
+        }
+    }
+
+    @Test
     fun otpRequestPrefersVisibleCodeThenExactlyOneSendAction() {
         assertEquals(
             NativeHostedE2EOtpRequestDecision.VerificationCodeVisible,

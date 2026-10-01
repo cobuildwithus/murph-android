@@ -545,9 +545,18 @@ internal data class NativeHostedE2EProtectedIdentity(
     val fixedOtp: String,
     val country: CountryDialCode,
     val nationalNumber: String,
+    val inbox: CanaryEmailInbox? = null,
 ) {
     companion object {
         fun require(arguments: Bundle): NativeHostedE2EProtectedIdentity {
+            if (arguments.getString("murphHostedE2eMode") == "production_canary") {
+                val inbox = CanaryEmailInbox(
+                    address = arguments.exactProtected("murphHostedE2eLoginEmail"),
+                    sender = arguments.exactProtected("murphHostedE2eEmailSender"),
+                    apiKey = arguments.exactProtected("murphHostedE2eResendApiKey"),
+                )
+                return NativeHostedE2EProtectedIdentity("", "", CountryDialCode.All.first(), "", inbox)
+            }
             val phoneNumber = arguments.exactProtected("murphHostedE2eLoginIdentifier")
             val fixedOtp = arguments.exactProtected("murphHostedE2eFixedOtp")
             requireProtected(CountryDialCode.isPlausibleE164(phoneNumber))
