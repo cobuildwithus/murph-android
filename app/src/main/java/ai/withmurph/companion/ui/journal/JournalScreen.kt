@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
@@ -332,9 +333,26 @@ fun JournalIcon(kind: String, modifier: Modifier = Modifier, color: androidx.com
                 drawPath(moon, color, style = stroke)
             }
             "meal" -> {
-                line(.25f,.1f,.25f,.9f); line(.12f,.1f,.12f,.36f); line(.38f,.1f,.38f,.36f)
-                line(.12f,.36f,.38f,.36f); line(.76f,.1f,.76f,.9f)
-                line(.62f,.1f,.62f,.53f); line(.62f,.53f,.76f,.53f)
+                // Fork and knife, matching iOS `fork.knife`.
+                val outline = Stroke(stroke.width, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val forkHead = Path().apply {
+                    moveTo(u * .14f, u * .08f)
+                    lineTo(u * .14f, u * .3f)
+                    quadraticTo(u * .14f, u * .46f, u * .28f, u * .46f)
+                    quadraticTo(u * .42f, u * .46f, u * .42f, u * .3f)
+                    lineTo(u * .42f, u * .08f)
+                }
+                drawPath(forkHead, color, style = outline)
+                line(.28f,.08f,.28f,.92f)
+                val blade = Path().apply {
+                    moveTo(u * .8f, u * .58f)
+                    lineTo(u * .8f, u * .08f)
+                    cubicTo(u * .6f, u * .14f, u * .58f, u * .46f, u * .66f, u * .58f)
+                    close()
+                }
+                drawPath(blade, color)
+                drawPath(blade, color, style = outline)
+                line(.73f,.58f,.73f,.92f)
             }
             "activity", "workout" -> {
                 drawCircle(color, u * .085f, Offset(.57f*u,.12f*u))

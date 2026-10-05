@@ -721,7 +721,9 @@ internal object InitialOnboardingApiContract {
                 validatePreferences(parsedPreferences, parsedCatalog)
             }
             InitialOnboardingStatus.Completed -> {
-                if (parsedCatalog != null || parsedContactCard != null || parsedContactAction != null) {
+                // Completed members still receive their validated Murph
+                // contact route; only the setup catalog and card are pending-only.
+                if (parsedCatalog != null || parsedContactCard != null) {
                     throw CompanionApiException.InvalidResponse
                 }
             }
