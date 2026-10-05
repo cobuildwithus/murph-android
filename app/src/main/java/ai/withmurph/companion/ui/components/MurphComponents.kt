@@ -331,6 +331,7 @@ enum class MurphIconKind {
     RadioCircle,
     Waveform,
     Minus,
+    Plus,
     PersonaClassic,
     PersonaScope,
     PersonaMountains,
@@ -575,6 +576,11 @@ fun MurphIcon(
                     stroke,
                     StrokeCap.Round,
                 )
+            }
+
+            MurphIconKind.Plus -> {
+                drawLine(tint, Offset(unit * 0.23f, unit * 0.5f), Offset(unit * 0.77f, unit * 0.5f), stroke, StrokeCap.Round)
+                drawLine(tint, Offset(unit * 0.5f, unit * 0.23f), Offset(unit * 0.5f, unit * 0.77f), stroke, StrokeCap.Round)
             }
 
             MurphIconKind.PersonaClassic -> {

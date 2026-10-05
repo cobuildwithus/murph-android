@@ -1,6 +1,8 @@
 package ai.withmurph.companion.ui.meals
 
 import ai.withmurph.companion.core.ManualMealsState
+import ai.withmurph.companion.ui.components.MurphIcon
+import ai.withmurph.companion.ui.components.MurphIconKind
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.journal.JournalIcon
 import ai.withmurph.companion.ui.theme.MurphColors
@@ -88,7 +90,7 @@ fun MealsScreen(
             Box {
                 IconButton(onClick = { menu = true }, enabled = canAcquirePhotos && !state.preparing && !state.sending && !state.partialFailure && state.selected.size < 10,
                     modifier = Modifier.size(44.dp).background(MurphColors.MutedSurface, CircleShape).semantics { contentDescription = "Add meal photos" }) {
-                    Text("+", color = MurphColors.Slate, fontSize = 26.sp)
+                    MurphIcon(MurphIconKind.Plus, Modifier.size(20.dp), tint = MurphColors.Slate)
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Camera") }, onClick = {
