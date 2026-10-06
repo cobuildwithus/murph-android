@@ -16,7 +16,7 @@ Every unchecked item is a release blocker. Keep private evidence in the approved
 - [ ] Verify the upload certificate fingerprint against Play Console using secret-safe tooling.
 - [ ] Set `MURPH_PLAY_UPLOAD_CERT_SHA256` to that exact public SHA-256 for both evidence generation and the final readiness check.
 - [ ] Increment `versionCode` monotonically and set the intended `versionName`; update `release-facts.json` and release notes in the same candidate.
-- [ ] Supply the public production Privy native-client values and the production HTTPS backend.
+- [ ] Verify first-party login and retained-session upgrades against the production HTTPS backend.
 - [ ] Deploy a Murph backend compatible with Android's lifecycle-neutral canonical admission request, then prove new-account admission end to end from the exact signed candidate. Do not submit listing copy that advertises account creation until `canonicalAccountAdmissionVerified` is true.
 - [ ] Obtain explicit confirmation that the private Junction commercial grant covers the exact Android 5.0.2 artifacts and Play distribution; record only `MURPH_JUNCTION_ANDROID_COMMERCIAL_LICENSE_CONFIRMED=true` for the build.
 - [ ] Run `./gradlew :app:testReleaseUnitTest :app:lintRelease :app:checkPlayReleaseMergedManifest :app:checkReleaseThirdPartyLicenses`.

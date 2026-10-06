@@ -17,8 +17,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_ID: ci-public-placeholder
-      ORG_GRADLE_PROJECT_MURPH_PRIVY_APP_CLIENT_ID: ci-public-placeholder
       ORG_GRADLE_PROJECT_MURPH_BACKEND_BASE_URL_PROD: https://example.invalid
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

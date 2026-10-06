@@ -11,7 +11,7 @@
   "storeListingReviewed": false,
   "storeVisualAssetsUploaded": false,
   "canonicalAccountAdmissionVerified": false,
-  "productionPrivyPackageRegistrationVerified": false,
+  "firstPartyAuthenticationVerified": false,
   "productionBackendVerified": false,
   "realHealthProviderExportVerified": false,
   "accountOnboardingAndConsentDataSafetyReviewed": false,

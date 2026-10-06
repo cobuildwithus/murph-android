@@ -8,7 +8,6 @@ lifecycle = "2.9.1"
 coroutines = "1.10.2"
 work = "2.11.2"
 health-connect = "1.1.0"
-privy = "0.12.0"
 vital = "5.0.2"
 junit = "4.13.2"
 androidx-test = "1.7.0"
@@ -32,7 +31,6 @@ coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-androi
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 coroutines-guava = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-guava", version.ref = "coroutines" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
-privy-core = { module = "io.privy:privy-core", version.ref = "privy" }
 vital-client = { module = "io.tryvital:vital-client", version.ref = "vital" }
 vital-health-connect = { module = "io.tryvital:vital-health-connect", version.ref = "vital" }
 junit = { module = "junit:junit", version.ref = "junit" }

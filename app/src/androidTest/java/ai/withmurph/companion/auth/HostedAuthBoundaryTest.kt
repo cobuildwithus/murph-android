@@ -92,7 +92,7 @@ class HostedAuthBoundaryTest {
         }
     }
 
-    @Test fun otpAndExchangeUseExactRoutesWithExclusiveCredentialTransport() = runBlocking {
+    @Test fun otpAndRenewalUseExactRoutesWithExclusiveCredentialTransport() = runBlocking {
         val connections = mutableListOf<Connection>()
         val api = HostedAuthApiClient("https://auth-proof.invalid") { url ->
             Connection(url, 200, sessionBody()).also(connections::add)
@@ -108,10 +108,10 @@ class HostedAuthBoundaryTest {
         val body = JSONObject(otp.sent.toString("UTF-8"))
         assertEquals("phone", body.get("kind"))
         assertEquals("123456", body.get("code"))
-        api.exchange("synthetic-legacy-credential")
+        api.renew(credential)
         val exchange = connections.last()
-        assertEquals("/api/device-sync/companion/auth/exchange", exchange.url.path)
-        assertEquals("Bearer synthetic-legacy-credential", exchange.getRequestProperty("Authorization"))
+        assertEquals("/api/device-sync/companion/auth/session", exchange.url.path)
+        assertEquals("Bearer $credential", exchange.getRequestProperty("Authorization"))
         assertEquals(0, exchange.sent.size())
         assertTrue(connections.all { it.wasDisconnected })
     }
@@ -128,7 +128,7 @@ class HostedAuthBoundaryTest {
                 calls++; Connection(url, status, body)
             }
             try {
-                api.exchange("synthetic-legacy-credential")
+                api.renew(credential)
                 fail("Invalid response issued authority")
             } catch (_: HostedAuthException) {
                 assertEquals(1, calls)
@@ -142,7 +142,7 @@ class HostedAuthBoundaryTest {
             CookieHandler.setDefault(CookieManager())
             val api = HostedAuthApiClient("https://auth-proof.invalid") { error("Network must not run") }
             try {
-                api.exchange("synthetic-legacy-credential")
+                api.renew(credential)
                 fail("Expected exclusive native credential boundary")
             } catch (_: HostedAuthException) {
                 assertNotNull(CookieHandler.getDefault())

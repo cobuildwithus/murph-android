@@ -452,7 +452,7 @@
     "storeListingReviewed",
     "storeVisualAssetsUploaded",
     "canonicalAccountAdmissionVerified",
-    "productionPrivyPackageRegistrationVerified",
+    "firstPartyAuthenticationVerified",
     "productionBackendVerified",
     "realHealthProviderExportVerified",
     "accountOnboardingAndConsentDataSafetyReviewed",
