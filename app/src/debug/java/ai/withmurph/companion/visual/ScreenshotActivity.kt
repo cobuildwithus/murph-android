@@ -243,6 +243,8 @@ internal enum class ScreenshotScenario {
     ReminderBlocked,
     ReminderDenied,
     ReminderNotification,
+    MessagingSetup,
+    MessagingSetupPending,
     AccountFailure,
     Failure;
 
@@ -386,6 +388,11 @@ internal enum class ScreenshotScenario {
         ReminderOff, ReminderDenied -> ready(HealthSyncState.Synced(now))
         ReminderOn, ReminderBlocked, ReminderNotification ->
             ready(HealthSyncState.Synced(now)).copy(healthSyncReminderEnabled = true)
+        MessagingSetup -> ready(HealthSyncState.NotConnected).copy(messagingSetupRequired = true)
+        MessagingSetupPending -> ready(HealthSyncState.NotConnected).copy(
+            messagingSetupRequired = true,
+            messagingSetupMessage = "That account was linked, but Murph is still confirming it. Try again.",
+        )
         AccountFailure -> AppUiState(
             phase = AppPhase.Failed(
                 message = "This account cannot continue in the companion app.",
@@ -458,6 +465,8 @@ internal enum class ScreenshotScenario {
         ReminderBlocked,
     ReminderDenied,
     ReminderNotification,
+    MessagingSetup,
+    MessagingSetupPending,
     AccountFailure,
     Failure -> LoginUiState()
     }

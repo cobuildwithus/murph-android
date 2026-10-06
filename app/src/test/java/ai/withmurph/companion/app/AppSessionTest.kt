@@ -1745,6 +1745,89 @@ class AppSessionTest {
     }
 
     @Test
+    fun messagingSetupRequirementHoldsMemberWithoutStartingHealth() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding =
+            completedInitialOnboarding().copy(messagingSetupRequired = true)
+
+        fixture.session.start()
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertTrue(fixture.session.state.value.messagingSetupRequired)
+        assertNull(fixture.session.state.value.messagingSetupMessage)
+        assertEquals(0, fixture.health.identifyCalls)
+        assertEquals(0, fixture.health.connectCalls)
+    }
+
+    @Test
+    fun messagingSetupRequirementStopsReturningMemberHealthSync() = runTest {
+        val fixture = completedHealthFixture()
+        val syncCallsBeforeGate = fixture.health.syncCalls
+        fixture.api.initialOnboarding =
+            completedInitialOnboarding().copy(messagingSetupRequired = true)
+
+        fixture.session.retry()
+
+        assertTrue(fixture.session.state.value.messagingSetupRequired)
+        assertEquals(syncCallsBeforeGate, fixture.health.syncCalls)
+
+        fixture.session.didEnterBackground()
+        fixture.session.didBecomeActive()
+
+        assertTrue(fixture.session.state.value.messagingSetupRequired)
+        assertEquals(syncCallsBeforeGate, fixture.health.syncCalls)
+    }
+
+    @Test
+    fun refreshMessagingSetupReleasesGateOnceChannelIsConfirmed() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding =
+            completedInitialOnboarding().copy(messagingSetupRequired = true)
+        fixture.session.start()
+
+        fixture.api.initialOnboarding = completedInitialOnboarding()
+        assertTrue(fixture.session.refreshMessagingSetup())
+
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+        assertFalse(fixture.session.state.value.messagingSetupRequired)
+        assertFalse(fixture.session.state.value.isMessagingSetupRefreshing)
+        assertNull(fixture.session.state.value.messagingSetupMessage)
+    }
+
+    @Test
+    fun refreshMessagingSetupExplainsWhenChannelIsStillUnconfirmed() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding =
+            completedInitialOnboarding().copy(messagingSetupRequired = true)
+        fixture.session.start()
+
+        assertFalse(fixture.session.refreshMessagingSetup())
+
+        assertTrue(fixture.session.state.value.messagingSetupRequired)
+        assertFalse(fixture.session.state.value.isMessagingSetupRefreshing)
+        assertEquals(
+            "That account was linked, but Murph is still confirming it. Try again.",
+            fixture.session.state.value.messagingSetupMessage,
+        )
+    }
+
+    @Test
+    fun returningFromMessagingSettingsRereadsReadinessOnce() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding =
+            completedInitialOnboarding().copy(messagingSetupRequired = true)
+        fixture.session.start()
+
+        fixture.session.noteMessagingSettingsOpened()
+        fixture.session.didEnterBackground()
+        fixture.api.initialOnboarding = completedInitialOnboarding()
+        fixture.session.didBecomeActive()
+
+        assertFalse(fixture.session.state.value.messagingSetupRequired)
+        assertEquals(AppPhase.Ready, fixture.session.state.value.phase)
+    }
+
+    @Test
     fun saveInitialOnboardingPersistsExactDraftAndShowsWelcomeOnlyForFirstWriter() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding = pendingInitialOnboarding()

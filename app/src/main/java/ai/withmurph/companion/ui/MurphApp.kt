@@ -24,6 +24,7 @@ import ai.withmurph.companion.ui.components.MurphPrimaryButton
 import ai.withmurph.companion.ui.home.HomeScreen
 import ai.withmurph.companion.ui.login.LoginScreen
 import ai.withmurph.companion.ui.onboarding.InitialOnboardingScreen
+import ai.withmurph.companion.ui.onboarding.MessagingSetupScreen
 import ai.withmurph.companion.ui.settings.SettingsScreen
 import ai.withmurph.companion.ui.theme.MurphColors
 import androidx.compose.foundation.BorderStroke
@@ -177,7 +178,14 @@ fun MurphApp(
     when (val phase = appState.phase) {
         AppPhase.Launching -> LoadingScreen()
         AppPhase.NeedsLogin -> SignedOutApp(loginState, actions, showLoginFormInitially)
-        AppPhase.Ready -> ReadyApp(
+        AppPhase.Ready -> if (appState.messagingSetupRequired && appState.launchConsentRecovery == null) {
+            MessagingSetupScreen(
+                state = appState,
+                onOpenAccountSettings = actions.onOpenMessagingSettings,
+                onConfirmConnected = actions.onRefreshMessagingSetup,
+                onSignOut = actions.onSignOut,
+            )
+        } else ReadyApp(
             state = appState,
             showReminderSetup = showReminderSetup,
             healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
@@ -1434,6 +1442,8 @@ data class MurphActions(
     val onOpenConsentDocument: (String) -> Unit,
     val onOpenAppSettings: () -> Unit,
     val onOpenAccountSettings: () -> Unit,
+    val onOpenMessagingSettings: () -> Unit = onOpenAccountSettings,
+    val onRefreshMessagingSetup: () -> Unit = {},
     val onOpenPrivacy: () -> Unit,
     val onOpenTerms: () -> Unit,
     val onOpenHealthNotice: () -> Unit,

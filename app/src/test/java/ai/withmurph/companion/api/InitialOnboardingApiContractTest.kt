@@ -69,6 +69,27 @@ class InitialOnboardingApiContractTest {
     }
 
     @Test
+    fun parsesMessagingSetupRequirementAndDefaultsToNotRequired() {
+        fun completed(messagingSetupRequired: Any?) = InitialOnboardingApiContract.parse(
+            schema = SCHEMA,
+            status = "completed",
+            completedNow = null,
+            preferences = emptyPreferences(),
+            catalog = null,
+            contactCard = null,
+            contactAction = null,
+            backendOrigin = ORIGIN,
+            messagingSetupRequired = messagingSetupRequired,
+        )
+
+        assertEquals(true, completed(true).messagingSetupRequired)
+        assertEquals(false, completed(false).messagingSetupRequired)
+        assertEquals(false, completed(null).messagingSetupRequired)
+        assertEquals(true, parse(messagingSetupRequired = true).messagingSetupRequired)
+        assertInvalidResponse { completed("true") }
+    }
+
+    @Test
     fun rejectsInvalidCatalogReferencesAndUnsafeUrls() {
         listOf<() -> Unit>(
             { parse(schema = "future") },
@@ -155,6 +176,7 @@ class InitialOnboardingApiContractTest {
         catalog: Map<String, Any?>? = catalog(),
         contactCard: Map<String, Any?>? = contactCard(),
         contactAction: Map<String, Any?>? = contactAction(),
+        messagingSetupRequired: Any? = null,
     ) = InitialOnboardingApiContract.parse(
         schema = schema,
         status = status,
@@ -164,6 +186,7 @@ class InitialOnboardingApiContractTest {
         contactCard = contactCard,
         contactAction = contactAction,
         backendOrigin = ORIGIN,
+        messagingSetupRequired = messagingSetupRequired,
     )
 
     private fun emptyPreferences(): Map<String, Any?> = mapOf(
