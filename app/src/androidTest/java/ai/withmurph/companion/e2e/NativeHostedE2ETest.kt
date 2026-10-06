@@ -241,11 +241,18 @@ class NativeHostedE2ETest {
         codeRejected: NativeHostedE2EFailureCode,
     ) {
         showLoginForm()
-        if (hasClickableText("Use phone number instead")) {
-            clickText("Use phone number instead", 20_000)
+        val inbox = identity.inbox
+        val snapshot = inbox?.snapshot()
+        if (inbox != null) {
+            if (hasClickableText("Use email instead")) clickText("Use email instead", 20_000)
+            replaceOnlyEditable(inbox.address, 20_000)
+        } else {
+            if (hasClickableText("Use phone number instead")) {
+                clickText("Use phone number instead", 20_000)
+            }
+            selectPhoneCountry(identity)
+            replaceOnlyEditable(identity.nationalNumber, 20_000)
         }
-        selectPhoneCountry(identity)
-        replaceOnlyEditable(identity.nationalNumber, 20_000)
 
         var requestDecision = NativeHostedE2EOtpRequestDecision.Wait
         waitUntil(30_000) {
@@ -265,7 +272,7 @@ class NativeHostedE2ETest {
         if (!hasVerificationCodeField()) {
             throw JourneyFailure(requestRejected)
         }
-        replaceOnlyEditable(identity.fixedOtp, 20_000)
+        replaceOnlyEditable(if (inbox != null && snapshot != null) inbox.waitForCode(snapshot) else identity.fixedOtp, 20_000)
 
         var submissionDecision = NativeHostedE2ECodeSubmissionDecision.Wait
         waitUntil(30_000) {

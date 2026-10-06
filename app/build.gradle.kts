@@ -75,6 +75,9 @@ val hostedE2EInstrumentationArguments = mapOf(
     "murphHostedE2eAndroidTag" to "NATIVE_ANDROID_E2E_ANDROID_TAG",
     "murphHostedE2eIdentityLifecycle" to "NATIVE_ANDROID_E2E_IDENTITY_LIFECYCLE",
     "murphHostedE2eLoginIdentifier" to "NATIVE_ANDROID_E2E_LOGIN_IDENTIFIER",
+    "murphHostedE2eLoginEmail" to "NATIVE_ANDROID_E2E_LOGIN_EMAIL",
+    "murphHostedE2eEmailSender" to "NATIVE_ANDROID_E2E_EMAIL_SENDER",
+    "murphHostedE2eResendApiKey" to "NATIVE_ANDROID_E2E_RESEND_API_KEY",
     "murphHostedE2eFixedOtp" to "NATIVE_ANDROID_E2E_FIXED_OTP",
 )
 

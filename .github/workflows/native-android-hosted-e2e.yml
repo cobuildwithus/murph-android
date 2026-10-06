@@ -154,6 +154,9 @@ jobs:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_WEB_BASE_URL: ${{ inputs.web_base_url }}
           INPUT_WEB_SHA: ${{ inputs.web_sha }}
+          NATIVE_ANDROID_E2E_LOGIN_EMAIL: ${{ secrets.NATIVE_ANDROID_E2E_LOGIN_EMAIL }}
+          NATIVE_ANDROID_E2E_EMAIL_SENDER: ${{ vars.NATIVE_ANDROID_E2E_EMAIL_SENDER }}
+          NATIVE_ANDROID_E2E_RESEND_API_KEY: ${{ secrets.NATIVE_ANDROID_E2E_RESEND_API_KEY }}
           PRIVY_APP_CLIENT_ID: ${{ vars.NATIVE_ANDROID_E2E_PRIVY_APP_CLIENT_ID }}
           PRIVY_APP_ID: ${{ vars.NATIVE_ANDROID_E2E_PRIVY_APP_ID }}
           PRIVY_FIXED_OTP: ${{ secrets.NATIVE_ANDROID_E2E_PRIVY_FIXED_OTP }}
@@ -195,8 +198,17 @@ jobs:
               --gradle-status 1
           }
 
-          if [[ -z "${PRIVY_APP_ID}" || -z "${PRIVY_APP_CLIENT_ID}" ||
-                ! "${PRIVY_LOGIN_IDENTIFIER}" =~ ^\+[1-9][0-9]{7,14}$ ||
+          if [[ -z "${PRIVY_APP_ID}" || -z "${PRIVY_APP_CLIENT_ID}" ]]; then
+            write_missing_configuration
+            exit $?
+          fi
+          if [[ "$INPUT_MODE" == production_canary ]]; then
+            if [[ -z "$NATIVE_ANDROID_E2E_LOGIN_EMAIL" || -z "$NATIVE_ANDROID_E2E_EMAIL_SENDER" ||
+                  -z "$NATIVE_ANDROID_E2E_RESEND_API_KEY" ]]; then
+              write_missing_configuration
+              exit $?
+            fi
+          elif [[ ! "${PRIVY_LOGIN_IDENTIFIER}" =~ ^\+[1-9][0-9]{7,14}$ ||
                 ! "${PRIVY_FIXED_OTP}" =~ ^[0-9]{6}$ ]]; then
             write_missing_configuration
             exit $?

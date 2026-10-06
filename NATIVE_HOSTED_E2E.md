@@ -1,5 +1,58 @@
 # Protected hosted-native Android E2E
 
+## Production email canary setup
+
+Production canaries select **Use email instead**, request a real first-party
+code, receive it through Resend, and enter it through the ordinary code field.
+Sign-out and returning login each require a newly received message. No session
+or verification record is injected and production auth has no fixed-code bypass.
+The legacy PR reset/phone fixture remains unchanged and is not qualification of
+first-party signup. SMS delivery and installed-session migration need separate proof.
+The historical `initial_privy_otp` / `returning_privy_otp` summary names remain
+wire-compatible labels; in production they now report first-party email login.
+
+Configure the `native-android-hosted-e2e-production_canary` GitHub Environment:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `NATIVE_ANDROID_E2E_LOGIN_EMAIL` | Dedicated persistent canary mailbox. |
+| Secret | `NATIVE_ANDROID_E2E_RESEND_API_KEY` | Receiving access in an isolated canary-only Resend account/team. |
+| Variable | `NATIVE_ANDROID_E2E_EMAIL_SENDER` | Exact bare mailbox used by production Murph auth email, without its display name. |
+
+Use a separate receiving-only Resend account/team: the Receiving API needs
+`full_access`, not `sending_access`, and that key is not recipient-scoped.
+**Do not reuse the production sending key or any account containing customer
+mail.** Its managed `<inbox-domain>.resend.app` domain avoids custom DNS. Give
+iOS and Android distinct local parts, and allow only one live run per identity.
+Do not paste credentials into chat, workflow inputs, source, or PR text; install
+them directly in protected GitHub secrets. Keep environment/tag approval rules.
+
+Before enabling the pin, link the inbox to the intended dedicated production
+test member through the normal account flow, and finish its account onboarding.
+Do not create an unrelated member, reset production state, or bypass admission.
+Verify the exact sender and a fresh signed email arrive in the receiving account.
+Old Privy fixed-code secrets are unused by production and may be removed there
+once the new runner is qualified; retain legacy PR configuration separately.
+
+The test runner snapshots the latest 100 message IDs before each request,
+polls every three seconds for up to 90 seconds, and requires the exact recipient,
+sender, subject, recent timestamp, verified aligned DKIM, and canonical plain-text
+code template. Responses are capped at 256 KiB; redirects are rejected. Ambiguous
+mail, missing configuration, stale mail, and provider failures fail closed.
+The key, message bodies, addresses, and codes never enter retained artifacts.
+A full first page can hide mail under unusually high volume; keep this account
+canary-only rather than expanding the mailbox scan.
+
+Promotion requires local native verification, the required PR review and main CI,
+then a protected live run proving both logins plus the existing health journey.
+Only after that proof should the Murph controller's immutable native pin change.
+Until protected secrets and identity linkage exist, the implementation is unqualified
+for live production use; deterministic tests do not claim actual delivery.
+
+References: [Resend Receiving](https://resend.com/docs/dashboard/receiving/introduction),
+[received message API](https://resend.com/docs/api-reference/emails/retrieve-received-email),
+[API-key permissions](https://resend.com/docs/api-reference/api-keys/create-api-key).
+
 ## Purpose
 
 `.github/workflows/native-android-hosted-e2e.yml` is the protected live lane for
@@ -7,7 +60,7 @@ the production Android application graph. It is separate from
 `.github/workflows/android-instrumentation.yml`, which remains the synthetic,
 no-provider smoke suite and continues to use the `synthetic` build type.
 
-The live lane starts `MainActivity`, uses the production Privy and Health
+The live lane starts `MainActivity`, uses the production auth and Health
 Connect boundaries, and drives the ordinary Compose surfaces. It does not use
 `ScreenshotActivity`, fixture state, a fake backend, or another E2E framework.
 UI Automator is used only after the production app hands control to Android's
@@ -49,7 +102,8 @@ The Android repository has two GitHub Environments:
 - `native-android-hosted-e2e-pr`
 - `native-android-hosted-e2e-production_canary`
 
-Each environment requires the following configuration:
+The legacy PR environment requires the following configuration (production also
+retains the public Privy app variables for installed-session compatibility):
 
 | Kind | Name | Contract |
 | --- | --- | --- |
