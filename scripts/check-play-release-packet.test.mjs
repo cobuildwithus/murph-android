@@ -731,3 +731,11 @@ test("signed bundle provenance must match the exact clean source commit", () => 
     /public-configuration digest/,
   );
 });
+
+test("manifest launch modes compare symbolic source with compiled values without erasing differences", () => {
+  const xml = (value) => `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ai.withmurph.app" android:versionCode="1" android:versionName="1"><uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36"/><application android:name=".MurphApplication"><activity android:name=".MainActivity" android:launchMode="${value}"/></application></manifest>`;
+  const symbolic = releaseManifestContract(xml("singleTask"));
+  assert.deepEqual(symbolic, releaseManifestContract(xml("2")));
+  assert.notDeepEqual(symbolic, releaseManifestContract(xml("singleTop")));
+  assert.throws(() => releaseManifestContract(xml("unexpected")), /manifest security contract could not be parsed/);
+});

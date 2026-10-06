@@ -7,6 +7,12 @@ import ai.withmurph.companion.ui.login.CountryButton
 import ai.withmurph.companion.ui.login.CountryPicker
 import ai.withmurph.companion.ui.login.OtpInput
 import ai.withmurph.companion.ui.components.MurphTextField
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.remember
@@ -60,12 +66,14 @@ import androidx.compose.ui.unit.sp
 fun MessagingSetupScreen(
     state: AppUiState,
     link: MessagingSetupState = MessagingSetupState(),
+    autofocusCode: Boolean = true,
     onPhone: (String) -> Unit = {},
     onCountry: (CountryDialCode) -> Unit = {},
     onCode: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onVerify: () -> Unit = {},
     onTelegram: () -> Unit = {},
+    onSelectTelegram: () -> Unit = {},
     onChangeNumber: () -> Unit = {},
     onOpenAccountSettings: () -> Unit,
     onConfirmConnected: () -> Unit,
@@ -76,12 +84,17 @@ fun MessagingSetupScreen(
     val busy = state.isMessagingSetupRefreshing || link.busy
     var countryPicker by remember { mutableStateOf(false) }
     val codeFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(link.stage) {
+        if (link.stage == MessagingStage.Code && autofocusCode) codeFocus.requestFocus()
+        else focusManager.clearFocus()
+    }
     if (countryPicker) CountryPicker(link.country, { onCountry(it); countryPicker = false }, { countryPicker = false })
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MurphColors.Cream)
-            .safeDrawingPadding(),
+            .safeDrawingPadding().imePadding(),
         contentAlignment = Alignment.TopCenter,
     ) {
         Column(
@@ -92,65 +105,69 @@ fun MessagingSetupScreen(
                 .padding(horizontal = 24.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            MurphLogo(Modifier.height(34.dp).width(152.dp))
-            Text(
-                text = "Choose how to message Murph",
-                modifier = Modifier.semantics { heading() },
-                style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp, lineHeight = 42.sp),
-                color = MurphColors.Slate,
-            )
-            Text(
-                text = "Add your phone number or connect Telegram to start messaging Murph.",
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 22.sp),
-                color = MurphColors.SlateMuted,
-            )
-            when (link.stage) {
-                MessagingStage.Phone -> {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CountryButton(link.country, !busy) { countryPicker = true }
-                        MurphTextField(
-                            value = link.phone, onValueChange = onPhone, label = "Phone number", placeholder = "555 555 0100",
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                            modifier = Modifier.weight(1f), enabled = !busy, autofillContentType = ContentType.PhoneNumberNational,
-                        )
-                    }
-                    MurphPrimaryButton("Send code", onSend, enabled = !busy)
-                    MurphLinkButton("Connect Telegram", { if (!busy) onTelegram() }, modifier = Modifier.align(Alignment.CenterHorizontally))
-                }
-                MessagingStage.Code -> {
-                    Text("Enter the six-digit code we sent to your phone.", color = MurphColors.SlateMuted)
-                    OtpInput(link.code, onCode, codeFocus, onVerify, !busy)
-                    MurphPrimaryButton("Verify phone number", onVerify, enabled = link.canVerify && !busy)
-                    MurphLinkButton("Resend code", { if (!busy) onSend() })
-                    MurphLinkButton("Use a different number", { if (!busy) onChangeNumber() })
-                }
-                MessagingStage.Telegram -> {
-                    Text("Tap Start in Telegram, then return here. We’ll check your connection when you return.", color = MurphColors.SlateMuted)
-                    MurphPrimaryButton("Check connection", onConfirmConnected, enabled = !busy)
-                    MurphLinkButton("Connect Telegram", { if (!busy) onTelegram() })
-                    MurphLinkButton("Use a phone number", { if (!busy) onChangeNumber() })
-                }
-                MessagingStage.Connected -> {
-                    Text("Account connected. Let’s continue setting up Murph.", color = MurphColors.SlateMuted)
-                    MurphPrimaryButton("Continue", onConfirmConnected, enabled = !busy)
-                }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                MurphLogo(Modifier.height(34.dp).width(152.dp))
+                Spacer(Modifier.weight(1f))
+                MurphLinkButton("Sign out", onSignOut)
             }
-            link.error?.let { Text(it, color = MurphColors.SlateMuted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
-            MurphLinkButton("Open account settings", { if (!busy) onOpenAccountSettings() })
-            state.messagingSetupMessage?.let { message ->
+            if (link.stage != MessagingStage.Code) {
                 Text(
-                    text = message,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                    "Choose how to message Murph",
+                    modifier = Modifier.semantics { heading() },
+                    style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp, lineHeight = 42.sp),
+                    color = MurphColors.Slate,
+                )
+                Text(
+                    if (link.stage == MessagingStage.Phone) "Message Murph from your phone."
+                    else "We’ll open Telegram to connect.",
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 22.sp),
                     color = MurphColors.SlateMuted,
                 )
             }
-            MurphLinkButton("I've connected an account", { if (!busy) onConfirmConnected() })
-            MurphLinkButton(
-                "Sign out",
-                onSignOut,
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            )
+            if (!(link.stage == MessagingStage.Telegram && link.busy)) when (link.stage) {
+                MessagingStage.Phone -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CountryButton(link.country, !busy) { countryPicker = true }
+                            MurphTextField(
+                                value = link.phone, onValueChange = onPhone, label = "Phone number", placeholder = "555 555 0100",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(onSend = { if (!busy) onSend() }),
+                                modifier = Modifier.weight(1f), enabled = !busy, autofillContentType = ContentType.PhoneNumberNational,
+                            )
+                        }
+                        MessagingError(link, !busy, onOpenAccountSettings)
+                    }
+                    MurphPrimaryButton("Send code", onSend, enabled = !busy)
+                    MurphLinkButton("Use Telegram instead", onSelectTelegram, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+                MessagingStage.Code -> {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("We sent a code to ${link.displayPhone}.", modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp), color = MurphColors.SlateMuted)
+                        MurphLinkButton("Resend", onSend, enabled = !busy)
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OtpInput(link.code, onCode, codeFocus, onVerify, !busy)
+                        MessagingError(link, !busy, onOpenAccountSettings)
+                    }
+                    MurphLinkButton("Use a different number", onChangeNumber, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+                MessagingStage.Telegram -> {
+                    if (link.telegramPending) Text("Finish connecting in Telegram.",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 22.sp), color = MurphColors.SlateMuted)
+                    MessagingError(link, !busy, onOpenAccountSettings)
+                    MurphPrimaryButton(if (link.telegramPending) "Open Telegram again" else "Connect Telegram", onTelegram, enabled = !busy)
+                    MurphLinkButton("Use phone number instead", onChangeNumber, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+                MessagingStage.Connected -> {
+                    Text("Account connected. Let’s continue setting up Murph.", color = MurphColors.SlateMuted)
+                    state.messagingSetupMessage?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted)
+                        MurphPrimaryButton("Try again", onConfirmConnected, enabled = !busy)
+                    }
+                }
+            }
         }
         if (busy) {
             Surface(
@@ -171,12 +188,21 @@ fun MessagingSetupScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Connecting your account…",
+                        text = "Confirming your account…",
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                         color = MurphColors.Slate,
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MessagingError(link: MessagingSetupState, enabled: Boolean, onSettings: () -> Unit) {
+    link.error?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        if (link.offersAccountSettings) MurphLinkButton("Manage in account settings", onSettings, enabled = enabled)
     }
 }

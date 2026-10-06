@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
         reminderSetupDismissed = getSharedPreferences("murph_ui_state", MODE_PRIVATE)
             .getBoolean("sync_reminder_setup_dismissed", false)
         graph = (application as MurphApplication).graph
+        handleMessagingReturn(intent)
         graph.healthSyncReminder.didEnterForeground()
         healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
         handleHealthSyncReminderIntent(
@@ -335,12 +336,12 @@ class MainActivity : ComponentActivity() {
                         onMessagingVerify = { graph.applicationScope.launch {
                             if (graph.messaging.verifyCode()) graph.session.refreshMessagingSetup()
                         } },
+                        onMessagingSelectTelegram = graph.messaging::selectTelegram,
                         onMessagingTelegram = { graph.applicationScope.launch {
                             graph.messaging.startTelegram()?.let { openUri(it) }
                         } },
                         onRefreshMessagingSetup = { graph.applicationScope.launch {
-                            graph.messaging.checkTelegram()
-                            graph.session.refreshMessagingSetup()
+                            if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.Connected || graph.messaging.checkTelegram()) graph.session.refreshMessagingSetup()
                         } },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
@@ -381,10 +382,21 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleMessagingReturn(intent)
         graph.healthSyncReminder.didEnterForeground()
         handleHealthSyncReminderIntent(intent)
         if (isHealthPermissionRationaleIntent(intent)) {
             openUri(AppLinks.Privacy)
+        }
+    }
+
+    private fun handleMessagingReturn(intent: Intent) {
+        val returnUrl = intent.dataString
+        intent.data = null
+        if (returnUrl != null && graph.messaging.acceptTelegramReturn(returnUrl)) {
+            graph.applicationScope.launch {
+                if (graph.messaging.checkTelegram()) graph.session.refreshMessagingSetup()
+            }
         }
     }
 
@@ -398,8 +410,7 @@ class MainActivity : ComponentActivity() {
             }
             graph.applicationScope.launch {
                 if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.Telegram) {
-                    graph.messaging.checkTelegram()
-                    graph.session.refreshMessagingSetup()
+                    if (graph.messaging.checkTelegram()) graph.session.refreshMessagingSetup()
                 }
                 graph.session.didBecomeActive()
             }

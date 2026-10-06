@@ -35,12 +35,37 @@ class MessagingSetupCoordinatorTest {
         api.failure = null; assertTrue(model.sendCode()); assertEquals("", model.state.value.code)
         model.changeNumber(); assertEquals(MessagingStage.Phone, model.state.value.stage)
     }
-    @Test fun telegramWaitsForAuthenticatedServerCompletion() = runTest {
+    @Test fun pendingTelegramKeepsTokenAndRecipientProofAcrossRetry() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
-        assertNotNull(model.startTelegram()); assertFalse(model.checkTelegram())
+        model.selectTelegram(); assertEquals(0, api.starts)
+        val original = model.startTelegram(); assertFalse(model.checkTelegram())
         assertEquals(MessagingStage.Telegram, model.state.value.stage)
-        api.linked = true; assertTrue(model.checkTelegram())
+        assertTrue(model.state.value.telegramPending)
+        assertEquals(original, model.startTelegram()); assertEquals(1, api.starts)
+        val token = "a".repeat(43); val proof = "b".repeat(43)
+        val callback = "murph-messaging://telegram/complete#token=$token&proof=$proof"
+        assertTrue(model.acceptTelegramReturn(callback))
+        api.failure = MessagingLinkException(MessagingLinkException.Reason.Unavailable)
+        assertFalse(model.checkTelegram())
+        api.failure = null; api.linked = true
+        assertTrue(model.checkTelegram())
+        assertEquals(listOf(token, token, token), api.completedTokens)
+        assertEquals(proof, api.completedProofs.last())
         assertEquals(MessagingStage.Connected, model.state.value.stage)
+        assertFalse(model.acceptTelegramReturn(callback))
+    }
+    @Test fun otherLinksAndMethodSwitchCannotReuseTelegramProof() = runTest {
+        val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
+        model.startTelegram()
+        val token = "a".repeat(43); val proof = "b".repeat(43)
+        for (url in listOf("https://telegram/complete#token=$token&proof=$proof",
+            "murph-messaging://telegram/complete#token=$proof&proof=$proof",
+            "murph-messaging://telegram/complete?extra=1#token=$token&proof=$proof",
+            "murph-messaging://telegram/complete#token=$token&proof=bad")) assertFalse(model.acceptTelegramReturn(url))
+        model.changeNumber()
+        assertFalse(model.acceptTelegramReturn("murph-messaging://telegram/complete#token=$token&proof=$proof"))
+        assertEquals(MessagingStage.Phone, model.state.value.stage)
+        assertTrue(api.completedTokens.isEmpty())
     }
     @Test fun resetRejectsLateCompletionAndDuplicateSend() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
@@ -68,11 +93,14 @@ class MessagingSetupCoordinatorTest {
     }
     private class Api : HostedAuthServing {
         var sends = 0; var verifiedPhone: String? = null; var linked = false
+        var starts = 0; val completedTokens = mutableListOf<String>(); val completedProofs = mutableListOf<String?>()
         var failure: Exception? = null; var wait: CompletableDeferred<Unit>? = null
         override suspend fun sendMessagingPhoneCode(phone: String, credential: String) { sends++; wait?.await(); failure?.let { throw it } }
         override suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String) { failure?.let { throw it }; verifiedPhone = phone }
-        override suspend fun startMessagingTelegram(credential: String) = TelegramMessagingLink("synthetic", "https://t.me/synthetic_bot?start=synthetic")
-        override suspend fun completeMessagingTelegram(token: String, credential: String) = linked
+        override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; return TelegramMessagingLink("a".repeat(43), "https://t.me/synthetic_bot?start=link_${"a".repeat(43)}") }
+        override suspend fun completeMessagingTelegram(token: String, proof: String?, credential: String): Boolean {
+            completedTokens.add(token); completedProofs.add(proof); failure?.let { throw it }; return linked
+        }
         override suspend fun sendCode(method: LoginMethod, value: String) {}
         override suspend fun verifyCode(method: LoginMethod, value: String, code: String): HostedAuthSession = error("unused")
         override suspend fun exchange(legacyCredential: String): HostedAuthSession = error("unused")

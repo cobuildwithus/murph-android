@@ -341,6 +341,9 @@ public final class PlayArtifactInspector {
                 if (name.equals("configChanges")) {
                     value = normalizeFlags(value, CONFIG_CHANGES, "configuration change");
                 }
+                if (name.equals("launchMode")) {
+                    value = normalizeLaunchMode(value);
+                }
                 if (name.equals("protectionLevel")) {
                     value = normalizeProtectionLevel(value);
                 }
@@ -348,6 +351,18 @@ public final class PlayArtifactInspector {
             }
         }
         return attributes;
+    }
+
+    private static String normalizeLaunchMode(String value) {
+        // ActivityInfo.LAUNCH_* values, also emitted numerically by bundletool.
+        return switch (value) {
+            case "standard", "0", "0x0" -> "0";
+            case "singleTop", "1", "0x1" -> "1";
+            case "singleTask", "2", "0x2" -> "2";
+            case "singleInstance", "3", "0x3" -> "3";
+            case "singleInstancePerTask", "4", "0x4" -> "4";
+            default -> throw new IllegalArgumentException("unknown activity launch mode");
+        };
     }
 
     private static String normalizeProtectionLevel(String value) {

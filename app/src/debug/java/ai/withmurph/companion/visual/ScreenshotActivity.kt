@@ -94,6 +94,10 @@ class ScreenshotActivity : ComponentActivity() {
         }
 
         setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, intent.getFloatExtra("messagingFontScale", density.fontScale)),
+            ) {
             MurphTheme {
                 val readyState = scenario.appState(now).copy(
                     healthSyncReminderTargetEnabled = healthSyncReminderTargetEnabled,
@@ -114,13 +118,8 @@ class ScreenshotActivity : ComponentActivity() {
                         showReminderSetup = scenario == ScreenshotScenario.Notifications && !reminderSetupDismissed,
                         showLoginFormInitially = scenario != ScreenshotScenario.Welcome,
                         loginState = scenario.loginState(),
-                        messagingState = when (intent.getStringExtra("messagingState")) {
-                            "code" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456")
-                            "error" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456", error = ai.withmurph.companion.auth.MessagingLinkException.Reason.InvalidCode.message)
-                            "telegram" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Telegram)
-                            "connected" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
-                            else -> ai.withmurph.companion.auth.MessagingSetupState()
-                        },
+                        messagingState = messagingFixture(intent.getStringExtra("messagingState")),
+                        autofocusMessagingCode = false,
                         healthSyncNotificationsAllowed =
                             scenario != ScreenshotScenario.ReminderBlocked &&
                                 scenario != ScreenshotScenario.ReminderDenied,
@@ -144,6 +143,7 @@ class ScreenshotActivity : ComponentActivity() {
                         initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
                     )
                 }
+            }
             }
         }
     }
@@ -785,3 +785,20 @@ private val NoOpActions = MurphActions(
     onRetry = {},
     onSignOut = {},
 )
+
+private fun messagingFixture(name: String?): ai.withmurph.companion.auth.MessagingSetupState {
+    val phone = ai.withmurph.companion.auth.MessagingSetupState()
+    val code = phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456", displayPhone = "+12025550123")
+    val telegram = phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Telegram)
+    val reasons = ai.withmurph.companion.auth.MessagingLinkException.Reason.entries
+    val errors = listOf("invalid-number", "contact-in-use", "rate-limited", "invalid-code", "fresh-login", "approval", "expired-link", "unavailable")
+    val index = errors.indexOf(name)
+    if (index >= 0) return (when (name) { "invalid-code" -> code; "expired-link" -> telegram; else -> phone }).copy(error = reasons[index].message)
+    return when (name) {
+        "code" -> code
+        "telegram" -> telegram
+        "pending" -> telegram.copy(telegramPending = true)
+        "waiting" -> telegram.copy(telegramPending = true, busy = true)
+        else -> phone
+    }
+}

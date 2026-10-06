@@ -152,6 +152,18 @@ Deploy the additive Murph `/api/device-sync/companion/auth/messaging` phone
 send/verify and Telegram start/complete routes before distributing this app.
 Initial linking preserves server-owned fresh-primary, same-member, conflict,
 rate-limit and approval policy. Protected members retain account settings as a
-secondary fallback; stale proof requires primary sign-in again. Telegram opens
-only a validated HTTPS `t.me` link and rechecks on foreground. No phone, code,
-link token or raw error response is persisted or logged.
+inline error fallback; stale proof requires primary sign-in again. Telegram opens
+only a validated HTTPS `t.me` link and rechecks on foreground. Pending checks
+retain the same link. Telegram privately returns a second proof through the
+backend's fragment-only HTTPS handoff. The fixed `murph-messaging` return route
+must match the original memory-held token; only then can the original native
+session complete linking. Neither proof is authority by itself. Sign-out and
+method changes clear both. No phone, code, link proof or raw error is persisted
+or logged.
+
+Phone is the default method. Each method has one primary action and one quiet
+method switch. Code entry auto-submits six digits and keeps only Resend and
+Use a different number. Sign out stays in the top bar; account settings appears
+only with applicable inline errors. The centered confirming capsule and 28dp
+spacing match iOS. Synthetic fixtures cover both methods, SMS, waiting, pending
+and every typed error.

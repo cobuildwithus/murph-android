@@ -432,7 +432,7 @@ internal fun OtpInput(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
+            .height(64.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxSize().clearAndSetSemantics { },
@@ -455,7 +455,7 @@ internal fun OtpInput(
                 ) {
                     Text(
                         text = value.getOrNull(index)?.toString().orEmpty(),
-                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
                         color = MurphColors.Slate,
                         textAlign = TextAlign.Center,
                     )

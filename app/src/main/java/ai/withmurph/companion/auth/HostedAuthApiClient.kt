@@ -63,8 +63,8 @@ class HostedAuthApiClient(
         }
     }
 
-    override suspend fun completeMessagingTelegram(token: String, credential: String): Boolean {
-        val response = request("messaging/telegram/complete", JSONObject().put("token", token), credential)
+    override suspend fun completeMessagingTelegram(token: String, proof: String?, credential: String): Boolean {
+        val response = request("messaging/telegram/complete", JSONObject().put("token", token).apply { if (proof != null) put("proof", proof) }, credential)
         return decode { response.get("linked") as? Boolean ?: throw HostedAuthException.InvalidResponse }
     }
 
