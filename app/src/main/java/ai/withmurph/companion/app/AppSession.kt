@@ -115,6 +115,7 @@ class AppSession(
         HealthSyncReminderPreferenceClaim? = null
     private var foregroundHealthOperation: ForegroundHealthOperation? = null
     private var foregroundAddressBookOperation: ForegroundAddressBookOperation? = null
+    @Volatile private var refreshMessagingSetupOnForeground = false
 
     private val _state = MutableStateFlow(
         AppUiState(totalResourceCount = health.totalResourceCount),
@@ -2444,6 +2445,15 @@ class AppSession(
         isForeground = true
         val foregroundClaim = currentForegroundClaim() ?: return
         runForegroundRefresh(foregroundClaim)
+        if (refreshMessagingSetupOnForeground) {
+            refreshMessagingSetupOnForeground = false
+            refreshMessagingSetup()
+        }
+    }
+
+    /** Returning from account settings rereads messaging readiness once. */
+    fun noteMessagingSettingsOpened() {
+        if (_state.value.messagingSetupRequired) refreshMessagingSetupOnForeground = true
     }
 
     private suspend fun runForegroundRefresh(foregroundClaim: ForegroundRefreshClaim) {
@@ -2489,6 +2499,8 @@ class AppSession(
                 if (deferredBoundary != null) return@withLock
                 if (!ownsForegroundRefresh(foregroundClaim)) return@withLock
             }
+            // No Health permission refresh or sync runs behind messaging setup.
+            if (_state.value.messagingSetupRequired) return@withLock
             if (
                 ownsPendingHealthConnection() ||
                 (!healthWasRequestedAtClaim && healthWasRequested())
@@ -3286,6 +3298,18 @@ class AppSession(
                 return
             }
             if (!fetchInitialOnboardingProjection(authState.memberKey, epoch)) return
+            if (_state.value.messagingSetupRequired) {
+                // Hold the member on messaging setup: no Health permission
+                // refresh, address-book work, or sync starts behind it.
+                _state.update { current ->
+                    current.copy(
+                        phase = AppPhase.Ready,
+                        initialSetupStep = initialSetupStep,
+                        authVerifiedOnline = true,
+                    )
+                }
+                return
+            }
         }
         val grantSnapshot = if (requested && authState.verifiedOnline) {
             refreshHealthPermissionState()
@@ -4724,8 +4748,10 @@ class AppSession(
     private fun applyInitialOnboardingProjection(projection: InitialOnboarding) {
         if (projection.status == InitialOnboardingStatus.Completed) {
             clearInitialOnboardingState()
+            applyMessagingSetupRequirement(projection)
             return
         }
+        applyMessagingSetupRequirement(projection)
         val catalog = projection.catalog ?: return
         val current = _state.value
         if (
@@ -4802,8 +4828,50 @@ class AppSession(
                 initialOnboardingCompletedNow = false,
                 initialOnboardingMessage = null,
                 initialOnboardingContactCardHandoff = null,
+                messagingSetupRequired = false,
+                messagingSetupMessage = null,
             )
         }
+    }
+
+    // The onboarding projection is the sole readiness authority: a member
+    // without a phone or Telegram conversation cannot reach Murph yet.
+    private fun applyMessagingSetupRequirement(projection: InitialOnboarding) {
+        _state.update {
+            it.copy(
+                messagingSetupRequired = projection.messagingSetupRequired,
+                messagingSetupMessage = null,
+            )
+        }
+    }
+
+    /**
+     * Re-enters canonical admission after the member links a phone or Telegram
+     * account in the browser. Returns whether messaging setup is now complete.
+     */
+    suspend fun refreshMessagingSetup(): Boolean {
+        val current = _state.value
+        if (
+            current.phase != AppPhase.Ready ||
+            !current.messagingSetupRequired ||
+            current.isMessagingSetupRefreshing
+        ) return false
+        _state.update { it.copy(isMessagingSetupRefreshing = true, messagingSetupMessage = null) }
+        try {
+            retry()
+        } finally {
+            _state.update {
+                it.copy(
+                    isMessagingSetupRefreshing = false,
+                    messagingSetupMessage = if (it.phase == AppPhase.Ready && it.messagingSetupRequired) {
+                        MESSAGING_SETUP_PENDING_MESSAGE
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
+        return _state.value.phase == AppPhase.Ready && !_state.value.messagingSetupRequired
     }
 
     private fun ownsInitialOnboardingWork(memberKey: String, epoch: Int): Boolean =
@@ -7647,6 +7715,8 @@ class AppSession(
             "Murph couldn't verify current Health Connect permissions. Saved status is still shown."
         const val HEALTH_RECONNECT_REQUIRED_MESSAGE =
             "Health Connect needs to reconnect before syncing can resume."
+        const val MESSAGING_SETUP_PENDING_MESSAGE =
+            "That account was linked, but Murph is still confirming it. Try again."
         const val HEALTH_FOREGROUND_SYNC_RETRY_MESSAGE =
             "Health sync didn't start before Murph left the foreground. Return to Murph and tap Sync now."
         const val HEALTH_SYNC_NOT_STARTED_MESSAGE =

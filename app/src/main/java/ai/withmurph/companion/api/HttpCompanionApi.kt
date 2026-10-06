@@ -599,6 +599,7 @@ internal object InitialOnboardingApiJson {
             catalog = json.optionalObject("catalog")?.toCatalogMap(),
             contactCard = json.optionalObject("contactCard")?.toContactCardMap(),
             contactAction = json.optionalObject("contactAction")?.toValueMap(),
+            messagingSetupRequired = json.optionalValue("messagingSetupRequired"),
             backendOrigin = backendOrigin,
         )
 
@@ -694,8 +695,12 @@ internal object InitialOnboardingApiContract {
         contactCard: Map<String, Any?>?,
         contactAction: Map<String, Any?>?,
         backendOrigin: URI,
+        messagingSetupRequired: Any? = null,
     ): InitialOnboarding {
         if (strictString(schema) != SCHEMA) throw CompanionApiException.InvalidResponse
+        val parsedMessagingSetupRequired = messagingSetupRequired?.let {
+            it as? Boolean ?: throw CompanionApiException.InvalidResponse
+        } ?: false
         val parsedStatus = when (strictString(status)) {
             InitialOnboardingStatus.Pending.wireValue -> InitialOnboardingStatus.Pending
             InitialOnboardingStatus.Completed.wireValue -> InitialOnboardingStatus.Completed
@@ -738,6 +743,7 @@ internal object InitialOnboardingApiContract {
             catalog = parsedCatalog,
             contactCard = parsedContactCard,
             contactAction = parsedContactAction,
+            messagingSetupRequired = parsedMessagingSetupRequired,
         )
     }
 

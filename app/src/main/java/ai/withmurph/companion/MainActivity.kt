@@ -316,6 +316,14 @@ class MainActivity : ComponentActivity() {
                         onOpenAccountSettings = {
                             openUri(graph.config.backendBaseUrl.trimEnd('/') + "/settings/accounts")
                         },
+                        onOpenMessagingSettings = {
+                            if (openUri(graph.config.backendBaseUrl.trimEnd('/') + "/settings/accounts")) {
+                                graph.session.noteMessagingSettingsOpened()
+                            }
+                        },
+                        onRefreshMessagingSetup = {
+                            graph.applicationScope.launch { graph.session.refreshMessagingSetup() }
+                        },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
