@@ -138,3 +138,20 @@ The existing hosted E2E fixed Privy code cannot qualify first-party generated
 codes; a reviewed real-code journey, signed-device storage/renewal, genuine Web
 settings and installed-session checks are release gates. Local synthetic proof
 does not claim those gates passed.
+
+## Native messaging setup
+
+MessagingSetupCoordinator owns only in-memory phone/code and Telegram-link
+presentation, bound to the initiating member. It reuses AuthProvider's exact
+member bearer capture and HostedAuthServing's cookie-free, redirect-rejecting
+native client. Sign-out resets the flow and stale completions cannot recreate
+its state. AppSession alone clears the gate after canonical readiness refresh.
+The UI reuses LoginScreen's country selector, MurphTextField and OTP component.
+
+Deploy the additive Murph `/api/device-sync/companion/auth/messaging` phone
+send/verify and Telegram start/complete routes before distributing this app.
+Initial linking preserves server-owned fresh-primary, same-member, conflict,
+rate-limit and approval policy. Protected members retain account settings as a
+secondary fallback; stale proof requires primary sign-in again. Telegram opens
+only a validated HTTPS `t.me` link and rechecks on foreground. No phone, code,
+link token or raw error response is persisted or logged.

@@ -104,6 +104,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
+            val messagingState by graph.messaging.state.collectAsStateWithLifecycle()
+            androidx.compose.runtime.LaunchedEffect(appState.phase, appState.messagingSetupRequired) {
+                if (appState.phase == ai.withmurph.companion.app.AppPhase.NeedsLogin ||
+                    appState.phase == ai.withmurph.companion.app.AppPhase.Ready && !appState.messagingSetupRequired) graph.messaging.reset()
+            }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
                 lifecycle.withResumed {
@@ -158,6 +163,7 @@ class MainActivity : ComponentActivity() {
                         !healthSyncNotificationRecoveryNeeded && !appState.healthSyncReminderEnabled &&
                         appState.authVerifiedOnline && !appState.healthStatusIsStale,
                     loginState = loginState,
+                    messagingState = messagingState,
                     healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
                     healthSyncNotificationRecoveryNeeded =
                         healthSyncNotificationRecoveryNeeded,
@@ -321,9 +327,21 @@ class MainActivity : ComponentActivity() {
                                 graph.session.noteMessagingSettingsOpened()
                             }
                         },
-                        onRefreshMessagingSetup = {
-                            graph.applicationScope.launch { graph.session.refreshMessagingSetup() }
-                        },
+                        onMessagingPhone = graph.messaging::setPhone,
+                        onMessagingCountry = graph.messaging::setCountry,
+                        onMessagingCode = graph.messaging::setCode,
+                        onMessagingChangeNumber = graph.messaging::changeNumber,
+                        onMessagingSend = { graph.applicationScope.launch { graph.messaging.sendCode() } },
+                        onMessagingVerify = { graph.applicationScope.launch {
+                            if (graph.messaging.verifyCode()) graph.session.refreshMessagingSetup()
+                        } },
+                        onMessagingTelegram = { graph.applicationScope.launch {
+                            graph.messaging.startTelegram()?.let { openUri(it) }
+                        } },
+                        onRefreshMessagingSetup = { graph.applicationScope.launch {
+                            graph.messaging.checkTelegram()
+                            graph.session.refreshMessagingSetup()
+                        } },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
@@ -338,6 +356,7 @@ class MainActivity : ComponentActivity() {
                             graph.applicationScope.launch { graph.session.retry() }
                         },
                         onSignOut = {
+                            graph.messaging.reset()
                             graph.applicationScope.launch {
                                 graph.session.signOut()
                                 graph.login.reset()
@@ -377,7 +396,13 @@ class MainActivity : ComponentActivity() {
             if (healthSyncNotificationsAllowed) {
                 healthSyncNotificationRecoveryNeeded = false
             }
-            graph.applicationScope.launch { graph.session.didBecomeActive() }
+            graph.applicationScope.launch {
+                if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.Telegram) {
+                    graph.messaging.checkTelegram()
+                    graph.session.refreshMessagingSetup()
+                }
+                graph.session.didBecomeActive()
+            }
         }
     }
 

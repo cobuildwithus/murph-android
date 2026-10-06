@@ -114,6 +114,13 @@ class ScreenshotActivity : ComponentActivity() {
                         showReminderSetup = scenario == ScreenshotScenario.Notifications && !reminderSetupDismissed,
                         showLoginFormInitially = scenario != ScreenshotScenario.Welcome,
                         loginState = scenario.loginState(),
+                        messagingState = when (intent.getStringExtra("messagingState")) {
+                            "code" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456")
+                            "error" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456", error = ai.withmurph.companion.auth.MessagingLinkException.Reason.InvalidCode.message)
+                            "telegram" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Telegram)
+                            "connected" -> ai.withmurph.companion.auth.MessagingSetupState(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
+                            else -> ai.withmurph.companion.auth.MessagingSetupState()
+                        },
                         healthSyncNotificationsAllowed =
                             scenario != ScreenshotScenario.ReminderBlocked &&
                                 scenario != ScreenshotScenario.ReminderDenied,

@@ -42,6 +42,35 @@ class HostedAuthApiClient(
         request("logout", credential = credential)
     }
 
+    override suspend fun sendMessagingPhoneCode(phone: String, credential: String) {
+        request("messaging/phone/send", phoneBody(phone), credential)
+    }
+
+    override suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String) {
+        request("messaging/phone/verify", phoneBody(phone).put("code", code), credential)
+    }
+
+    override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink {
+        val response = request("messaging/telegram/start", JSONObject(), credential)
+        return decode {
+        val token = response.string("token")
+        val url = response.string("url")
+        val uri = URI(url)
+        if (!Regex("^[A-Za-z0-9_-]{43}$").matches(token) || uri.scheme != "https" || uri.host != "t.me"
+            || uri.userInfo != null || uri.port != -1 || uri.fragment != null
+            || !Regex("^/[A-Za-z0-9_]+$").matches(uri.path) || uri.rawQuery != "start=link_$token") throw HostedAuthException.InvalidResponse
+        TelegramMessagingLink(token, url)
+        }
+    }
+
+    override suspend fun completeMessagingTelegram(token: String, credential: String): Boolean {
+        val response = request("messaging/telegram/complete", JSONObject().put("token", token), credential)
+        return decode { response.get("linked") as? Boolean ?: throw HostedAuthException.InvalidResponse }
+    }
+
+    private fun phoneBody(phone: String) = JSONObject().put("change", JSONObject()
+        .put("method", "phone").put("operation", "set").put("expectedIdentity", JSONObject.NULL).put("value", phone))
+
     private suspend fun request(path: String, body: JSONObject? = null, credential: String? = null): JSONObject {
         // The app has no global cookie jar. Reject one if another component
         // installs it: native bearer requests must never inherit browser auth.
@@ -51,7 +80,26 @@ class HostedAuthApiClient(
             url = URL("$origin/api/device-sync/companion/auth/$path"),
             method = "POST", token = credential, body = body?.toString(),
         )
-        if (response.status != 200) throw HostedAuthException.Response(response.status)
+        if (response.status != 200) {
+            if (path.startsWith("messaging/")) {
+                val code = if (response.text.length <= 16_384) runCatching { JSONObject(response.text).optJSONObject("error")?.optString("code") }.getOrNull() else null
+                val reason = when (code) {
+                    "AUTH_CONTACT_IN_USE" -> MessagingLinkException.Reason.ContactInUse
+                    "AUTH_CODE_INVALID" -> MessagingLinkException.Reason.InvalidCode
+                    "AUTH_FRESH_LOGIN_REQUIRED" -> MessagingLinkException.Reason.FreshLogin
+                    "AUTH_MESSAGING_APPROVAL_REQUIRED" -> MessagingLinkException.Reason.Approval
+                    "AUTH_CREDENTIAL_REQUEST_INVALID" -> MessagingLinkException.Reason.InvalidNumber
+                    "AUTH_TELEGRAM_LINK_INVALID" -> MessagingLinkException.Reason.ExpiredLink
+                    else -> when (response.status) {
+                        429 -> MessagingLinkException.Reason.RateLimited
+                        401 -> MessagingLinkException.Reason.FreshLogin
+                        else -> MessagingLinkException.Reason.Unavailable
+                    }
+                }
+                throw MessagingLinkException(reason)
+            }
+            throw HostedAuthException.Response(response.status)
+        }
         return decode {
             if (response.text.toByteArray(Charsets.UTF_8).size > 16_384) throw HostedAuthException.InvalidResponse
             JSONObject(response.text).also { if (it.get("ok") != true) throw HostedAuthException.InvalidResponse }

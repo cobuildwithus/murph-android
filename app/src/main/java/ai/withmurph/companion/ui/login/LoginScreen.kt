@@ -335,7 +335,7 @@ private fun DestinationStage(
 }
 
 @Composable
-private fun CountryButton(
+internal fun CountryButton(
     country: CountryDialCode,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -420,7 +420,7 @@ private fun CodeStage(
 }
 
 @Composable
-private fun OtpInput(
+internal fun OtpInput(
     value: String,
     onValueChange: (String) -> Unit,
     focusRequester: FocusRequester,
@@ -495,7 +495,7 @@ private fun OtpInput(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CountryPicker(
+internal fun CountryPicker(
     selection: CountryDialCode,
     onSelect: (CountryDialCode) -> Unit,
     onDismiss: () -> Unit,

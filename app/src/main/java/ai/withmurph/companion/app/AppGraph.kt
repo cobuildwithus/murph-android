@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 class AppGraph private constructor(
     val session: AppSession,
     val login: LoginCoordinator,
+    val messaging: ai.withmurph.companion.auth.MessagingSetupCoordinator,
     val health: JunctionHealthSyncService,
     val contacts: AddressBookContactSource,
     val healthSyncReminder: HealthSyncReminderController,
@@ -63,8 +64,9 @@ class AppGraph private constructor(
             val applicationScope = CoroutineScope(
                 SupervisorJob() + Dispatchers.Main.immediate,
             )
+            val hostedAuthApi = HostedAuthApiClient(config.backendBaseUrl)
             val auth = HostedAuthService(
-                api = HostedAuthApiClient(config.backendBaseUrl),
+                api = hostedAuthApi,
                 store = HostedAuthCredentialStore(context),
                 legacyFactory = {
                     PrivyAuthService.create(
@@ -98,6 +100,7 @@ class AppGraph private constructor(
             )
             return AppGraph(
                 session = session,
+                messaging = ai.withmurph.companion.auth.MessagingSetupCoordinator(auth, hostedAuthApi),
                 login = LoginCoordinator(
                     auth = auth,
                     appVersion = config.appVersion,
