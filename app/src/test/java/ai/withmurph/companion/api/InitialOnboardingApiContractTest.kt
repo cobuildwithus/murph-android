@@ -48,6 +48,27 @@ class InitialOnboardingApiContractTest {
     }
 
     @Test
+    fun parsesCompletedProjectionWithContactRoute() {
+        // Matches the hosted GET shape for a member who finished setup and
+        // has a Murph contact route: no completedNow, catalog, or card.
+        val onboarding = InitialOnboardingApiContract.parse(
+            schema = SCHEMA,
+            status = "completed",
+            completedNow = null,
+            preferences = emptyPreferences(),
+            catalog = null,
+            contactCard = null,
+            contactAction = contactAction(),
+            backendOrigin = ORIGIN,
+        )
+
+        assertEquals(InitialOnboardingStatus.Completed, onboarding.status)
+        assertNull(onboarding.catalog)
+        assertNull(onboarding.contactCard)
+        assertEquals("sms:+15555550123?body=hello", onboarding.contactAction?.href)
+    }
+
+    @Test
     fun rejectsInvalidCatalogReferencesAndUnsafeUrls() {
         listOf<() -> Unit>(
             { parse(schema = "future") },
@@ -68,6 +89,30 @@ class InitialOnboardingApiContractTest {
                     catalog = catalog(),
                     contactCard = null,
                     contactAction = null,
+                    backendOrigin = ORIGIN,
+                )
+            },
+            {
+                InitialOnboardingApiContract.parse(
+                    schema = SCHEMA,
+                    status = "completed",
+                    completedNow = null,
+                    preferences = emptyPreferences(),
+                    catalog = null,
+                    contactCard = contactCard(),
+                    contactAction = contactAction(),
+                    backendOrigin = ORIGIN,
+                )
+            },
+            {
+                InitialOnboardingApiContract.parse(
+                    schema = SCHEMA,
+                    status = "completed",
+                    completedNow = null,
+                    preferences = emptyPreferences(),
+                    catalog = null,
+                    contactCard = null,
+                    contactAction = contactAction(kind = "telegram", href = "https://example.com/bot"),
                     backendOrigin = ORIGIN,
                 )
             },
