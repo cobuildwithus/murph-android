@@ -128,8 +128,8 @@ android {
         applicationId = "ai.withmurph.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.1"
+        versionCode = 5
+        versionName = "0.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         hostedE2EInstrumentationArguments.forEach { (argument, environmentName) ->
             providers.environmentVariable(environmentName).orNull?.let { value ->
