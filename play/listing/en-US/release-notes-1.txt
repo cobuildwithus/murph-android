@@ -1,1 +1,1 @@
-Fixes sign-in for returning members, who could get stuck on "We couldn't load account setup" after entering their code. The Meals tab and meal entries now show a clear fork-and-knife icon, and the add button on Meals is centered.
+Fixes sign-in for returning members, who could get stuck on "We couldn't load account setup" after entering their code. Murph now asks you to add a phone number or connect Telegram before continuing, so it can message you. The Meals icon shows a clear fork and knife, and the Meals add button is centered.
