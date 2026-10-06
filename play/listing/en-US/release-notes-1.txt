@@ -1,1 +1,1 @@
-A refreshed Android companion with the iOS app’s Journal, manual Meals, and Settings layout. Browse daily health entries and record details, send meal photos from your camera or photo picker, and use light or dark mode. Includes OTP sign-in, optional setup, read-only Health Connect, Friendly Names, and privacy controls.
+Fixes sign-in for returning members, who could get stuck on "We couldn't load account setup" after entering their code. The Meals tab and meal entries now show a clear fork-and-knife icon, and the add button on Meals is centered.
