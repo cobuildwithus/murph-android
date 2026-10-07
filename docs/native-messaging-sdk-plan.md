@@ -12,8 +12,12 @@ The SDK source and tests are implemented. Verification currently stops resolving
 org.telegram:login-sdk:1.0.0 because no GitHub Packages username/token is supplied.
 The preceding 37 script contract checks passed. Required human setup is the
 TELEGRAM_PACKAGES_TOKEN repository secret with read:packages, the
-TELEGRAM_PACKAGES_USER repository variable, equivalent local Gradle credentials,
-and the registered Android redirect host. No credential values were changed.
+TELEGRAM_PACKAGES_USER repository variable, equivalent local Gradle credentials.
+No credential values were changed. The public registration file now supplies
+app397543190-login.tg.dev, wired as the single property default. A read-only
+association check confirms ai.withmurph.app and the 44:E0 certificate, but the
+supplied 0E:3B certificate is not yet published by that host. Verify the
+intended installed build certificate and App Link resolution before merge.
 
 Remaining: compile and unit/UI verification, exact-head synthetic captures and
 side-by-side inspection,

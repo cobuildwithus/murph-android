@@ -162,6 +162,7 @@ Telegram cancellation and errors appear under its button. Browser settings is
 only an inline conflict/protected-action fallback.
 
 MURPH_TELEGRAM_REDIRECT_HOST is the one build property and BuildConfig value
-for BotFather's host. Empty configuration disables native login and emits an
-unregistered.invalid manifest placeholder; it is not release-qualified. Wire
-and verify the registered host and app associations before merging PR 52.
+for BotFather's host, defaulting to app397543190-login.tg.dev. Empty overrides
+disable native login and emit an unregistered.invalid manifest placeholder.
+Verify the installed build's signing certificate against the public association
+and its App Link resolution before merging PR 52.

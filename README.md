@@ -439,6 +439,9 @@ CI reads repository variable `TELEGRAM_PACKAGES_USER` and secret
 
 Set the public `MURPH_TELEGRAM_REDIRECT_HOST` Gradle property to BotFather's
 registered Android host. It feeds both BuildConfig and the verified App Link
-manifest. It remains empty pending registration; PR 52 cannot merge until the
-real host and signing-certificate associations are verified. No store upload or
+manifest. The registered default is `app397543190-login.tg.dev` for
+`ai.withmurph.app`. The public association currently lists only the certificate
+starting `44:E0`; the separately supplied `0E:3B` certificate still needs its
+association confirmed before builds using that key can be qualified. PR 52
+cannot merge until SDK compilation and App Link verification pass. No store upload or
 canary pin change is part of this work.
