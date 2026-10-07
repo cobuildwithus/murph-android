@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var graph: AppGraph
+    private val telegramLogin by lazy { ai.withmurph.companion.auth.TelegramLoginService(this, lifecycleScope) }
     private var healthSyncNotificationsAllowed by mutableStateOf(false)
     private var healthSyncNotificationRecoveryNeeded by mutableStateOf(false)
     private var reminderSetupDismissed by mutableStateOf(false)
@@ -106,7 +108,8 @@ class MainActivity : ComponentActivity() {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
             val messagingState by graph.messaging.state.collectAsStateWithLifecycle()
-            androidx.compose.runtime.LaunchedEffect(appState.phase, appState.messagingSetupRequired) {
+            androidx.compose.runtime.LaunchedEffect(appState.phase, appState.messagingSetupRequired, appState.telegramAwaitingInbound, appState.telegramChatUrl) {
+                if (appState.telegramAwaitingInbound) graph.messaging.restoreAwaitingInbound(appState.telegramChatUrl)
                 if (appState.phase == ai.withmurph.companion.app.AppPhase.NeedsLogin ||
                     appState.phase == ai.withmurph.companion.app.AppPhase.Ready && !appState.messagingSetupRequired) graph.messaging.reset()
             }
@@ -336,12 +339,13 @@ class MainActivity : ComponentActivity() {
                         onMessagingVerify = { graph.applicationScope.launch {
                             if (graph.messaging.verifyCode()) graph.session.refreshMessagingSetup()
                         } },
-                        onMessagingSelectTelegram = graph.messaging::selectTelegram,
-                        onMessagingTelegram = { graph.applicationScope.launch {
-                            graph.messaging.startTelegram()?.let { openUri(it) }
+                        onMessagingTelegram = { lifecycleScope.launch {
+                            if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.SayHi) {
+                                (graph.messaging.state.value.telegramUrl ?: appState.telegramChatUrl)?.let { openUri(it) }
+                            } else if (graph.messaging.connectTelegram(telegramLogin::login)) graph.session.refreshMessagingSetup()
                         } },
                         onRefreshMessagingSetup = { graph.applicationScope.launch {
-                            if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.Connected || graph.messaging.checkTelegram()) graph.session.refreshMessagingSetup()
+                            graph.session.refreshMessagingSetup()
                         } },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
@@ -357,6 +361,7 @@ class MainActivity : ComponentActivity() {
                             graph.applicationScope.launch { graph.session.retry() }
                         },
                         onSignOut = {
+                            telegramLogin.cancel()
                             graph.messaging.reset()
                             graph.applicationScope.launch {
                                 graph.session.signOut()
@@ -391,17 +396,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleMessagingReturn(intent: Intent) {
-        val returnUrl = intent.dataString
+        val returnUrl = intent.data
         intent.data = null
-        if (returnUrl != null && graph.messaging.acceptTelegramReturn(returnUrl)) {
-            graph.applicationScope.launch {
-                if (graph.messaging.checkTelegram()) graph.session.refreshMessagingSetup()
-            }
-        }
+        if (returnUrl != null) telegramLogin.handle(returnUrl)
     }
 
     override fun onResume() {
         super.onResume()
+        telegramLogin.setActive(true)
         if (::graph.isInitialized) {
             graph.healthSyncReminder.didEnterForeground()
             healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
@@ -409,12 +411,17 @@ class MainActivity : ComponentActivity() {
                 healthSyncNotificationRecoveryNeeded = false
             }
             graph.applicationScope.launch {
-                if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.Telegram) {
-                    if (graph.messaging.checkTelegram()) graph.session.refreshMessagingSetup()
+                if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.SayHi) {
+                    graph.session.refreshMessagingSetup()
                 }
                 graph.session.didBecomeActive()
             }
         }
+    }
+
+    override fun onPause() {
+        telegramLogin.setActive(false)
+        super.onPause()
     }
 
     override fun onStop() {

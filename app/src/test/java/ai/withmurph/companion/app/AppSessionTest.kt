@@ -1745,6 +1745,20 @@ class AppSessionTest {
     }
 
     @Test
+    fun telegramAwaitingInboundHoldsGateUntilCanonicalDelivery() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = completedInitialOnboarding().copy(telegramAwaitingInbound = true)
+        fixture.session.start()
+        assertTrue(fixture.session.state.value.messagingSetupRequired)
+        assertTrue(fixture.session.state.value.telegramAwaitingInbound)
+        assertEquals(0, fixture.health.identifyCalls)
+        fixture.api.initialOnboarding = completedInitialOnboarding()
+        assertTrue(fixture.session.refreshMessagingSetup())
+        assertFalse(fixture.session.state.value.messagingSetupRequired)
+        assertFalse(fixture.session.state.value.telegramAwaitingInbound)
+    }
+
+    @Test
     fun messagingSetupRequirementHoldsMemberWithoutStartingHealth() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding =

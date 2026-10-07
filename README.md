@@ -426,3 +426,19 @@ updates, signed-device renewal and genuine browser settings remain explicit
 release checks. The old hosted E2E fixed Privy code does not qualify these paths.
 CI uses public placeholder client identifiers for compilation; it does not
 qualify the release identifiers or provider behavior.
+
+## Telegram native login dependency
+
+The official unmodified dependency is `org.telegram:login-sdk:1.0.0` from
+TelegramMessenger's GitHub Packages repository. Local Gradle reads private
+`gpr.user` / `gpr.key` properties or `TELEGRAM_PACKAGES_USER` /
+`TELEGRAM_PACKAGES_TOKEN` environment variables. The token requires
+`read:packages`; never put credentials in repository files or command arguments.
+CI reads repository variable `TELEGRAM_PACKAGES_USER` and secret
+`TELEGRAM_PACKAGES_TOKEN`. Configure them in GitHub before the SDK build can run.
+
+Set the public `MURPH_TELEGRAM_REDIRECT_HOST` Gradle property to BotFather's
+registered Android host. It feeds both BuildConfig and the verified App Link
+manifest. It remains empty pending registration; PR 52 cannot merge until the
+real host and signing-certificate associations are verified. No store upload or
+canary pin change is part of this work.

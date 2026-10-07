@@ -141,29 +141,27 @@ does not claim those gates passed.
 
 ## Native messaging setup
 
-MessagingSetupCoordinator owns only in-memory phone/code and Telegram-link
-presentation, bound to the initiating member. It reuses AuthProvider's exact
-member bearer capture and HostedAuthServing's cookie-free, redirect-rejecting
-native client. Sign-out resets the flow and stale completions cannot recreate
-its state. AppSession alone clears the gate after canonical readiness refresh.
-The UI reuses LoginScreen's country selector, MurphTextField and OTP component.
+MessagingSetupCoordinator keeps phone/code and link presentation in memory.
+The Telegram operation captures the exact member bearer, creates a five-minute
+backend pending start, invokes the official unmodified SDK, then completes with
+startId and idToken using the same credential. Member/revision checks fence every
+boundary. Activity-owned login cancellation cannot link after teardown. No token
+is logged or stored; closed errors omit SDK error strings.
 
-Deploy the additive Murph `/api/device-sync/companion/auth/messaging` phone
-send/verify and Telegram start/complete routes before distributing this app.
-Initial linking preserves server-owned fresh-primary, same-member, conflict,
-rate-limit and approval policy. Protected members retain account settings as a
-inline error fallback; stale proof requires primary sign-in again. Telegram opens
-only a validated HTTPS `t.me` link and rechecks on foreground. Pending checks
-retain the same link. Telegram privately returns a second proof through the
-backend's fragment-only HTTPS handoff. The fixed `murph-messaging` return route
-must match the original memory-held token; only then can the original native
-session complete linking. Neither proof is authority by itself. Sign-out and
-method changes clear both. No phone, code, link proof or raw error is persisted
-or logged.
+TelegramLoginService accepts only the configured HTTPS App Link host and exact
+/tglogin path. The SDK owns PKCE and provider login fallback. There is no custom
+return scheme, Murph page, bot-link token or Telegram code screen. Backend
+verification checks signature/issuer/audience/expiry, tight iat and atomic global
+single use. Accepted welcome delivery continues; telegramAwaitingInbound restores
+the say-hi step after process death and refreshes when returning from the bot.
+AppSession alone clears readiness and gates new Health work.
 
-Phone is the default method. Each method has one primary action and one quiet
-method switch. Code entry auto-submits six digits and keeps only Resend and
-Use a different number. Sign out stays in the top bar; account settings appears
-only with applicable inline errors. The centered confirming capsule and 28dp
-spacing match iOS. Synthetic fixtures cover both methods, SMS, waiting, pending
-and every typed error.
+The default layout matches iOS: phone controls, Send code, or divider, outline
+Connect Telegram, and quiet top-bar Sign out. SMS reuses login code controls.
+Telegram cancellation and errors appear under its button. Browser settings is
+only an inline conflict/protected-action fallback.
+
+MURPH_TELEGRAM_REDIRECT_HOST is the one build property and BuildConfig value
+for BotFather's host. Empty configuration disables native login and emits an
+unregistered.invalid manifest placeholder; it is not release-qualified. Wire
+and verify the registered host and app associations before merging PR 52.

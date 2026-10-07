@@ -53,19 +53,22 @@ class HostedAuthApiClient(
     override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink {
         val response = request("messaging/telegram/start", JSONObject(), credential)
         return decode {
-        val token = response.string("token")
-        val url = response.string("url")
-        val uri = URI(url)
-        if (!Regex("^[A-Za-z0-9_-]{43}$").matches(token) || uri.scheme != "https" || uri.host != "t.me"
-            || uri.userInfo != null || uri.port != -1 || uri.fragment != null
-            || !Regex("^/[A-Za-z0-9_]+$").matches(uri.path) || uri.rawQuery != "start=link_$token") throw HostedAuthException.InvalidResponse
-        TelegramMessagingLink(token, url)
+            val startId = response.string("startId")
+            val clientId = response.string("clientId")
+            if (!Regex("^[A-Za-z0-9_-]{43}$").matches(startId) || !Regex("^[1-9][0-9]{0,15}$").matches(clientId)) throw HostedAuthException.InvalidResponse
+            TelegramMessagingLink(startId, clientId)
         }
     }
 
-    override suspend fun completeMessagingTelegram(token: String, proof: String?, credential: String): Boolean {
-        val response = request("messaging/telegram/complete", JSONObject().put("token", token).apply { if (proof != null) put("proof", proof) }, credential)
-        return decode { response.get("linked") as? Boolean ?: throw HostedAuthException.InvalidResponse }
+    override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): TelegramMessagingCompletion {
+        val response = request("messaging/telegram/complete", JSONObject().put("startId", startId).put("idToken", idToken), credential)
+        return decode {
+            TelegramMessagingCompletion(
+                response.get("linked") as? Boolean ?: throw HostedAuthException.InvalidResponse,
+                response.get("telegramAwaitingInbound") as? Boolean ?: throw HostedAuthException.InvalidResponse,
+                if (response.isNull("telegramUrl")) null else response.string("telegramUrl"),
+            )
+        }
     }
 
     private fun phoneBody(phone: String) = JSONObject().put("change", JSONObject()
@@ -89,7 +92,7 @@ class HostedAuthApiClient(
                     "AUTH_FRESH_LOGIN_REQUIRED" -> MessagingLinkException.Reason.FreshLogin
                     "AUTH_MESSAGING_APPROVAL_REQUIRED" -> MessagingLinkException.Reason.Approval
                     "AUTH_CREDENTIAL_REQUEST_INVALID" -> MessagingLinkException.Reason.InvalidNumber
-                    "AUTH_TELEGRAM_LINK_INVALID" -> MessagingLinkException.Reason.ExpiredLink
+                    "AUTH_TELEGRAM_INVALID" -> MessagingLinkException.Reason.TelegramUnavailable
                     else -> when (response.status) {
                         429 -> MessagingLinkException.Reason.RateLimited
                         401 -> MessagingLinkException.Reason.FreshLogin

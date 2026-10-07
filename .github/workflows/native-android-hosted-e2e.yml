@@ -154,6 +154,8 @@ jobs:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_WEB_BASE_URL: ${{ inputs.web_base_url }}
           INPUT_WEB_SHA: ${{ inputs.web_sha }}
+          TELEGRAM_PACKAGES_USER: ${{ vars.TELEGRAM_PACKAGES_USER }}
+          TELEGRAM_PACKAGES_TOKEN: ${{ secrets.TELEGRAM_PACKAGES_TOKEN }}
           NATIVE_ANDROID_E2E_LOGIN_EMAIL: ${{ secrets.NATIVE_ANDROID_E2E_LOGIN_EMAIL }}
           NATIVE_ANDROID_E2E_EMAIL_SENDER: ${{ vars.NATIVE_ANDROID_E2E_EMAIL_SENDER }}
           NATIVE_ANDROID_E2E_RESEND_API_KEY: ${{ secrets.NATIVE_ANDROID_E2E_RESEND_API_KEY }}

@@ -43,6 +43,9 @@ jobs:
           "system-images;android-29;google_apis;x86"
           "system-images;android-30;aosp_atd;x86"
       - name: Run managed-device UI and auth suites on supported storage variants
+        env:
+          TELEGRAM_PACKAGES_USER: ${{ vars.TELEGRAM_PACKAGES_USER }}
+          TELEGRAM_PACKAGES_TOKEN: ${{ secrets.TELEGRAM_PACKAGES_TOKEN }}
         run: >-
           ./gradlew --no-daemon
           pixel2Api28SyntheticAndroidTest pixel2Api29SyntheticAndroidTest

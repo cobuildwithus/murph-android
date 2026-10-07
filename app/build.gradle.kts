@@ -54,6 +54,9 @@ apply(from = rootProject.file("gradle/play-release.gradle.kts"))
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
+// Empty until BotFather registers the Android app. Login fails closed while unset.
+val telegramRedirectHost = providers.gradleProperty("MURPH_TELEGRAM_REDIRECT_HOST").orElse("")
+
 val privyAppId = providers.gradleProperty("MURPH_PRIVY_APP_ID").orElse("")
 val privyAppClientId = providers.gradleProperty("MURPH_PRIVY_APP_CLIENT_ID").orElse("")
 val developmentBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_DEV")
@@ -126,6 +129,10 @@ android {
 
     defaultConfig {
         applicationId = "ai.withmurph.app"
+        val telegramHost = telegramRedirectHost.get()
+        require(telegramHost.isEmpty() || Regex("app[0-9]+-login\\.tg\\.dev").matches(telegramHost))
+        buildConfigField("String", "TELEGRAM_REDIRECT_HOST", telegramHost.asBuildConfigString())
+        manifestPlaceholders["telegramRedirectHost"] = telegramHost.ifEmpty { "unregistered.invalid" }
         minSdk = 28
         targetSdk = 36
         versionCode = 5
@@ -301,6 +308,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("org.telegram:login-sdk:1.0.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

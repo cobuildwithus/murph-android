@@ -14,23 +14,28 @@ class MessagingLinkException(val reason: Reason) : Exception() {
         InvalidCode("That code is invalid or expired. Try again or request a new code."),
         FreshLogin("Sign out and sign in again to confirm it’s you, then connect your account."),
         Approval("Open account settings to approve this account change."),
-        ExpiredLink("That Telegram link expired. Connect Telegram again."),
+        TelegramCancelled("Telegram wasn’t connected"),
+        TelegramUnavailable("Telegram is unavailable. Try again."),
         Unavailable("We couldn’t connect your account. Check your connection and try again."),
     }
 }
 
-class TelegramMessagingLink(val token: String, val url: String) {
+class TelegramMessagingLink(val startId: String, val clientId: String) {
     override fun toString() = "TelegramMessagingLink(<redacted>)"
 }
 
-enum class MessagingStage { Phone, Code, Telegram, Connected }
+data class TelegramMessagingCompletion(val linked: Boolean, val telegramAwaitingInbound: Boolean, val telegramUrl: String?)
+
+enum class MessagingStage { Phone, Code, SayHi, Connected }
 data class MessagingSetupState(
     val stage: MessagingStage = MessagingStage.Phone,
     val phone: String = "",
     val country: CountryDialCode = CountryDialCode.Default,
     val code: String = "",
     val busy: Boolean = false,
-    val telegramPending: Boolean = false,
+    val telegramLogin: Boolean = false,
+    val telegramError: Boolean = false,
+    val telegramUrl: String? = null,
     val displayPhone: String = "",
     val error: String? = null,
 ) {
@@ -45,19 +50,17 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
     val state = mutableState.asStateFlow()
     private var owner: String? = null
     private var sentPhone: String? = null
-    private var telegramToken: String? = null
-    private var telegramUrl: String? = null
-    private var telegramProof: String? = null
     private var revision = 0L
 
     fun setPhone(value: String) { if (!state.value.busy) mutableState.value = state.value.copy(phone = value, error = null) }
     fun setCountry(value: CountryDialCode) { if (!state.value.busy) mutableState.value = state.value.copy(country = value, error = null) }
     fun setCode(value: String) { if (!state.value.busy) mutableState.value = state.value.copy(code = value.filter { it in '0'..'9' }.take(6), error = null) }
-    fun reset() { revision++; owner = null; sentPhone = null; telegramToken = null; telegramUrl = null; telegramProof = null; mutableState.value = MessagingSetupState() }
-    fun changeNumber() { if (!state.value.busy) { sentPhone = null; telegramToken = null; telegramUrl = null; telegramProof = null; mutableState.value = state.value.copy(stage = MessagingStage.Phone, code = "", error = null, telegramPending = false, displayPhone = "") } }
+    fun reset() { revision++; owner = null; sentPhone = null; mutableState.value = MessagingSetupState() }
+    fun changeNumber() { if (!state.value.busy) { sentPhone = null; mutableState.value = state.value.copy(stage = MessagingStage.Phone, code = "", error = null, telegramError = false, telegramUrl = null, displayPhone = "") } }
 
     suspend fun sendCode(): Boolean {
         val target = if (state.value.stage == MessagingStage.Code) sentPhone.orEmpty() else state.value.country.compose(state.value.phone)
+        mutableState.value = state.value.copy(telegramError = false)
         if (!CountryDialCode.isPlausibleE164(target)) {
             mutableState.value = state.value.copy(error = MessagingLinkException.Reason.InvalidNumber.message)
             return false
@@ -74,6 +77,7 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         val target = sentPhone ?: return false
         if (!state.value.canVerify) return false
         val code = state.value.code
+        mutableState.value = state.value.copy(telegramError = false)
         return perform { credential, current ->
             api.verifyMessagingPhoneCode(target, code, credential)
             requireCurrent(current)
@@ -82,55 +86,30 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         }
     }
 
-    fun selectTelegram() {
-        if (state.value.busy) return
-        changeNumber()
-        mutableState.value = state.value.copy(stage = MessagingStage.Telegram)
-    }
-
-    suspend fun startTelegram(): String? {
-        telegramUrl?.let { return it }
-        var url: String? = null
-        val done = perform { credential, current ->
-            val link = api.startMessagingTelegram(credential)
-            requireCurrent(current)
-            telegramToken = link.token
-            telegramUrl = link.url
-            sentPhone = null
-            mutableState.value = state.value.copy(stage = MessagingStage.Telegram, code = "", telegramPending = true)
-            url = link.url
+    suspend fun connectTelegram(login: suspend (String) -> String): Boolean {
+        if (state.value.busy) return false
+        val generation = revision
+        mutableState.value = state.value.copy(telegramLogin = true, telegramError = true)
+        try {
+            return perform { credential, current ->
+                val start = api.startMessagingTelegram(credential)
+                requireCurrent(current)
+                val idToken = login(start.clientId)
+                requireCurrent(current)
+                val result = api.completeMessagingTelegram(start.startId, idToken, credential)
+                requireCurrent(current)
+                if (!result.linked) throw MessagingLinkException(MessagingLinkException.Reason.TelegramUnavailable)
+                sentPhone = null
+                mutableState.value = state.value.copy(stage = if (result.telegramAwaitingInbound) MessagingStage.SayHi else MessagingStage.Connected,
+                    telegramUrl = result.telegramUrl, phone = "", code = "")
+            }
+        } finally {
+            if (generation == revision) mutableState.value = state.value.copy(telegramLogin = false)
         }
-        return if (done) url else null
     }
 
-    suspend fun checkTelegram(): Boolean {
-        val token = telegramToken ?: return false
-        val proof = telegramProof
-        var linked = false
-        val done = perform { credential, current ->
-            linked = api.completeMessagingTelegram(token, proof, credential)
-            requireCurrent(current)
-            if (linked) {
-                telegramToken = null
-                telegramUrl = null
-                telegramProof = null
-                mutableState.value = state.value.copy(stage = MessagingStage.Connected, phone = "")
-            } else mutableState.value = state.value.copy(telegramPending = true)
-        }
-        if (done && !linked && proof != telegramProof) return checkTelegram()
-        return done && linked
-    }
-
-    fun acceptTelegramReturn(url: String): Boolean {
-        val token = telegramToken ?: return false
-        if (state.value.stage != MessagingStage.Telegram || url.length > 200) return false
-        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
-        if (uri.scheme != "murph-messaging" || uri.host != "telegram" || uri.path != "/complete" ||
-            uri.userInfo != null || uri.port != -1 || uri.query != null) return false
-        val fields = Regex("^token=([A-Za-z0-9_-]{43})&proof=([A-Za-z0-9_-]{43})$").matchEntire(uri.rawFragment ?: "") ?: return false
-        if (fields.groupValues[1] != token) return false
-        telegramProof = fields.groupValues[2]
-        return true
+    fun restoreAwaitingInbound(url: String?) {
+        if (!state.value.busy) mutableState.value = state.value.copy(stage = MessagingStage.SayHi, telegramUrl = url)
     }
 
     private suspend fun requireCurrent(current: Long) {
@@ -154,9 +133,8 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
             throw error
         } catch (error: Exception) {
             if (current == revision) {
-                val reason = (error as? MessagingLinkException)?.reason ?: MessagingLinkException.Reason.Unavailable
-                if (reason == MessagingLinkException.Reason.ExpiredLink) { telegramToken = null; telegramUrl = null; telegramProof = null }
-                mutableState.value = state.value.copy(error = reason.message, telegramPending = telegramToken != null)
+                val reason = (error as? MessagingLinkException)?.reason ?: if (state.value.telegramError) MessagingLinkException.Reason.TelegramUnavailable else MessagingLinkException.Reason.Unavailable
+                mutableState.value = state.value.copy(error = reason.message)
             }
             return false
         } finally {

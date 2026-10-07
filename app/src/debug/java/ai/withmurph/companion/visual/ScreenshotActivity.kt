@@ -789,16 +789,23 @@ private val NoOpActions = MurphActions(
 private fun messagingFixture(name: String?): ai.withmurph.companion.auth.MessagingSetupState {
     val phone = ai.withmurph.companion.auth.MessagingSetupState()
     val code = phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456", displayPhone = "+12025550123")
-    val telegram = phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Telegram)
-    val reasons = ai.withmurph.companion.auth.MessagingLinkException.Reason.entries
-    val errors = listOf("invalid-number", "contact-in-use", "rate-limited", "invalid-code", "fresh-login", "approval", "expired-link", "unavailable")
-    val index = errors.indexOf(name)
-    if (index >= 0) return (when (name) { "invalid-code" -> code; "expired-link" -> telegram; else -> phone }).copy(error = reasons[index].message)
+    val error = when (name) {
+        "invalid-number" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.InvalidNumber
+        "contact-in-use", "telegram-conflict" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.ContactInUse
+        "rate-limited" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.RateLimited
+        "invalid-code" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.InvalidCode
+        "fresh-login" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.FreshLogin
+        "approval" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.Approval
+        "telegram-cancelled" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.TelegramCancelled
+        "telegram-unavailable" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.TelegramUnavailable
+        "unavailable" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.Unavailable
+        else -> null
+    }
+    if (error != null) return (if (name == "invalid-code") code else phone).copy(error = error.message, telegramError = name?.startsWith("telegram-") == true)
     return when (name) {
         "code" -> code
-        "telegram" -> telegram
-        "pending" -> telegram.copy(telegramPending = true)
-        "waiting" -> telegram.copy(telegramPending = true, busy = true)
+        "say-hi" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.SayHi, telegramUrl = "https://t.me/synthetic_bot")
+        "waiting" -> phone.copy(telegramLogin = true, busy = true)
         else -> phone
     }
 }

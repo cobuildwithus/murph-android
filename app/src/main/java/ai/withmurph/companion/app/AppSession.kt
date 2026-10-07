@@ -4829,6 +4829,8 @@ class AppSession(
                 initialOnboardingMessage = null,
                 initialOnboardingContactCardHandoff = null,
                 messagingSetupRequired = false,
+                telegramAwaitingInbound = false,
+                telegramChatUrl = null,
                 messagingSetupMessage = null,
             )
         }
@@ -4839,7 +4841,9 @@ class AppSession(
     private fun applyMessagingSetupRequirement(projection: InitialOnboarding) {
         _state.update {
             it.copy(
-                messagingSetupRequired = projection.messagingSetupRequired,
+                messagingSetupRequired = projection.messagingSetupRequired || projection.telegramAwaitingInbound,
+                telegramAwaitingInbound = projection.telegramAwaitingInbound,
+                telegramChatUrl = if (projection.telegramAwaitingInbound) projection.contactAction?.href else null,
                 messagingSetupMessage = null,
             )
         }
@@ -4847,7 +4851,7 @@ class AppSession(
 
     /**
      * Re-enters canonical admission after the member links a phone or Telegram
-     * account in the browser. Returns whether messaging setup is now complete.
+     * account. Returns whether messaging setup is now complete.
      */
     suspend fun refreshMessagingSetup(): Boolean {
         val current = _state.value

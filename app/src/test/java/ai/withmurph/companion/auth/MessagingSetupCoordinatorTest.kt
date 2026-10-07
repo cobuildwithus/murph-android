@@ -35,37 +35,46 @@ class MessagingSetupCoordinatorTest {
         api.failure = null; assertTrue(model.sendCode()); assertEquals("", model.state.value.code)
         model.changeNumber(); assertEquals(MessagingStage.Phone, model.state.value.stage)
     }
-    @Test fun pendingTelegramKeepsTokenAndRecipientProofAcrossRetry() = runTest {
+    @Test fun acceptedWelcomeContinuesAndPassesSdkTokenToBackend() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
-        model.selectTelegram(); assertEquals(0, api.starts)
-        val original = model.startTelegram(); assertFalse(model.checkTelegram())
-        assertEquals(MessagingStage.Telegram, model.state.value.stage)
-        assertTrue(model.state.value.telegramPending)
-        assertEquals(original, model.startTelegram()); assertEquals(1, api.starts)
-        val token = "a".repeat(43); val proof = "b".repeat(43)
-        val callback = "murph-messaging://telegram/complete#token=$token&proof=$proof"
-        assertTrue(model.acceptTelegramReturn(callback))
-        api.failure = MessagingLinkException(MessagingLinkException.Reason.Unavailable)
-        assertFalse(model.checkTelegram())
-        api.failure = null; api.linked = true
-        assertTrue(model.checkTelegram())
-        assertEquals(listOf(token, token, token), api.completedTokens)
-        assertEquals(proof, api.completedProofs.last())
+        assertTrue(model.connectTelegram { clientId -> assertEquals("123456789", clientId); "synthetic-id-token" })
         assertEquals(MessagingStage.Connected, model.state.value.stage)
-        assertFalse(model.acceptTelegramReturn(callback))
+        assertEquals(listOf("a".repeat(43)), api.completedStarts)
+        assertEquals(listOf("synthetic-id-token"), api.completedTokens)
     }
-    @Test fun otherLinksAndMethodSwitchCannotReuseTelegramProof() = runTest {
+    @Test fun rejectedWelcomeKeepsSayHiUrlWithoutStartingAnotherLogin() = runTest {
+        val api = Api(); api.awaitingInbound = true
+        val model = MessagingSetupCoordinator(Auth(), api)
+        assertTrue(model.connectTelegram { "synthetic-id-token" })
+        assertEquals(MessagingStage.SayHi, model.state.value.stage)
+        assertEquals("https://t.me/synthetic_bot", model.state.value.telegramUrl)
+        model.restoreAwaitingInbound(model.state.value.telegramUrl)
+        assertEquals(1, api.starts)
+    }
+    @Test fun cancelledAndUnavailableLoginStayInlineAndRetryable() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
-        model.startTelegram()
-        val token = "a".repeat(43); val proof = "b".repeat(43)
-        for (url in listOf("https://telegram/complete#token=$token&proof=$proof",
-            "murph-messaging://telegram/complete#token=$proof&proof=$proof",
-            "murph-messaging://telegram/complete?extra=1#token=$token&proof=$proof",
-            "murph-messaging://telegram/complete#token=$token&proof=bad")) assertFalse(model.acceptTelegramReturn(url))
-        model.changeNumber()
-        assertFalse(model.acceptTelegramReturn("murph-messaging://telegram/complete#token=$token&proof=$proof"))
-        assertEquals(MessagingStage.Phone, model.state.value.stage)
-        assertTrue(api.completedTokens.isEmpty())
+        for (reason in listOf(MessagingLinkException.Reason.TelegramCancelled, MessagingLinkException.Reason.TelegramUnavailable)) {
+            assertFalse(model.connectTelegram { throw MessagingLinkException(reason) })
+            assertEquals(MessagingStage.Phone, model.state.value.stage)
+            assertEquals(reason.message, model.state.value.error)
+            assertTrue(model.state.value.telegramError)
+            assertTrue(api.completedTokens.isEmpty())
+        }
+        assertTrue(model.connectTelegram { "synthetic-id-token" })
+    }
+    @Test fun resetAndMemberChangeRejectLateSdkProof() = runTest {
+        for (reset in listOf(true, false)) {
+            val api = Api(); val auth = Auth(); val model = MessagingSetupCoordinator(auth, api)
+            val proof = CompletableDeferred<String>()
+            val pending = async { runCatching { model.connectTelegram { proof.await() } } }
+            runCurrent()
+            assertFalse(model.connectTelegram { error("duplicate") })
+            if (reset) model.reset() else auth.member = "other-member"
+            proof.complete("synthetic-id-token")
+            pending.await()
+            assertTrue(api.completedTokens.isEmpty())
+            assertEquals(MessagingStage.Phone, model.state.value.stage)
+        }
     }
     @Test fun resetRejectsLateCompletionAndDuplicateSend() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
@@ -92,14 +101,14 @@ class MessagingSetupCoordinatorTest {
         override suspend fun confirmCode(method: LoginMethod, destination: String, code: String) {}
     }
     private class Api : HostedAuthServing {
-        var sends = 0; var verifiedPhone: String? = null; var linked = false
-        var starts = 0; val completedTokens = mutableListOf<String>(); val completedProofs = mutableListOf<String?>()
+        var sends = 0; var verifiedPhone: String? = null; var awaitingInbound = false
+        var starts = 0; val completedTokens = mutableListOf<String>(); val completedStarts = mutableListOf<String>()
         var failure: Exception? = null; var wait: CompletableDeferred<Unit>? = null
         override suspend fun sendMessagingPhoneCode(phone: String, credential: String) { sends++; wait?.await(); failure?.let { throw it } }
         override suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String) { failure?.let { throw it }; verifiedPhone = phone }
-        override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; return TelegramMessagingLink("a".repeat(43), "https://t.me/synthetic_bot?start=link_${"a".repeat(43)}") }
-        override suspend fun completeMessagingTelegram(token: String, proof: String?, credential: String): Boolean {
-            completedTokens.add(token); completedProofs.add(proof); failure?.let { throw it }; return linked
+        override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; return TelegramMessagingLink("a".repeat(43), "123456789") }
+        override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): TelegramMessagingCompletion {
+            completedStarts.add(startId); completedTokens.add(idToken); failure?.let { throw it }; return TelegramMessagingCompletion(true, awaitingInbound, "https://t.me/synthetic_bot")
         }
         override suspend fun sendCode(method: LoginMethod, value: String) {}
         override suspend fun verifyCode(method: LoginMethod, value: String, code: String): HostedAuthSession = error("unused")

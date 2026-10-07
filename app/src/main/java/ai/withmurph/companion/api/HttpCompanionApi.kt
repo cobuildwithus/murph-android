@@ -600,6 +600,7 @@ internal object InitialOnboardingApiJson {
             contactCard = json.optionalObject("contactCard")?.toContactCardMap(),
             contactAction = json.optionalObject("contactAction")?.toValueMap(),
             messagingSetupRequired = json.optionalValue("messagingSetupRequired"),
+            telegramAwaitingInbound = json.optionalValue("telegramAwaitingInbound"),
             backendOrigin = backendOrigin,
         )
 
@@ -696,9 +697,13 @@ internal object InitialOnboardingApiContract {
         contactAction: Map<String, Any?>?,
         backendOrigin: URI,
         messagingSetupRequired: Any? = null,
+        telegramAwaitingInbound: Any? = null,
     ): InitialOnboarding {
         if (strictString(schema) != SCHEMA) throw CompanionApiException.InvalidResponse
         val parsedMessagingSetupRequired = messagingSetupRequired?.let {
+            it as? Boolean ?: throw CompanionApiException.InvalidResponse
+        } ?: false
+        val parsedTelegramAwaitingInbound = telegramAwaitingInbound?.let {
             it as? Boolean ?: throw CompanionApiException.InvalidResponse
         } ?: false
         val parsedStatus = when (strictString(status)) {
@@ -744,6 +749,7 @@ internal object InitialOnboardingApiContract {
             contactCard = parsedContactCard,
             contactAction = parsedContactAction,
             messagingSetupRequired = parsedMessagingSetupRequired,
+            telegramAwaitingInbound = parsedTelegramAwaitingInbound,
         )
     }
 
