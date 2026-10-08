@@ -127,3 +127,17 @@ test("real pinned launcher dry-run parses the package, retains archive after ali
   rmSync(resolve(f.root, "output-packages/codebase.zip")); // Same cleanup as the real send path.
   verifyArchive(f.root, archive, expected);
 });
+
+test("source directories named home survive final manifest privacy scanning", t => {
+  const f = fixture(t);
+  const path = "app/src/main/java/example/ui/home/HomeScreen.kt";
+  f.write(path, "fun home() = Unit\n");
+  f.metadata.headRefOid = f.commit();
+  const snapshot = f.snapshot();
+  assert.ok(snapshot.files.has(path));
+  checkText(snapshot.files.get("review-gpt-pr-context/source-manifest.json"));
+  for (const prefix of ["", "file://", 'path="', "path = ", "("]) {
+    assert.throws(() => checkText(Buffer.from(prefix + "/" + "home/" + "fixture/private")), /Private/u);
+    assert.throws(() => checkText(Buffer.from(prefix + "/" + "Users/" + "fixture/private")), /Private/u);
+  }
+});

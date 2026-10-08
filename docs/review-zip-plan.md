@@ -1,6 +1,6 @@
 # ZIP review transport
 
-Status: implementation and independent review complete; hosted checks pending
+Status: merged in PR 53; path-guard follow-up verification pending
 
 Replace GitHub-connector review with a guarded tracked-text snapshot, modeled on
 iOS. Keep the exact PR/head/body/prompt/tool response attestation, with a ZIP
@@ -27,3 +27,11 @@ change: only the built-in GitHub token is passed to the Gradle verification step
 with contents/packages read permissions and a narrowly tested allowance. No
 secret values or app behavior change. The exact ReviewGPT pin is 0.5.153; its
 manifest, integrity lock and version-specific release-age exception move together.
+
+The real product archive exposed a false positive after merge: the privacy
+scanner treated repository-relative ui/home source paths in the generated
+manifest as absolute home directories. A narrow boundary correction preserves
+absolute home-path rejection, including file URIs, quoted values and prose,
+while allowing ordinary repository directories. The regression reproduces the
+failure before the fix. This follow-up also needs independent control review
+and hosted checks before product ReviewGPT resumes.
