@@ -66,11 +66,19 @@ git diff --quiet "$base_oid...$head_oid" \
   && fail "the PR has no changed files"
 
 review_control_paths=(
+  "AGENTS.md"
+  ".github/workflows/android-visual-proof.yml"
+  "scripts/check-android-visual-proof.mjs"
+  "scripts/check-android-visual-proof.test.mjs"
   ".github/workflows/android-ci.yml"
   ".github/workflows/review-tooling.yml"
   "docs/review-workflow.md"
   "package.json"
   "pnpm-lock.yaml"
+  "pnpm-workspace.yaml"
+  "scripts/package-audit-context.sh"
+  "scripts/review-package.mjs"
+  "scripts/review-package.test.mjs"
   "scripts/chatgpt-review-presets/android-deep-review.md"
   "scripts/package-review-context.sh"
   "scripts/repo-tools.config.sh"
@@ -113,14 +121,20 @@ node scripts/review-gpt-contract.mjs invocation \
   "$context_dir/review-context.json" \
   "$invocation_file"
 
+export REVIEW_GPT_PR_URL="$1"
+export REVIEW_GPT_EXPECTED_CONTEXT_DIGEST="$(node -p 'require("node:fs").readFileSync(process.argv[1], "utf8").split(" ")[0]' "$context_dir/review-context.sha256")"
+export REVIEW_GPT_PACKAGE_RECEIPT="$(node -p 'require("node:path").resolve(process.argv[1])' "$2.package.json")"
+
 pnpm review:gpt android-pr-review \
-  --no-zip \
-  --connector github \
+  --zip \
+  --connector current \
   --prompt-file "$invocation_file" \
   --wait \
   --wait-timeout 120m \
   --response-marker ANDROID_REVIEW_COMPLETE \
   --response-file "$2"
+
+node scripts/review-package.mjs capture "$2"
 
 [[ "$(git rev-parse --verify HEAD)" == "$head_oid" ]] \
   || fail "local HEAD moved during exact-head PR review"

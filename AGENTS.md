@@ -26,3 +26,7 @@
   the trusted check rejects those paths and the candidate's copy of the gate
   never certifies itself. The first bootstrap PR relies on independent review
   because its base predates the trusted verifier.
+
+- Follow `docs/review-workflow.md` for exact-head ZIP ReviewGPT and independent
+  review of tooling/control-plane changes. Keep private files and evidence
+  binaries out of review archives.

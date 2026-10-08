@@ -140,24 +140,21 @@ provider coverage.
 
 ## ReviewGPT
 
-The repository includes the same pinned, managed-browser ReviewGPT workflow as
-`murph-ios`, with an Android-specific production review prompt:
+The repository uses the pinned managed-browser ReviewGPT workflow with a guarded
+tracked-source ZIP, following the iOS attachment pattern:
 
 ```bash
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm review:verify
-pnpm review:gpt android-review --wait \
-  --no-zip \
-  --connector github \
-  --response-marker ANDROID_REVIEW_COMPLETE \
-  --response-file output-packages/android-review-response.md \
-  --prompt "Review exact committed head: $(git rev-parse HEAD)"
+REVIEW_GPT_BROWSER_LANE=hercules pnpm review:pr <pr-number> output-packages/pr-review.md
+pnpm review:validate output-packages/pr-review.md <pr-number> "$(git rev-parse HEAD)"
 ```
 
-ReviewGPT reads the repository through the GitHub connector; it does not build
-or upload a repository ZIP. Review the exact committed head with a clean
-worktree. Resolve accepted findings, rerun Android verification, commit the
-remediation, and repeat until the response reports `REVIEW_OUTCOME: PASS`.
+No GitHub connector is required. The ZIP omits secrets, local Gradle properties,
+keystores, build output and binary evidence. Keep its `.package.json` hash
+receipt, ZIP and the tool's capture metadata with the response. Review the exact
+pushed head with a clean worktree. Follow [the review workflow](docs/review-workflow.md)
+for independent control-plane review, failure recovery and merge gates.
 
 ## Data requested
 

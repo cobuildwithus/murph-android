@@ -98,7 +98,7 @@ for (const [label, movedContext] of [
   });
 }
 
-test("builds a connector-only invocation bound to the exact review context", () => {
+test("builds a guarded ZIP invocation bound to the exact review context", () => {
   const expected = context();
   const invocation = buildReviewInvocation(expected);
 
@@ -109,8 +109,8 @@ test("builds a connector-only invocation bound to the exact review context", () 
     invocation,
     new RegExp(`REVIEW_CONTEXT_SHA256: ${reviewContextDigest(expected)}`, "u"),
   );
-  assert.match(invocation, /Use the connected GitHub app as the sole repository-content source\./u);
-  assert.doesNotMatch(invocation, /zip|attachment/iu);
+  assert.match(invocation, /Use the attached guarded ZIP as the sole repository-content source\./u);
+  assert.doesNotMatch(invocation, /connected GitHub/iu);
 });
 
 test("rejects a checked head that disagrees with the context", () => {
@@ -181,7 +181,12 @@ test("hosted workflows keep product and review verification on PR heads", () => 
 
   assert.match(androidWorkflow, /^\s*pull_request:\s*$/mu);
   assert.match(androidWorkflow, /\.\/scripts\/verify\.sh/u);
-  assert.doesNotMatch(androidWorkflow, /secrets\./u);
+  // The official Telegram SDK registry requires the explicitly authorized
+  // read:packages credential. Product/production secrets remain forbidden.
+  assert.match(androidWorkflow, /^permissions:\n  contents: read\n  packages: read\n/mu);
+  const telegramRegistrySecret = "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}";
+  assert.match(androidWorkflow, /- name: Verify Android app\n        env:\n          TELEGRAM_PACKAGES_USER: \$\{\{ github\.actor \}\}\n          GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}\n        run: \.\/scripts\/verify\.sh/u);
+  assert.doesNotMatch(androidWorkflow.replace(telegramRegistrySecret, ""), /\bsecrets\b/u);
   assert.match(reviewWorkflow, /^\s*pull_request:\s*$/mu);
   assert.match(reviewWorkflow, /pnpm install --frozen-lockfile --ignore-scripts/u);
   assert.match(reviewWorkflow, /pnpm review:verify/u);

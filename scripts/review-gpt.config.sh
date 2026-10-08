@@ -4,11 +4,12 @@ review_gpt_config_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pw
 review_gpt_repo_root="$(CDPATH= cd -- "$review_gpt_config_dir/.." && pwd -P)"
 
 review_gpt_invalid_browser_lane() {
-  echo "Error: unsupported ReviewGPT browser lane '$1'. Use random, eragon, phlebas, or mountain." >&2
+  echo "Error: unsupported ReviewGPT browser lane '$1'. Use random, eragon, phlebas, mountain, or hercules." >&2
 }
 
 review_gpt_browser_lane_display_name() {
   case "$1" in
+    hercules) printf '%s\n' "Hercules" ;;
     eragon) printf '%s\n' "Eragon" ;;
     phlebas) printf '%s\n' "Phlebas" ;;
     mountain) printf '%s\n' "Mountain" ;;
@@ -21,6 +22,7 @@ review_gpt_browser_lane_display_name() {
 
 review_gpt_browser_lane_port() {
   case "$1" in
+    hercules) printf '%s\n' "9444" ;;
     eragon) printf '%s\n' "9448" ;;
     phlebas) printf '%s\n' "9442" ;;
     mountain) printf '%s\n' "9450" ;;
@@ -106,7 +108,7 @@ case "$requested_lane" in
   aragon | eragon)
     selected_lane="eragon"
     ;;
-  phlebas | mountain)
+  phlebas | mountain | hercules)
     selected_lane="$requested_lane"
     ;;
   *)
@@ -142,10 +144,14 @@ managed_browser_port="${managed_browser_port:-$selected_port}"
 managed_browser_background_mode="${managed_browser_background_mode:-balanced}"
 export REVIEW_GPT_SELECTED_BROWSER_LANE="$selected_lane"
 
-repo_context_url="https://github.com/cobuildwithus/murph-android"
-attach_artifacts=0
+repo_context_url=""
+attach_artifacts=1
+include_tests=1
+include_docs=1
+package_script="scripts/package-audit-context.sh"
+name_prefix="murph-android-audit"
 preset_dir="scripts/chatgpt-review-presets"
-app_connector="github"
+app_connector="current"
 model="gpt-6-pro"
 thinking="current"
 

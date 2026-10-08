@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: android-ci-${{ github.ref }}
@@ -38,4 +39,7 @@ jobs:
       - name: Install Android 36 platform
         run: sdkmanager "platforms;android-36"
       - name: Verify Android app
+        env:
+          TELEGRAM_PACKAGES_USER: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/verify.sh
