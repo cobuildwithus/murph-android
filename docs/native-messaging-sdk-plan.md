@@ -110,3 +110,17 @@ beaff011410b324ff72683076aa5702d08cc46e7b31abeef8213f7af637cba99.
 All 25 Android/iOS pairs and nine comparison sheets were inspected after iOS
 XCUITest screenshots resolved the GUI capture limitation. No production code
 changed, and real provider/device proof remains open. ReviewGPT remains required.
+
+## Review launcher recovery
+
+The human authorized updating the pinned development-only review launcher to
+0.5.153 for the repaired model picker, using Hercules for the normal automated
+GitHub-connector review. Manifest, lockfile and exact installed-version checks
+move together; the release-age exception stays limited to this exact package
+version and lifecycle scripts remain disabled. A fresh independent read-only
+review verified the registry tarball integrity, unchanged transitive graph and
+unchanged prompt/runner/validator boundaries: no findings. Frozen installation
+and all 13 review-tooling checks pass. No app or synthetic build input changes.
+Backend PR 4059 and iOS PR 177 have merged; backend production admission and all
+14 unauthenticated auth smoke checks passed. Android still requires a valid
+product PASS before merging PR 51 and updating this PR onto main.
