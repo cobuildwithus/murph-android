@@ -1,12 +1,12 @@
 # Native messaging SDK completion
 
-Status: accepted lifecycle finding corrected; fresh evidence and review pending
+Status: accepted lifecycle finding corrected and verified; fresh ReviewGPT pending
 
 Backend PR 4059 owns credential policy and fresh single-use Telegram proofs.
 It merged as 5cc4e681c4b0a90c4f15163911135d61f44b2676; production admission,
 deployment and all 14 unauthenticated auth smoke checks passed. Android PR 52
 remains stacked on PR 51; both now inherit the trusted ZIP review tooling from
-PRs 53 and 54. Product ReviewGPT and current-head hosted checks remain merge gates.
+PRs 53, 54 and 55. Product ReviewGPT and current-head hosted checks remain merge gates.
 
 ## Product behavior
 
@@ -44,15 +44,22 @@ final capture. Follow docs/review-workflow.md for failures and dispositions.
 
 ## Evidence and remaining work
 
-T11 captured all 26 ordinary/error/maximum-font states at source head
-19748fb3fe050e95a36c8f95c3730a285afbe5bd. Both the capture agent and parent
-inspected every raw image, full control containment, scroll-end bottom clearance
-and return to Sign out. The synthetic APK SHA-256 is
-7dc00c274b213ac28bac2e3d57da6a804c6961b78ecce4982983989fbbffd79e.
-Capture metadata and image hashes are retained beside the durable images.
-Evidence-only commits do not change application/build inputs. Supplemental
-T11 sheets pair 25 corresponding states with iOS PR 177 and the merged PR 183
-say-hi redesign. Platform font scaling differs, but labels/actions are complete.
+The remediation capture contains 30 raw ordinary/error/maximum-text states at
+source head dfd407699c07cc853386928f6170c58175cff183. All were personally inspected,
+including four actual Launching admission states at ordinary and maximum text.
+Labels, borders, divider, scroll-end clearance and return to Sign out pass.
+Synthetic APK SHA-256:
+ae6a21dfdf63234fe8f9ce4e8c217ac75f7aff10e62060d050295cc2abe47708.
+Capture metadata, raw image hashes and comparison bounds are retained beside
+the evidence. The evidence-only commit changes no application/build inputs.
+All 25 corresponding Android/iOS pairs and nine supplemental sheets were also
+inspected; say-hi uses merged iOS PR 183. Native font scaling and insets differ.
+
+Full verify passed: 619 Debug unit tests and 609 in each other variant, all lint
+and assembly checks. All 22 review-tool tests passed. Foreground instrumentation
+passed 61 cases with zero failures/errors and one intentional live-journey skip.
+Pause/resume admission success/failure, probe cancellation and sign-out fencing
+regressions pass; no new state owner was introduced.
 
 Run full verification and synthetic instrumentation in the foreground. Keep
 both PRs unmerged until the required reviews/checks pass; merge PR 51 before

@@ -1,0 +1,225 @@
+{
+  "inspection": "All 30 raw captures personally inspected: complete labels and borders, bottom clearance, intact divider, inline errors, maximum-text scroll end and return to Sign out. Four actual Launching admission captures retain the centered confirmation capsule and native Sign out. The capsule intentionally overlays disabled content.",
+  "comparisonToPreviousEvidence": {
+    "contact-in-use.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        958,
+        82
+      ]
+    },
+    "code.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "login.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        311,
+        956
+      ]
+    },
+    "admission-say-hi.png": {
+      "changedPixelBounds": "new admission evidence"
+    },
+    "large-text.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "large-text-say-hi-scrolled.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "telegram-unavailable.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        150,
+        82
+      ]
+    },
+    "large-text-code-scrolled.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        953,
+        82
+      ]
+    },
+    "large-text-contact-in-use-scrolled.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        149,
+        82
+      ]
+    },
+    "large-text-say-hi-returned.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "large-text-code-returned.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        953,
+        82
+      ]
+    },
+    "large-text-contact-in-use-returned.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        149,
+        82
+      ]
+    },
+    "invalid-code.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        953,
+        82
+      ]
+    },
+    "approval.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "fresh-login.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        953,
+        82
+      ]
+    },
+    "large-text-admission-say-hi.png": {
+      "changedPixelBounds": "new admission evidence"
+    },
+    "admission-connected.png": {
+      "changedPixelBounds": "new admission evidence"
+    },
+    "large-text-telegram-conflict-scrolled.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        149,
+        82
+      ]
+    },
+    "large-text-telegram-conflict-returned.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        149,
+        82
+      ]
+    },
+    "phone.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "unavailable.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "waiting.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        958,
+        82
+      ]
+    },
+    "invalid-number.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        958,
+        82
+      ]
+    },
+    "large-text-admission-connected.png": {
+      "changedPixelBounds": "new admission evidence"
+    },
+    "say-hi.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "telegram-conflict.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        149,
+        82
+      ]
+    },
+    "rate-limited.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        958,
+        82
+      ]
+    },
+    "telegram-cancelled.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "large-text-scrolled.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    },
+    "large-text-returned.png": {
+      "changedPixelBounds": [
+        80,
+        54,
+        963,
+        82
+      ]
+    }
+  }
+}
