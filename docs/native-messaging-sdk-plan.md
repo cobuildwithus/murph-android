@@ -78,6 +78,10 @@ the SDK login is Activity-bound; completion and admission run in the application
 scope. Code autofocus keys on the OTP field being visible, so a re-check after
 Activity recreation never focuses an unattached field.
 
+A submitted SMS code or Telegram proof whose response is lost returns an Unknown
+outcome; the app then re-reads canonical readiness instead of reporting a dead
+end, so a link the backend committed still continues setup. Nothing is resent.
+
 Cancel during the suspended auth observation in requireCurrent now stops the
 next SDK launch or completion: auth is observed first, then revision and member
 are compared. The PR 51 routing correction keeps messaging setup mounted during

@@ -337,7 +337,8 @@ class MainActivity : ComponentActivity() {
                         onMessagingChangeNumber = graph.messaging::changeNumber,
                         onMessagingSend = { graph.applicationScope.launch { graph.messaging.sendCode() } },
                         onMessagingVerify = { graph.applicationScope.launch {
-                            if (graph.messaging.verifyCode()) graph.session.refreshMessagingSetup()
+                            // An unanswered submission may still have linked: let canonical readiness decide.
+                            if (graph.messaging.verifyCode() != ai.withmurph.companion.auth.MessagingOutcome.Failure) graph.session.refreshMessagingSetup()
                         } },
                         onMessagingCancelTelegram = {
                             graph.messaging.cancelTelegram()
@@ -346,10 +347,10 @@ class MainActivity : ComponentActivity() {
                         onMessagingTelegram = { graph.applicationScope.launch {
                             // Only the SDK login is Activity-bound; a submitted proof's
                             // completion and admission finish like the SMS path.
-                            val linked = graph.messaging.connectTelegram { clientId ->
+                            val outcome = graph.messaging.connectTelegram { clientId ->
                                 lifecycleScope.async { telegramLogin.login(clientId) }.await()
                             }
-                            if (linked) graph.session.refreshMessagingSetup()
+                            if (outcome != ai.withmurph.companion.auth.MessagingOutcome.Failure) graph.session.refreshMessagingSetup()
                         } },
                         onRefreshMessagingSetup = { graph.applicationScope.launch {
                             graph.session.refreshMessagingSetup()

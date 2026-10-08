@@ -26,6 +26,10 @@ class TelegramMessagingLink(val startId: String, val clientId: String) {
 
 enum class MessagingStage { Phone, Code, Connected }
 
+/** A link request's outcome. Unknown: the proof was submitted but no answer
+ *  arrived, so only canonical readiness can say whether it linked. */
+enum class MessagingOutcome { Success, Failure, Unknown }
+
 /** Telegram linking progress. Only approval in Telegram can be cancelled; once
  *  the proof is submitted, confirmation always finishes. */
 enum class TelegramProgress { None, Approving, Confirming }
@@ -53,6 +57,7 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
     private var owner: String? = null
     private var sentPhone: String? = null
     private var revision = 0L
+    private var submitted = false
 
     fun setPhone(value: String) { if (!state.value.busy) mutableState.value = state.value.copy(phone = value, error = null) }
     fun setCountry(value: CountryDialCode) { if (!state.value.busy) mutableState.value = state.value.copy(country = value, error = null) }
@@ -72,15 +77,16 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
             requireCurrent(current)
             sentPhone = target
             mutableState.value = state.value.copy(stage = MessagingStage.Code, code = "", displayPhone = target)
-        }
+        } == MessagingOutcome.Success
     }
 
-    suspend fun verifyCode(): Boolean {
-        val target = sentPhone ?: return false
-        if (!state.value.canVerify) return false
+    suspend fun verifyCode(): MessagingOutcome {
+        val target = sentPhone ?: return MessagingOutcome.Failure
+        if (!state.value.canVerify) return MessagingOutcome.Failure
         val code = state.value.code
         mutableState.value = state.value.copy(telegramError = false)
         return perform { credential, current ->
+            submitted = true
             api.verifyMessagingPhoneCode(target, code, credential)
             requireCurrent(current)
             sentPhone = null
@@ -88,8 +94,8 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         }
     }
 
-    suspend fun connectTelegram(login: suspend (String) -> String): Boolean {
-        if (state.value.busy) return false
+    suspend fun connectTelegram(login: suspend (String) -> String): MessagingOutcome {
+        if (state.value.busy) return MessagingOutcome.Failure
         val generation = revision
         mutableState.value = state.value.copy(telegram = TelegramProgress.Approving, telegramError = true)
         try {
@@ -99,6 +105,7 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
                 val idToken = login(start.clientId)
                 requireCurrent(current)
                 mutableState.value = state.value.copy(telegram = TelegramProgress.Confirming)
+                submitted = true
                 val linked = api.completeMessagingTelegram(start.startId, idToken, credential)
                 requireCurrent(current)
                 if (!linked) throw MessagingLinkException(MessagingLinkException.Reason.TelegramUnavailable)
@@ -126,9 +133,10 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         if (current != revision || member != owner) throw CancellationException()
     }
 
-    private suspend fun perform(action: suspend (String, Long) -> Unit): Boolean {
-        if (state.value.busy) return false
+    private suspend fun perform(action: suspend (String, Long) -> Unit): MessagingOutcome {
+        if (state.value.busy) return MessagingOutcome.Failure
         val current = revision
+        submitted = false
         mutableState.value = state.value.copy(busy = true, error = null)
         try {
             val member = (auth.currentState() as? AuthSessionState.SignedIn)?.memberKey
@@ -138,7 +146,7 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
             val credential = auth.identityTokenForMember(member)
             requireCurrent(current)
             action(credential, current)
-            return true
+            return MessagingOutcome.Success
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -146,7 +154,8 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
                 val reason = (error as? MessagingLinkException)?.reason ?: if (state.value.telegramError) MessagingLinkException.Reason.TelegramUnavailable else MessagingLinkException.Reason.Unavailable
                 mutableState.value = state.value.copy(error = reason.message)
             }
-            return false
+            // A transport failure after submission may hide a committed link.
+            return if (submitted && error !is MessagingLinkException) MessagingOutcome.Unknown else MessagingOutcome.Failure
         } finally {
             if (current == revision) mutableState.value = state.value.copy(busy = false)
         }
