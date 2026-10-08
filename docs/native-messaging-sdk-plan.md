@@ -74,3 +74,10 @@ The correction passes full local verification: Debug 610 tests and 600 tests
 in each remaining variant, plus lint, assembly, manifest/license checks and all
 13 review-tooling checks. Fresh exact-head visual proof and ReviewGPT remain
 required before merge.
+
+T4 captured all 15 messaging states plus the login baseline at source head
+5232dc0def91648ed755662e8ccefbb57f6ec45b. Both the GUI operator and parent
+inspected all 16 raw PNGs. Their recorded hashes match and only raw emulator
+image/color chunks are present. Waiting includes explicit Cancel. Fresh iOS
+captures and final evidence-head confirmation remain pending; no physical
+provider flow is claimed.
