@@ -335,7 +335,7 @@ private fun DestinationStage(
 }
 
 @Composable
-private fun CountryButton(
+internal fun CountryButton(
     country: CountryDialCode,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -420,7 +420,7 @@ private fun CodeStage(
 }
 
 @Composable
-private fun OtpInput(
+internal fun OtpInput(
     value: String,
     onValueChange: (String) -> Unit,
     focusRequester: FocusRequester,
@@ -432,7 +432,7 @@ private fun OtpInput(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
+            .height(64.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxSize().clearAndSetSemantics { },
@@ -455,7 +455,7 @@ private fun OtpInput(
                 ) {
                     Text(
                         text = value.getOrNull(index)?.toString().orEmpty(),
-                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
                         color = MurphColors.Slate,
                         textAlign = TextAlign.Center,
                     )
@@ -495,7 +495,7 @@ private fun OtpInput(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CountryPicker(
+internal fun CountryPicker(
     selection: CountryDialCode,
     onSelect: (CountryDialCode) -> Unit,
     onDismiss: () -> Unit,

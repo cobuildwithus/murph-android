@@ -138,3 +138,37 @@ The existing hosted E2E fixed Privy code cannot qualify first-party generated
 codes; a reviewed real-code journey, signed-device storage/renewal, genuine Web
 settings and installed-session checks are release gates. Local synthetic proof
 does not claim those gates passed.
+
+## Native messaging setup
+
+MessagingSetupCoordinator keeps phone/code and link presentation in memory.
+The Telegram operation captures the exact member bearer, creates a five-minute
+backend pending start, invokes the official unmodified SDK, then completes with
+startId and idToken using the same credential. Member/revision checks fence every
+boundary. Activity-owned login cancellation cannot link after teardown. No token
+is logged or stored; closed errors omit SDK error strings.
+
+TelegramLoginService accepts only the configured HTTPS App Link host and exact
+/tglogin path. The SDK owns PKCE and provider login fallback. There is no custom
+return scheme, Murph page, bot-link token or Telegram code screen. Backend
+verification checks signature/issuer/audience/expiry, tight iat and atomic global
+single use. Accepted welcome delivery continues; telegramAwaitingInbound restores
+the say-hi step after process death and refreshes when returning from the bot.
+AppSession alone clears readiness and gates new Health work.
+
+The default layout matches iOS: phone controls, Send code, or divider, outline
+Connect Telegram, and quiet top-bar Sign out. SMS reuses login code controls.
+Telegram cancellation and errors appear under its button. Browser settings is
+only an inline conflict/protected-action fallback.
+
+TelegramLoginRedirect selects BotFather's HTTPS redirect from the installed
+package's current signing certificate, not its build variant or signing history.
+Play and upload certificates map to their distinct registered hosts. Both hosts
+have verified App Link intent filters. An unknown certificate or package,
+missing signer, multiple signers or PackageManager failure disables login with
+an inline unavailable error. The active callback must match the selected host.
+
+Telegram authentication remains pending across Activity pause/resume. Only the
+SDK callback, explicit Cancel, or bounded timeout completes it. Explicit Cancel
+invalidates the coordinator revision before cancelling SDK work, so an in-flight
+start request or late proof cannot complete a cancelled link.

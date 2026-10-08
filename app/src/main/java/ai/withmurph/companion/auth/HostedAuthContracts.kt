@@ -38,6 +38,10 @@ interface HostedAuthCredentialStoring {
 }
 
 interface HostedAuthServing {
+    suspend fun sendMessagingPhoneCode(phone: String, credential: String): Unit = throw HostedAuthException.InvalidResponse
+    suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String): Unit = throw HostedAuthException.InvalidResponse
+    suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink = throw HostedAuthException.InvalidResponse
+    suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): Boolean = throw HostedAuthException.InvalidResponse
     suspend fun sendCode(method: LoginMethod, value: String)
     suspend fun verifyCode(method: LoginMethod, value: String, code: String): HostedAuthSession
     suspend fun exchange(legacyCredential: String): HostedAuthSession

@@ -53,6 +53,11 @@
       "coordinatePattern": "^org\\.slf4j:slf4j-api:",
       "spdx": "MIT",
       "evidence": "https://www.slf4j.org/license.html"
+    },
+    {
+      "coordinatePattern": "^org\\.telegram:login-sdk:1\\.0\\.0$",
+      "spdx": "MIT",
+      "evidence": "https://github.com/TelegramMessenger/telegram-login-android/blob/f9d5ec36ba2433bc5f103b5cd8289f43a05f9336/LICENSE"
     }
   ],
   "commercialExceptions": [

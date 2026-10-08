@@ -426,3 +426,26 @@ updates, signed-device renewal and genuine browser settings remain explicit
 release checks. The old hosted E2E fixed Privy code does not qualify these paths.
 CI uses public placeholder client identifiers for compilation; it does not
 qualify the release identifiers or provider behavior.
+
+## Telegram native login dependency
+
+The official unmodified dependency is `org.telegram:login-sdk:1.0.0` from
+TelegramMessenger's GitHub Packages repository. Local Gradle reads private
+`gpr.user` / `gpr.key` properties or `TELEGRAM_PACKAGES_USER` / `GITHUB_TOKEN`
+environment variables. Check `gh auth status` for `read:packages`, then capture
+`gh auth token` only into the Gradle process environment. Never put tokens in
+repository files, command arguments or logs. CI uses `github.actor` and its
+built-in `GITHUB_TOKEN` with `contents: read` and `packages: read`; no custom
+package-token secret is required. Cross-organization registry access must pass
+before this dependency can be qualified.
+
+BotFather issues a redirect per signing certificate for `ai.withmurph.app`.
+The installed package's current SHA-256 signing certificate selects the redirect
+at runtime: Play app signing uses `app397543190-login.tg.dev`; upload signing
+uses `app1452659770-login.tg.dev`. Both use `/tglogin` and both hosts have verified
+App Link intent filters. Unknown, absent or multiple signers, and unregistered
+package names fail closed with Telegram unavailable. Signing history cannot
+select a redirect for the current package. Both public association files were
+checked against the expected package and their respective certificates.
+Installed-device App Link resolution remains a release qualification step.
+No store upload or canary pin change is part of this work.

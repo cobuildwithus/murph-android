@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -28,10 +29,12 @@ import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
 import ai.withmurph.companion.ui.theme.MurphTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var graph: AppGraph
+    private val telegramLogin by lazy { ai.withmurph.companion.auth.TelegramLoginService(this, lifecycleScope) }
     private var healthSyncNotificationsAllowed by mutableStateOf(false)
     private var healthSyncNotificationRecoveryNeeded by mutableStateOf(false)
     private var reminderSetupDismissed by mutableStateOf(false)
@@ -50,6 +53,7 @@ class MainActivity : ComponentActivity() {
         reminderSetupDismissed = getSharedPreferences("murph_ui_state", MODE_PRIVATE)
             .getBoolean("sync_reminder_setup_dismissed", false)
         graph = (application as MurphApplication).graph
+        handleMessagingReturn(intent)
         graph.healthSyncReminder.didEnterForeground()
         healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
         handleHealthSyncReminderIntent(
@@ -104,6 +108,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
+            val messagingState by graph.messaging.state.collectAsStateWithLifecycle()
+            androidx.compose.runtime.LaunchedEffect(appState.phase, appState.messagingSetupRequired) {
+                if (appState.phase == ai.withmurph.companion.app.AppPhase.NeedsLogin ||
+                    appState.phase == ai.withmurph.companion.app.AppPhase.Ready && !appState.messagingSetupRequired) graph.messaging.reset()
+            }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
                 lifecycle.withResumed {
@@ -158,6 +167,7 @@ class MainActivity : ComponentActivity() {
                         !healthSyncNotificationRecoveryNeeded && !appState.healthSyncReminderEnabled &&
                         appState.authVerifiedOnline && !appState.healthStatusIsStale,
                     loginState = loginState,
+                    messagingState = messagingState,
                     healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,
                     healthSyncNotificationRecoveryNeeded =
                         healthSyncNotificationRecoveryNeeded,
@@ -321,9 +331,30 @@ class MainActivity : ComponentActivity() {
                                 graph.session.noteMessagingSettingsOpened()
                             }
                         },
-                        onRefreshMessagingSetup = {
-                            graph.applicationScope.launch { graph.session.refreshMessagingSetup() }
+                        onMessagingPhone = graph.messaging::setPhone,
+                        onMessagingCountry = graph.messaging::setCountry,
+                        onMessagingCode = graph.messaging::setCode,
+                        onMessagingChangeNumber = graph.messaging::changeNumber,
+                        onMessagingSend = { graph.applicationScope.launch { graph.messaging.sendCode() } },
+                        onMessagingVerify = { graph.applicationScope.launch {
+                            // An unanswered submission may still have linked: let canonical readiness decide.
+                            if (graph.messaging.verifyCode() != ai.withmurph.companion.auth.MessagingOutcome.Failure) graph.session.refreshMessagingSetup()
+                        } },
+                        onMessagingCancelTelegram = {
+                            graph.messaging.cancelTelegram()
+                            telegramLogin.cancel()
                         },
+                        onMessagingTelegram = { graph.applicationScope.launch {
+                            // Only the SDK login is Activity-bound; a submitted proof's
+                            // completion and admission finish like the SMS path.
+                            val outcome = graph.messaging.connectTelegram { clientId ->
+                                lifecycleScope.async { telegramLogin.login(clientId) }.await()
+                            }
+                            if (outcome != ai.withmurph.companion.auth.MessagingOutcome.Failure) graph.session.refreshMessagingSetup()
+                        } },
+                        onRefreshMessagingSetup = { graph.applicationScope.launch {
+                            graph.session.refreshMessagingSetup()
+                        } },
                         onOpenPrivacy = { openUri(AppLinks.Privacy) },
                         onOpenTerms = { openUri(AppLinks.Terms) },
                         onOpenHealthNotice = { openUri(AppLinks.HealthNotice) },
@@ -338,6 +369,8 @@ class MainActivity : ComponentActivity() {
                             graph.applicationScope.launch { graph.session.retry() }
                         },
                         onSignOut = {
+                            telegramLogin.cancel()
+                            graph.messaging.reset()
                             graph.applicationScope.launch {
                                 graph.session.signOut()
                                 graph.login.reset()
@@ -362,11 +395,18 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleMessagingReturn(intent)
         graph.healthSyncReminder.didEnterForeground()
         handleHealthSyncReminderIntent(intent)
         if (isHealthPermissionRationaleIntent(intent)) {
             openUri(AppLinks.Privacy)
         }
+    }
+
+    private fun handleMessagingReturn(intent: Intent) {
+        val returnUrl = intent.data
+        intent.data = null
+        if (returnUrl != null) telegramLogin.handle(returnUrl)
     }
 
     override fun onResume() {
@@ -377,7 +417,9 @@ class MainActivity : ComponentActivity() {
             if (healthSyncNotificationsAllowed) {
                 healthSyncNotificationRecoveryNeeded = false
             }
-            graph.applicationScope.launch { graph.session.didBecomeActive() }
+            graph.applicationScope.launch {
+                graph.session.didBecomeActive()
+            }
         }
     }
 

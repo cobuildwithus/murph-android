@@ -4847,7 +4847,7 @@ class AppSession(
 
     /**
      * Re-enters canonical admission after the member links a phone or Telegram
-     * account in the browser. Returns whether messaging setup is now complete.
+     * account. Returns whether messaging setup is now complete.
      */
     suspend fun refreshMessagingSetup(): Boolean {
         val current = _state.value

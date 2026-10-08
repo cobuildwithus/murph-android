@@ -4,15 +4,18 @@ import ai.withmurph.companion.healthSyncReminderSettingsDeliveryToConsume
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ActivityScenario
@@ -20,7 +23,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,16 +34,125 @@ class ScreenshotScenarioSmokeTest {
     val compose = createEmptyComposeRule()
 
     @Test
-    fun launchingMessagingRefreshKeepsTheCapsuleAndBlocksActions() {
+    fun launchingMessagingAdmissionKeepsProgressAndSignOutReachable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val intent = Intent(context, ScreenshotActivity::class.java)
-            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
-        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
-            compose.onNodeWithText("Choose how to message Murph").assertIsDisplayed()
-            compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
-            compose.onNodeWithText("Sign out").performScrollTo().performClick()
-            scenario.onActivity { assertEquals(0, it.signOutRequests) }
+        for (fontScale in listOf(1.0f, 2.0f)) for (state in listOf("connected", "phone")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
+                .putExtra("messagingState", state)
+                .putExtra("messagingFontScale", fontScale)
+            ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+                compose.onNodeWithText(if (state == "phone") "Choose how to message Murph" else "Account connected").assertIsDisplayed()
+                // Progress renders inline in the content flow; a re-check from the
+                // phone step replaces its controls instead of covering them.
+                compose.onNodeWithText("Confirming your account…").performScrollTo().assertIsDisplayed()
+                if (state == "phone") compose.onAllNodesWithText("Send code").assertCountEquals(0)
+                // Native linking retains its existing sign-out escape during admission.
+                compose.onNodeWithText("Sign out").performScrollTo().performClick()
+                scenario.onActivity { assertEquals(1, it.signOutRequests) }
+            }
         }
+    }
+
+    @Test
+    fun submittedTelegramProofHidesCancel() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (state in listOf("waiting", "telegram-confirming")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
+                .putExtra("messagingState", state)
+            ActivityScenario.launch<ScreenshotActivity>(intent).use {
+                compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                // Only approval in Telegram can be cancelled; a submitted proof
+                // always finishes confirming.
+                compose.onAllNodesWithContentDescription("Cancel Telegram login")
+                    .assertCountEquals(if (state == "waiting") 1 else 0)
+            }
+        }
+    }
+
+    @Test
+    fun recheckFromCodeStepNeverFocusesHiddenCodeEntry() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (scenarioName in listOf("messagingSetupConfirming", "messagingSetup")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, scenarioName)
+                .putExtra("messagingState", "code")
+                .putExtra("messagingAutofocus", true)
+            // A recreated Activity during a code-step re-check must not request
+            // focus for the OTP field that progress has replaced.
+            ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+                compose.waitForIdle()
+                if (scenarioName == "messagingSetupConfirming") {
+                    compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                    compose.onAllNodesWithContentDescription("6-digit verification code").assertCountEquals(0)
+                    scenario.recreate()
+                    compose.waitForIdle()
+                    compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                } else {
+                    compose.onNodeWithContentDescription("6-digit verification code").assertIsDisplayed()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun messagingControlsRemainReachableAtMaximumFontScale() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (state in listOf("phone", "contact-in-use", "telegram-conflict", "code", "waiting")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
+                .putExtra("messagingState", state)
+                .putExtra("messagingFontScale", 2.0f)
+            ActivityScenario.launch<ScreenshotActivity>(intent).use {
+                compose.waitForIdle()
+                compose.onNodeWithText("Sign out").assertFullyContained().assertHasClickAction()
+                val buttons = when (state) {
+                    "code" -> {
+                        compose.onNodeWithText("Resend").performScrollTo().assertFullyContained().assertHasClickAction()
+                        compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertFullyContained()
+                        listOf("Use a different number")
+                    }
+                    "waiting" -> emptyList()
+                    else -> {
+                        compose.onNodeWithContentDescription("Country or region", substring = true)
+                            .performScrollTo().assertFullyContained().assertHasClickAction()
+                        compose.onNodeWithContentDescription("Phone number").performScrollTo().assertFullyContained()
+                        buildList {
+                            if (state == "contact-in-use") add("Manage in account settings")
+                            add("Send code")
+                            add("Connect Telegram")
+                            if (state == "telegram-conflict") add("Manage in account settings")
+                        }
+                    }
+                }
+                for (label in buttons) {
+                    compose.onNodeWithText(label).performScrollTo().assertFullyContained().assertHasClickAction()
+                }
+                if (state == "waiting") {
+                    compose.onNodeWithContentDescription("Cancel Telegram login").assertFullyContained().assertHasClickAction()
+                }
+                // Returning to the top must also leave the exit action reachable.
+                compose.onNodeWithText("Sign out").performScrollTo().assertFullyContained().assertHasClickAction()
+            }
+        }
+    }
+
+    private fun SemanticsNodeInteraction.assertFullyContained(): SemanticsNodeInteraction {
+        assertIsDisplayed()
+        val node = fetchSemanticsNode()
+        val bounds = node.boundsInRoot
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        // boundsInRoot clips to ancestors: comparing to the measured size catches
+        // a partly visible button that assertIsDisplayed still accepts.
+        assertEquals("Control is vertically clipped", node.size.height.toFloat(), bounds.height, 1f)
+        assertEquals("Control is horizontally clipped", node.size.width.toFloat(), bounds.width, 1f)
+        assertTrue(
+            "Control extends outside viewport",
+            bounds.left >= root.left && bounds.top >= root.top &&
+                bounds.right <= root.right && bounds.bottom <= root.bottom,
+        )
+        return this
     }
 
     @Test

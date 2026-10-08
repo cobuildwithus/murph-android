@@ -9734,6 +9734,7 @@ class AppSessionTest {
         val launchConsentAcceptances =
             mutableListOf<Pair<String, LaunchConsentAcceptanceRequest>>()
         var initialOnboarding = completedInitialOnboarding()
+        var initialOnboardingFetchHandler: (suspend () -> Unit)? = null
         var initialOnboardingFetchError: Throwable? = null
         val initialOnboardingFetches = mutableListOf<String>()
         var initialOnboardingCompletionError: Throwable? = null
@@ -9832,6 +9833,7 @@ class AppSessionTest {
 
         override suspend fun fetchInitialOnboarding(memberKey: String): InitialOnboarding {
             initialOnboardingFetches += memberKey
+            initialOnboardingFetchHandler?.invoke()
             initialOnboardingFetchError?.let { throw it }
             return initialOnboarding
         }

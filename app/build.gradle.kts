@@ -301,6 +301,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("org.telegram:login-sdk:1.0.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

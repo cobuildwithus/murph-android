@@ -94,6 +94,10 @@ class ScreenshotActivity : ComponentActivity() {
         }
 
         setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, intent.getFloatExtra("messagingFontScale", density.fontScale)),
+            ) {
             MurphTheme {
                 val readyState = scenario.appState(now).copy(
                     healthSyncReminderTargetEnabled = healthSyncReminderTargetEnabled,
@@ -114,6 +118,8 @@ class ScreenshotActivity : ComponentActivity() {
                         showReminderSetup = scenario == ScreenshotScenario.Notifications && !reminderSetupDismissed,
                         showLoginFormInitially = scenario != ScreenshotScenario.Welcome,
                         loginState = scenario.loginState(),
+                        messagingState = messagingFixture(intent.getStringExtra("messagingState")),
+                        autofocusMessagingCode = intent.getBooleanExtra("messagingAutofocus", false),
                         healthSyncNotificationsAllowed =
                             scenario != ScreenshotScenario.ReminderBlocked &&
                                 scenario != ScreenshotScenario.ReminderDenied,
@@ -137,6 +143,7 @@ class ScreenshotActivity : ComponentActivity() {
                         initialOnboardingContactAvatarPainters = screenshotAvatarPainters(),
                     )
                 }
+            }
             }
         }
     }
@@ -778,3 +785,28 @@ private val NoOpActions = MurphActions(
     onRetry = {},
     onSignOut = {},
 )
+
+private fun messagingFixture(name: String?): ai.withmurph.companion.auth.MessagingSetupState {
+    val phone = ai.withmurph.companion.auth.MessagingSetupState()
+    val code = phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Code, code = "123456", displayPhone = "+12025550123")
+    val error = when (name) {
+        "invalid-number" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.InvalidNumber
+        "contact-in-use", "telegram-conflict" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.ContactInUse
+        "rate-limited" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.RateLimited
+        "invalid-code" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.InvalidCode
+        "fresh-login" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.FreshLogin
+        "approval" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.Approval
+        "telegram-cancelled" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.TelegramCancelled
+        "telegram-unavailable" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.TelegramUnavailable
+        "unavailable" -> ai.withmurph.companion.auth.MessagingLinkException.Reason.Unavailable
+        else -> null
+    }
+    if (error != null) return (if (name == "invalid-code") code else phone).copy(error = error.message, telegramError = name?.startsWith("telegram-") == true)
+    return when (name) {
+        "code" -> code
+        "connected" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
+        "waiting" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Approving, busy = true)
+        "telegram-confirming" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Confirming, busy = true)
+        else -> phone
+    }
+}
