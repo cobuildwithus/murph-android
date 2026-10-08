@@ -1,0 +1,35 @@
+{
+  "capturedBy": "claude-code (adb screencap, no GUI)",
+  "task": "T11",
+  "gitHeadStart": "1223c987ccb36b07f1f5ec572104cffd2c69a284",
+  "gitHeadEnd": "1223c987ccb36b07f1f5ec572104cffd2c69a284",
+  "startUtc": "2026-10-08T17:57:40Z",
+  "endUtc": "2026-10-08T17:58:15Z",
+  "device": {
+    "serial": "emulator-5584",
+    "avd": "murph_native_sdk_evidence",
+    "model": "Pixel 7 API 36",
+    "systemFontScale": 1.0,
+    "density": 420,
+    "size": "1080x2400"
+  },
+  "package": "ai.withmurph.app.synthetic",
+  "apkSha256": "1d0a15f16e8dddb9a176a59724b03e5b53c92190982a1ef644226a2d9b87d561",
+  "settleSeconds": 8,
+  "images": {
+    "login.png": "89820756f3744adca5825a29038dec1d680a050fa4aec833d62bb43d9fc3dcdc",
+    "messaging-setup-confirming.png": "89043275a605b7d5603fc8a7d69568bf9bd874fcbcdd6f5a4c30fdd8266585a3",
+    "messaging-setup-pending.png": "1db730fa638eeada23c0df626ce945341846fbcff0359e612ce37ec72939e4ce",
+    "messaging-setup.png": "68ba8df516c979513a8d4069b3a5a9f041a8305682163106b896e6f97462a167"
+  },
+  "inspection": {
+    "result": "pass",
+    "notes": "All four states render with complete labels and borders. Versus committed messaging-setup evidence the layout is identical; whole content is offset ~2px vertically and the committed status bar carried extra notification icons, so pixels differ without a layout change. login.png has no committed counterpart in this folder."
+  },
+  "parentInspection": {
+    "reviewer": "codex-cli",
+    "result": "pass",
+    "imagesInspected": 4,
+    "notes": "Every raw image inspected. Complete control labels and borders; maximum-text scroll-end controls have bottom clearance and returning exposes Sign out. Raw screenshot bytes preserved."
+  }
+}
