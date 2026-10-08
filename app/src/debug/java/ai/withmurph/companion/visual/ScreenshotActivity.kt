@@ -119,7 +119,7 @@ class ScreenshotActivity : ComponentActivity() {
                         showLoginFormInitially = scenario != ScreenshotScenario.Welcome,
                         loginState = scenario.loginState(),
                         messagingState = messagingFixture(intent.getStringExtra("messagingState")),
-                        autofocusMessagingCode = false,
+                        autofocusMessagingCode = intent.getBooleanExtra("messagingAutofocus", false),
                         healthSyncNotificationsAllowed =
                             scenario != ScreenshotScenario.ReminderBlocked &&
                                 scenario != ScreenshotScenario.ReminderDenied,
@@ -805,7 +805,7 @@ private fun messagingFixture(name: String?): ai.withmurph.companion.auth.Messagi
     return when (name) {
         "code" -> code
         "connected" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
-        "waiting" -> phone.copy(telegramLogin = true, busy = true)
+        "waiting" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Approving, busy = true)
         else -> phone
     }
 }

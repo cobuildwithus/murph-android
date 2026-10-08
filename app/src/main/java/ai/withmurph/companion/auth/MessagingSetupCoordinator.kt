@@ -25,13 +25,18 @@ class TelegramMessagingLink(val startId: String, val clientId: String) {
 }
 
 enum class MessagingStage { Phone, Code, Connected }
+
+/** Telegram linking progress. Only approval in Telegram can be cancelled; once
+ *  the proof is submitted, confirmation always finishes. */
+enum class TelegramProgress { None, Approving, Confirming }
+
 data class MessagingSetupState(
     val stage: MessagingStage = MessagingStage.Phone,
     val phone: String = "",
     val country: CountryDialCode = CountryDialCode.Default,
     val code: String = "",
     val busy: Boolean = false,
-    val telegramLogin: Boolean = false,
+    val telegram: TelegramProgress = TelegramProgress.None,
     val telegramError: Boolean = false,
     val displayPhone: String = "",
     val error: String? = null,
@@ -86,13 +91,14 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
     suspend fun connectTelegram(login: suspend (String) -> String): Boolean {
         if (state.value.busy) return false
         val generation = revision
-        mutableState.value = state.value.copy(telegramLogin = true, telegramError = true)
+        mutableState.value = state.value.copy(telegram = TelegramProgress.Approving, telegramError = true)
         try {
             return perform { credential, current ->
                 val start = api.startMessagingTelegram(credential)
                 requireCurrent(current)
                 val idToken = login(start.clientId)
                 requireCurrent(current)
+                mutableState.value = state.value.copy(telegram = TelegramProgress.Confirming)
                 val linked = api.completeMessagingTelegram(start.startId, idToken, credential)
                 requireCurrent(current)
                 if (!linked) throw MessagingLinkException(MessagingLinkException.Reason.TelegramUnavailable)
@@ -102,14 +108,14 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
                 mutableState.value = state.value.copy(stage = MessagingStage.Connected, phone = "", code = "")
             }
         } finally {
-            if (generation == revision) mutableState.value = state.value.copy(telegramLogin = false)
+            if (generation == revision) mutableState.value = state.value.copy(telegram = TelegramProgress.None)
         }
     }
 
     fun cancelTelegram() {
-        if (!state.value.telegramLogin || !state.value.busy) return
+        if (state.value.telegram != TelegramProgress.Approving || !state.value.busy) return
         revision++
-        mutableState.value = state.value.copy(busy = false, telegramLogin = false,
+        mutableState.value = state.value.copy(busy = false, telegram = TelegramProgress.None,
             error = MessagingLinkException.Reason.TelegramCancelled.message)
     }
 

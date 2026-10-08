@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -49,6 +50,31 @@ class ScreenshotScenarioSmokeTest {
                 // Native linking retains its existing sign-out escape during admission.
                 compose.onNodeWithText("Sign out").performScrollTo().performClick()
                 scenario.onActivity { assertEquals(1, it.signOutRequests) }
+            }
+        }
+    }
+
+    @Test
+    fun recheckFromCodeStepNeverFocusesHiddenCodeEntry() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (scenarioName in listOf("messagingSetupConfirming", "messagingSetup")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, scenarioName)
+                .putExtra("messagingState", "code")
+                .putExtra("messagingAutofocus", true)
+            // A recreated Activity during a code-step re-check must not request
+            // focus for the OTP field that progress has replaced.
+            ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+                compose.waitForIdle()
+                if (scenarioName == "messagingSetupConfirming") {
+                    compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                    compose.onAllNodesWithContentDescription("6-digit verification code").assertCountEquals(0)
+                    scenario.recreate()
+                    compose.waitForIdle()
+                    compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                } else {
+                    compose.onNodeWithContentDescription("6-digit verification code").assertIsDisplayed()
+                }
             }
         }
     }

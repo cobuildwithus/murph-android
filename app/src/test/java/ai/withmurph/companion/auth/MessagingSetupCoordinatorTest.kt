@@ -96,6 +96,23 @@ class MessagingSetupCoordinatorTest {
         }
     }
 
+    @Test fun submittedTelegramProofCannotBeCancelledIntoAFalseFailure() = runTest {
+        val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
+        api.waitComplete = CompletableDeferred()
+        val pending = async { model.connectTelegram { "synthetic-id-token" } }
+        runCurrent()
+        assertEquals(listOf("synthetic-id-token"), api.completedTokens)
+        assertEquals(TelegramProgress.Confirming, model.state.value.telegram)
+        model.cancelTelegram()
+        assertTrue(model.state.value.busy)
+        assertNull(model.state.value.error)
+        api.waitComplete?.complete(Unit)
+        assertTrue(pending.await())
+        assertEquals(MessagingStage.Connected, model.state.value.stage)
+        assertEquals(TelegramProgress.None, model.state.value.telegram)
+        assertNull(model.state.value.error)
+    }
+
     @Test fun resetAndMemberChangeRejectLateSdkProof() = runTest {
         for (reset in listOf(true, false)) {
             val api = Api(); val auth = Auth(); val model = MessagingSetupCoordinator(auth, api)
@@ -144,11 +161,12 @@ class MessagingSetupCoordinatorTest {
         var failure: Exception? = null; var wait: CompletableDeferred<Unit>? = null
         var waitStart: CompletableDeferred<Unit>? = null
         var afterStart: (() -> Unit)? = null
+        var waitComplete: CompletableDeferred<Unit>? = null
         override suspend fun sendMessagingPhoneCode(phone: String, credential: String) { sends++; wait?.await(); failure?.let { throw it } }
         override suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String) { failure?.let { throw it }; verifiedPhone = phone }
         override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; waitStart?.await(); afterStart?.invoke(); return TelegramMessagingLink("a".repeat(43), "123456789") }
         override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): Boolean {
-            completedStarts.add(startId); completedTokens.add(idToken); failure?.let { throw it }; return true
+            completedStarts.add(startId); completedTokens.add(idToken); waitComplete?.await(); failure?.let { throw it }; return true
         }
         override suspend fun sendCode(method: LoginMethod, value: String) {}
         override suspend fun verifyCode(method: LoginMethod, value: String, code: String): HostedAuthSession = error("unused")

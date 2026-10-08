@@ -2,6 +2,7 @@ package ai.withmurph.companion.ui.onboarding
 
 import ai.withmurph.companion.auth.MessagingSetupState
 import ai.withmurph.companion.auth.MessagingStage
+import ai.withmurph.companion.auth.TelegramProgress
 import ai.withmurph.companion.auth.CountryDialCode
 import ai.withmurph.companion.ui.login.CountryButton
 import ai.withmurph.companion.ui.login.CountryPicker
@@ -85,12 +86,16 @@ fun MessagingSetupScreen(
     // so no control is covered at any text size.
     val refreshing = state.isMessagingSetupRefreshing
     val busy = refreshing || link.busy
-    val telegramBusy = link.telegramLogin && link.busy
+    val telegramBusy = link.telegram != TelegramProgress.None && link.busy
+    val confirmingInPlaceOfControls = telegramBusy ||
+        refreshing && (link.stage == MessagingStage.Phone || link.stage == MessagingStage.Code)
+    val codeEntryVisible = link.stage == MessagingStage.Code && !confirmingInPlaceOfControls
     var countryPicker by remember { mutableStateOf(false) }
     val codeFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(link.stage) {
-        if (link.stage == MessagingStage.Code && autofocusCode) codeFocus.requestFocus()
+    // Focus only an attached field: a re-check replaces code entry with progress.
+    LaunchedEffect(link.stage, codeEntryVisible) {
+        if (codeEntryVisible && autofocusCode) codeFocus.requestFocus()
         else focusManager.clearFocus()
     }
     if (countryPicker) CountryPicker(link.country, { onCountry(it); countryPicker = false }, { countryPicker = false })
@@ -131,8 +136,6 @@ fun MessagingSetupScreen(
                     color = MurphColors.SlateMuted,
                 )
             }
-            val confirmingInPlaceOfControls = telegramBusy ||
-                refreshing && (link.stage == MessagingStage.Phone || link.stage == MessagingStage.Code)
             if (confirmingInPlaceOfControls) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -140,7 +143,7 @@ fun MessagingSetupScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     MessagingStatus("Confirming your account…")
-                    if (telegramBusy) MurphLinkButton("Cancel", onCancelTelegram,
+                    if (link.telegram == TelegramProgress.Approving) MurphLinkButton("Cancel", onCancelTelegram,
                         modifier = Modifier.semantics { contentDescription = "Cancel Telegram login" })
                 }
             } else when (link.stage) {

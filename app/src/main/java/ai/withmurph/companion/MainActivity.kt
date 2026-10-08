@@ -29,6 +29,7 @@ import ai.withmurph.companion.ui.MurphActions
 import ai.withmurph.companion.ui.MurphApp
 import ai.withmurph.companion.ui.theme.MurphTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -342,11 +343,13 @@ class MainActivity : ComponentActivity() {
                             graph.messaging.cancelTelegram()
                             telegramLogin.cancel()
                         },
-                        onMessagingTelegram = { lifecycleScope.launch {
-                            // The SDK login is Activity-bound; admission outlives it like the SMS path.
-                            if (graph.messaging.connectTelegram(telegramLogin::login)) {
-                                graph.applicationScope.launch { graph.session.refreshMessagingSetup() }
+                        onMessagingTelegram = { graph.applicationScope.launch {
+                            // Only the SDK login is Activity-bound; a submitted proof's
+                            // completion and admission finish like the SMS path.
+                            val linked = graph.messaging.connectTelegram { clientId ->
+                                lifecycleScope.async { telegramLogin.login(clientId) }.await()
                             }
+                            if (linked) graph.session.refreshMessagingSetup()
                         } },
                         onRefreshMessagingSetup = { graph.applicationScope.launch {
                             graph.session.refreshMessagingSetup()
