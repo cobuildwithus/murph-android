@@ -45,6 +45,49 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
+    fun messagingControlsRemainReachableAtMaximumFontScale() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (state in listOf("phone", "contact-in-use", "telegram-conflict", "code", "say-hi", "waiting")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
+                .putExtra("messagingState", state)
+                .putExtra("messagingFontScale", 2.0f)
+            ActivityScenario.launch<ScreenshotActivity>(intent).use {
+                compose.waitForIdle()
+                compose.onNodeWithText("Sign out").assertIsDisplayed().assertHasClickAction()
+                val buttons = when (state) {
+                    "code" -> {
+                        compose.onNodeWithText("Resend").performScrollTo().assertIsDisplayed().assertHasClickAction()
+                        compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertIsDisplayed()
+                        listOf("Use a different number")
+                    }
+                    "say-hi" -> listOf("Open Telegram")
+                    "waiting" -> emptyList()
+                    else -> {
+                        compose.onNodeWithContentDescription("Country or region", substring = true)
+                            .performScrollTo().assertIsDisplayed().assertHasClickAction()
+                        compose.onNodeWithContentDescription("Phone number").performScrollTo().assertIsDisplayed()
+                        buildList {
+                            if (state == "contact-in-use") add("Manage in account settings")
+                            add("Send code")
+                            add("Connect Telegram")
+                            if (state == "telegram-conflict") add("Manage in account settings")
+                        }
+                    }
+                }
+                for (label in buttons) {
+                    compose.onNodeWithText(label).performScrollTo().assertIsDisplayed().assertHasClickAction()
+                }
+                if (state == "waiting") {
+                    compose.onNodeWithContentDescription("Cancel Telegram login").assertIsDisplayed().assertHasClickAction()
+                }
+                // Returning to the top must also leave the exit action reachable.
+                compose.onNodeWithText("Sign out").performScrollTo().assertIsDisplayed().assertHasClickAction()
+            }
+        }
+    }
+
+    @Test
     fun optionalReminderRequiresExplicitChoiceAndCanBeSkipped() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val intent = Intent(context, ScreenshotActivity::class.java)

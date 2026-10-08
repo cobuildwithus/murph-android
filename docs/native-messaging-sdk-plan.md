@@ -81,3 +81,10 @@ inspected all 16 raw PNGs. Their recorded hashes match and only raw emulator
 image/color chunks are present. Waiting includes explicit Cancel. Fresh iOS
 captures and final evidence-head confirmation remain pending; no physical
 provider flow is claimed.
+
+The maximum-font-scale instrumented UI check passes at 2.0 across phone, phone
+conflict, Telegram conflict, code, say-hi and waiting. Each relevant control is
+scrolled into view; Sign out remains reachable after returning to the top.
+The matching iOS Accessibility XXXL check also passes. These test-only changes
+do not alter shipped UI or invalidate the captured layout; final-head evidence
+confirmation and product ReviewGPT remain required.
