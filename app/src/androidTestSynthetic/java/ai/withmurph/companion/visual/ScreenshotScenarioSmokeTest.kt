@@ -4,6 +4,7 @@ import ai.withmurph.companion.healthSyncReminderSettingsDeliveryToConsume
 import ai.withmurph.companion.reminders.HealthSyncReminderController
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ActivityScenario
@@ -54,19 +56,19 @@ class ScreenshotScenarioSmokeTest {
                 .putExtra("messagingFontScale", 2.0f)
             ActivityScenario.launch<ScreenshotActivity>(intent).use {
                 compose.waitForIdle()
-                compose.onNodeWithText("Sign out").assertIsDisplayed().assertHasClickAction()
+                compose.onNodeWithText("Sign out").assertFullyContained().assertHasClickAction()
                 val buttons = when (state) {
                     "code" -> {
-                        compose.onNodeWithText("Resend").performScrollTo().assertIsDisplayed().assertHasClickAction()
-                        compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertIsDisplayed()
+                        compose.onNodeWithText("Resend").performScrollTo().assertFullyContained().assertHasClickAction()
+                        compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertFullyContained()
                         listOf("Use a different number")
                     }
                     "say-hi" -> listOf("Open Telegram")
                     "waiting" -> emptyList()
                     else -> {
                         compose.onNodeWithContentDescription("Country or region", substring = true)
-                            .performScrollTo().assertIsDisplayed().assertHasClickAction()
-                        compose.onNodeWithContentDescription("Phone number").performScrollTo().assertIsDisplayed()
+                            .performScrollTo().assertFullyContained().assertHasClickAction()
+                        compose.onNodeWithContentDescription("Phone number").performScrollTo().assertFullyContained()
                         buildList {
                             if (state == "contact-in-use") add("Manage in account settings")
                             add("Send code")
@@ -76,15 +78,32 @@ class ScreenshotScenarioSmokeTest {
                     }
                 }
                 for (label in buttons) {
-                    compose.onNodeWithText(label).performScrollTo().assertIsDisplayed().assertHasClickAction()
+                    compose.onNodeWithText(label).performScrollTo().assertFullyContained().assertHasClickAction()
                 }
                 if (state == "waiting") {
-                    compose.onNodeWithContentDescription("Cancel Telegram login").assertIsDisplayed().assertHasClickAction()
+                    compose.onNodeWithContentDescription("Cancel Telegram login").assertFullyContained().assertHasClickAction()
                 }
                 // Returning to the top must also leave the exit action reachable.
-                compose.onNodeWithText("Sign out").performScrollTo().assertIsDisplayed().assertHasClickAction()
+                compose.onNodeWithText("Sign out").performScrollTo().assertFullyContained().assertHasClickAction()
             }
         }
+    }
+
+    private fun SemanticsNodeInteraction.assertFullyContained(): SemanticsNodeInteraction {
+        assertIsDisplayed()
+        val node = fetchSemanticsNode()
+        val bounds = node.boundsInRoot
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        // boundsInRoot clips to ancestors: comparing to the measured size catches
+        // a partly visible button that assertIsDisplayed still accepts.
+        assertEquals("Control is vertically clipped", node.size.height.toFloat(), bounds.height, 1f)
+        assertEquals("Control is horizontally clipped", node.size.width.toFloat(), bounds.width, 1f)
+        assertTrue(
+            "Control extends outside viewport",
+            bounds.left >= root.left && bounds.top >= root.top &&
+                bounds.right <= root.right && bounds.bottom <= root.bottom,
+        )
+        return this
     }
 
     @Test

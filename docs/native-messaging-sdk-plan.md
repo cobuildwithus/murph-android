@@ -88,3 +88,14 @@ scrolled into view; Sign out remains reachable after returning to the top.
 The matching iOS Accessibility XXXL check also passes. These test-only changes
 do not alter shipped UI or invalidate the captured layout; final-head evidence
 confirmation and product ReviewGPT remain required.
+
+## Full control containment
+
+T6 confirmed the Android layout already fits at font scale 2.0. Unlike the iOS
+outline style, Android uses minimum button heights and unrestricted text wrapping,
+so no Android production layout change is needed. The six-state instrumented
+check now compares each control's clipped bounds with its measured dimensions
+and verifies containment in the root viewport, including the return to Sign out.
+It passes, as do full verify and the 13 review-tooling checks. T7 will recapture
+the paired large-text states after the iOS fixed-height correction; ReviewGPT
+and exact-head evidence remain merge gates.
