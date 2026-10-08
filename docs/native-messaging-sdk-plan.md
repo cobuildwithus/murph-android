@@ -99,3 +99,14 @@ and verifies containment in the root viewport, including the return to Sign out.
 It passes, as do full verify and the 13 review-tooling checks. T7 will recapture
 the paired large-text states after the iOS fixed-height correction; ReviewGPT
 and exact-head evidence remain merge gates.
+
+
+T7 completed 26 raw synthetic captures at a6004c54c80f5c4b23a889128fc1a48c08b1a0c3.
+Every image and capture hash was independently inspected, including scroll end
+and return to Sign out for maximum-text phone, conflicts, code and say-hi.
+All labels, borders and bottom clearance are visible. The evidence commit changes
+only images and these notes; the synthetic APK is byte-identical to T7:
+beaff011410b324ff72683076aa5702d08cc46e7b31abeef8213f7af637cba99.
+All 25 Android/iOS pairs and nine comparison sheets were inspected after iOS
+XCUITest screenshots resolved the GUI capture limitation. No production code
+changed, and real provider/device proof remains open. ReviewGPT remains required.
