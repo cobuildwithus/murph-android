@@ -71,6 +71,13 @@ unverified release gates.
 
 ## Accepted review corrections
 
+Telegram linking has two phases: Approving (start and SDK login) can be
+cancelled; once the proof is submitted, Confirming hides Cancel and always
+finishes, so a cancel never reports a link the backend completed as failed. Only
+the SDK login is Activity-bound; completion and admission run in the application
+scope. Code autofocus keys on the OTP field being visible, so a re-check after
+Activity recreation never focuses an unattached field.
+
 Cancel during the suspended auth observation in requireCurrent now stops the
 next SDK launch or completion: auth is observed first, then revision and member
 are compared. The PR 51 routing correction keeps messaging setup mounted during
