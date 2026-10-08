@@ -805,7 +805,6 @@ private fun messagingFixture(name: String?): ai.withmurph.companion.auth.Messagi
     return when (name) {
         "code" -> code
         "connected" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
-        "say-hi" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.SayHi, telegramUrl = "https://t.me/synthetic_bot")
         "waiting" -> phone.copy(telegramLogin = true, busy = true)
         else -> phone
     }

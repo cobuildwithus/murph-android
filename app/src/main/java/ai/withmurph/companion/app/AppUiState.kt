@@ -64,8 +64,6 @@ data class AppUiState(
     val initialOnboardingMessage: String? = null,
     val initialOnboardingContactCardHandoff: PendingInitialOnboardingContactCardHandoff? = null,
     val messagingSetupRequired: Boolean = false,
-    val telegramAwaitingInbound: Boolean = false,
-    val telegramChatUrl: String? = null,
     val isMessagingSetupRefreshing: Boolean = false,
     val messagingSetupMessage: String? = null,
     val accountDeletionHandoffPending: Boolean = false,

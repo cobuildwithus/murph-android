@@ -22,7 +22,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,21 +35,17 @@ class ScreenshotScenarioSmokeTest {
     @Test
     fun launchingMessagingAdmissionKeepsProgressAndSignOutReachable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        for (fontScale in listOf(1.0f, 2.0f)) for (state in listOf("connected", "say-hi")) {
+        for (fontScale in listOf(1.0f, 2.0f)) for (state in listOf("connected", "phone")) {
             val intent = Intent(context, ScreenshotActivity::class.java)
                 .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
                 .putExtra("messagingState", state)
                 .putExtra("messagingFontScale", fontScale)
             ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
-                compose.onNodeWithText(if (state == "say-hi") "Say hi to Murph" else "Account connected").assertIsDisplayed()
-                val status = compose.onNodeWithText("Confirming your account…").performScrollTo().assertIsDisplayed()
-                    .fetchSemanticsNode().boundsInRoot
-                if (state == "say-hi") {
-                    compose.onAllNodesWithText("Waiting for your message…").assertCountEquals(0)
-                    // Progress renders inline: it must never cover the say-hi action.
-                    val action = compose.onNodeWithText("Message Murph").assertIsNotEnabled().fetchSemanticsNode().boundsInRoot
-                    assertFalse("Progress covers Message Murph at $fontScale", status.overlaps(action))
-                }
+                compose.onNodeWithText(if (state == "phone") "Choose how to message Murph" else "Account connected").assertIsDisplayed()
+                // Progress renders inline in the content flow; a re-check from the
+                // phone step replaces its controls instead of covering them.
+                compose.onNodeWithText("Confirming your account…").performScrollTo().assertIsDisplayed()
+                if (state == "phone") compose.onAllNodesWithText("Send code").assertCountEquals(0)
                 // Native linking retains its existing sign-out escape during admission.
                 compose.onNodeWithText("Sign out").performScrollTo().performClick()
                 scenario.onActivity { assertEquals(1, it.signOutRequests) }
@@ -61,7 +56,7 @@ class ScreenshotScenarioSmokeTest {
     @Test
     fun messagingControlsRemainReachableAtMaximumFontScale() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        for (state in listOf("phone", "contact-in-use", "telegram-conflict", "code", "say-hi", "waiting")) {
+        for (state in listOf("phone", "contact-in-use", "telegram-conflict", "code", "waiting")) {
             val intent = Intent(context, ScreenshotActivity::class.java)
                 .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
                 .putExtra("messagingState", state)
@@ -75,7 +70,6 @@ class ScreenshotScenarioSmokeTest {
                         compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertFullyContained()
                         listOf("Use a different number")
                     }
-                    "say-hi" -> listOf("Message Murph", "Use your phone number instead")
                     "waiting" -> emptyList()
                     else -> {
                         compose.onNodeWithContentDescription("Country or region", substring = true)

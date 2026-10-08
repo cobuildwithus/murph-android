@@ -108,18 +108,9 @@ class MainActivity : ComponentActivity() {
             val appState by graph.session.state.collectAsStateWithLifecycle()
             val loginState by graph.login.state.collectAsStateWithLifecycle()
             val messagingState by graph.messaging.state.collectAsStateWithLifecycle()
-            androidx.compose.runtime.LaunchedEffect(appState.phase, appState.messagingSetupRequired, appState.telegramAwaitingInbound, appState.telegramChatUrl) {
-                if (appState.telegramAwaitingInbound) graph.messaging.restoreAwaitingInbound(appState.telegramChatUrl)
+            androidx.compose.runtime.LaunchedEffect(appState.phase, appState.messagingSetupRequired) {
                 if (appState.phase == ai.withmurph.companion.app.AppPhase.NeedsLogin ||
                     appState.phase == ai.withmurph.companion.app.AppPhase.Ready && !appState.messagingSetupRequired) graph.messaging.reset()
-            }
-            // Checks right away on return from Telegram, then keeps checking
-            // while the say-hi step is on screen.
-            LaunchedEffect(messagingState.stage) {
-                if (messagingState.stage != ai.withmurph.companion.auth.MessagingStage.SayHi) return@LaunchedEffect
-                lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                    graph.messaging.awaitTelegramInbound { graph.session.checkTelegramInbound(graph.applicationScope) }
-                }
             }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
@@ -352,9 +343,10 @@ class MainActivity : ComponentActivity() {
                             telegramLogin.cancel()
                         },
                         onMessagingTelegram = { lifecycleScope.launch {
-                            if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.SayHi) {
-                                (graph.messaging.state.value.telegramUrl ?: appState.telegramChatUrl)?.let { openUri(it) }
-                            } else if (graph.messaging.connectTelegram(telegramLogin::login)) graph.session.refreshMessagingSetup()
+                            // The SDK login is Activity-bound; admission outlives it like the SMS path.
+                            if (graph.messaging.connectTelegram(telegramLogin::login)) {
+                                graph.applicationScope.launch { graph.session.refreshMessagingSetup() }
+                            }
                         } },
                         onRefreshMessagingSetup = { graph.applicationScope.launch {
                             graph.session.refreshMessagingSetup()

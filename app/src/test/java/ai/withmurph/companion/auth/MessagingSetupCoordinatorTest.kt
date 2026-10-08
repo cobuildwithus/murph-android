@@ -42,33 +42,6 @@ class MessagingSetupCoordinatorTest {
         assertEquals(listOf("a".repeat(43)), api.completedStarts)
         assertEquals(listOf("synthetic-id-token"), api.completedTokens)
     }
-    @Test fun rejectedWelcomeKeepsSayHiUrlWithoutStartingAnotherLogin() = runTest {
-        val api = Api(); api.awaitingInbound = true
-        val model = MessagingSetupCoordinator(Auth(), api)
-        assertTrue(model.connectTelegram { "synthetic-id-token" })
-        assertEquals(MessagingStage.SayHi, model.state.value.stage)
-        assertEquals("https://t.me/synthetic_bot", model.state.value.telegramUrl)
-        model.restoreAwaitingInbound(model.state.value.telegramUrl)
-        assertEquals(1, api.starts)
-    }
-    @Test fun sayHiKeepsCheckingUntilDeliverable() = runTest {
-        val model = MessagingSetupCoordinator(Auth(), Api())
-        model.restoreAwaitingInbound("https://t.me/synthetic_bot")
-        var checks = 0
-        model.awaitTelegramInbound(intervalMs = 1) { ++checks == 3 }
-        assertEquals(3, checks)
-    }
-    @Test fun sayHiStopsCheckingAfterSwitchingToPhone() = runTest {
-        val model = MessagingSetupCoordinator(Auth(), Api())
-        model.restoreAwaitingInbound("https://t.me/synthetic_bot")
-        var checks = 0
-        model.awaitTelegramInbound(intervalMs = 1) { checks++; model.changeNumber(); false }
-        assertEquals(1, checks)
-        assertEquals(MessagingStage.Phone, model.state.value.stage)
-        assertNull(model.state.value.telegramUrl)
-        model.awaitTelegramInbound(intervalMs = 1) { checks++; false }
-        assertEquals("The phone step never polls Telegram readiness", 1, checks)
-    }
     @Test fun cancelledAndUnavailableLoginStayInlineAndRetryable() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
         for (reason in listOf(MessagingLinkException.Reason.TelegramCancelled, MessagingLinkException.Reason.TelegramUnavailable)) {
@@ -166,7 +139,7 @@ class MessagingSetupCoordinatorTest {
         override suspend fun confirmCode(method: LoginMethod, destination: String, code: String) {}
     }
     private class Api : HostedAuthServing {
-        var sends = 0; var verifiedPhone: String? = null; var awaitingInbound = false
+        var sends = 0; var verifiedPhone: String? = null
         var starts = 0; val completedTokens = mutableListOf<String>(); val completedStarts = mutableListOf<String>()
         var failure: Exception? = null; var wait: CompletableDeferred<Unit>? = null
         var waitStart: CompletableDeferred<Unit>? = null
@@ -174,8 +147,8 @@ class MessagingSetupCoordinatorTest {
         override suspend fun sendMessagingPhoneCode(phone: String, credential: String) { sends++; wait?.await(); failure?.let { throw it } }
         override suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String) { failure?.let { throw it }; verifiedPhone = phone }
         override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; waitStart?.await(); afterStart?.invoke(); return TelegramMessagingLink("a".repeat(43), "123456789") }
-        override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): TelegramMessagingCompletion {
-            completedStarts.add(startId); completedTokens.add(idToken); failure?.let { throw it }; return TelegramMessagingCompletion(true, awaitingInbound, "https://t.me/synthetic_bot")
+        override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): Boolean {
+            completedStarts.add(startId); completedTokens.add(idToken); failure?.let { throw it }; return true
         }
         override suspend fun sendCode(method: LoginMethod, value: String) {}
         override suspend fun verifyCode(method: LoginMethod, value: String, code: String): HostedAuthSession = error("unused")

@@ -3,7 +3,6 @@ package ai.withmurph.companion.auth
 import ai.withmurph.companion.core.AuthProvider
 import ai.withmurph.companion.core.AuthSessionState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -25,9 +24,7 @@ class TelegramMessagingLink(val startId: String, val clientId: String) {
     override fun toString() = "TelegramMessagingLink(<redacted>)"
 }
 
-data class TelegramMessagingCompletion(val linked: Boolean, val telegramAwaitingInbound: Boolean, val telegramUrl: String?)
-
-enum class MessagingStage { Phone, Code, SayHi, Connected }
+enum class MessagingStage { Phone, Code, Connected }
 data class MessagingSetupState(
     val stage: MessagingStage = MessagingStage.Phone,
     val phone: String = "",
@@ -36,7 +33,6 @@ data class MessagingSetupState(
     val busy: Boolean = false,
     val telegramLogin: Boolean = false,
     val telegramError: Boolean = false,
-    val telegramUrl: String? = null,
     val displayPhone: String = "",
     val error: String? = null,
 ) {
@@ -57,7 +53,7 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
     fun setCountry(value: CountryDialCode) { if (!state.value.busy) mutableState.value = state.value.copy(country = value, error = null) }
     fun setCode(value: String) { if (!state.value.busy) mutableState.value = state.value.copy(code = value.filter { it in '0'..'9' }.take(6), error = null) }
     fun reset() { revision++; owner = null; sentPhone = null; mutableState.value = MessagingSetupState() }
-    fun changeNumber() { if (!state.value.busy) { sentPhone = null; mutableState.value = state.value.copy(stage = MessagingStage.Phone, code = "", error = null, telegramError = false, telegramUrl = null, displayPhone = "") } }
+    fun changeNumber() { if (!state.value.busy) { sentPhone = null; mutableState.value = state.value.copy(stage = MessagingStage.Phone, code = "", error = null, telegramError = false, displayPhone = "") } }
 
     suspend fun sendCode(): Boolean {
         val target = if (state.value.stage == MessagingStage.Code) sentPhone.orEmpty() else state.value.country.compose(state.value.phone)
@@ -97,12 +93,13 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
                 requireCurrent(current)
                 val idToken = login(start.clientId)
                 requireCurrent(current)
-                val result = api.completeMessagingTelegram(start.startId, idToken, credential)
+                val linked = api.completeMessagingTelegram(start.startId, idToken, credential)
                 requireCurrent(current)
-                if (!result.linked) throw MessagingLinkException(MessagingLinkException.Reason.TelegramUnavailable)
+                if (!linked) throw MessagingLinkException(MessagingLinkException.Reason.TelegramUnavailable)
                 sentPhone = null
-                mutableState.value = state.value.copy(stage = if (result.telegramAwaitingInbound) MessagingStage.SayHi else MessagingStage.Connected,
-                    telegramUrl = result.telegramUrl, phone = "", code = "")
+                // Like a phone link, a Telegram link continues setup. When the bot
+                // cannot message first, onboarding's Message Murph opens the chat.
+                mutableState.value = state.value.copy(stage = MessagingStage.Connected, phone = "", code = "")
             }
         } finally {
             if (generation == revision) mutableState.value = state.value.copy(telegramLogin = false)
@@ -114,18 +111,6 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         revision++
         mutableState.value = state.value.copy(busy = false, telegramLogin = false,
             error = MessagingLinkException.Reason.TelegramCancelled.message)
-    }
-
-    /** Re-checks readiness while the say-hi step is showing; returns once the member is deliverable or leaves the step. */
-    suspend fun awaitTelegramInbound(intervalMs: Long = 4_000, check: suspend () -> Boolean) {
-        while (state.value.stage == MessagingStage.SayHi) {
-            if (check()) return
-            delay(intervalMs)
-        }
-    }
-
-    fun restoreAwaitingInbound(url: String?) {
-        if (!state.value.busy) mutableState.value = state.value.copy(stage = MessagingStage.SayHi, telegramUrl = url)
     }
 
     private suspend fun requireCurrent(current: Long) {

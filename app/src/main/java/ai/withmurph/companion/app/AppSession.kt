@@ -46,7 +46,6 @@ import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import ai.withmurph.companion.core.UNKNOWN_HEALTH_RESOURCE_KEY
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -4830,8 +4829,6 @@ class AppSession(
                 initialOnboardingMessage = null,
                 initialOnboardingContactCardHandoff = null,
                 messagingSetupRequired = false,
-                telegramAwaitingInbound = false,
-                telegramChatUrl = null,
                 messagingSetupMessage = null,
             )
         }
@@ -4842,9 +4839,7 @@ class AppSession(
     private fun applyMessagingSetupRequirement(projection: InitialOnboarding) {
         _state.update {
             it.copy(
-                messagingSetupRequired = projection.messagingSetupRequired || projection.telegramAwaitingInbound,
-                telegramAwaitingInbound = projection.telegramAwaitingInbound,
-                telegramChatUrl = if (projection.telegramAwaitingInbound) projection.contactAction?.href else null,
+                messagingSetupRequired = projection.messagingSetupRequired,
                 messagingSetupMessage = null,
             )
         }
@@ -4868,11 +4863,7 @@ class AppSession(
             _state.update {
                 it.copy(
                     isMessagingSetupRefreshing = false,
-                    // The say-hi step already explains a Telegram link that is
-                    // waiting for the member's first message.
-                    messagingSetupMessage = if (
-                        it.phase == AppPhase.Ready && it.messagingSetupRequired && !it.telegramAwaitingInbound
-                    ) {
+                    messagingSetupMessage = if (it.phase == AppPhase.Ready && it.messagingSetupRequired) {
                         MESSAGING_SETUP_PENDING_MESSAGE
                     } else {
                         null
@@ -4881,45 +4872,6 @@ class AppSession(
             }
         }
         return _state.value.phase == AppPhase.Ready && !_state.value.messagingSetupRequired
-    }
-
-    /**
-     * Cheap readiness probe for the Telegram say-hi step. Reads only the
-     * onboarding projection and re-enters admission once the member's first
-     * Telegram message has made them deliverable. Failures stay silent; the
-     * step keeps waiting.
-     */
-    suspend fun checkTelegramInbound(applicationScope: CoroutineScope): Boolean {
-        val current = _state.value
-        val memberKey = currentMemberKey
-        if (
-            current.phase != AppPhase.Ready ||
-            !current.messagingSetupRequired ||
-            current.isMessagingSetupRefreshing ||
-            memberKey == null
-        ) return false
-        val epoch = sessionEpoch
-        val projection = try {
-            api.fetchInitialOnboarding(memberKey)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            return false
-        }
-        if (
-            epoch != sessionEpoch ||
-            memberKey != currentMemberKey ||
-            projection.telegramAwaitingInbound ||
-            projection.messagingSetupRequired
-        ) return false
-        // Only the probe belongs to the resumed UI. Admission must finish even
-        // when that caller pauses or the say-hi composable leaves composition.
-        return applicationScope.async {
-            if (
-                epoch == sessionEpoch && memberKey == currentMemberKey &&
-                memberKey == localState.memberKey && !localState.signOutPending
-            ) refreshMessagingSetup() else false
-        }.await()
     }
 
     private fun ownsInitialOnboardingWork(memberKey: String, epoch: Int): Boolean =

@@ -129,7 +129,6 @@ data class InitialOnboarding(
     val contactAction: InitialOnboardingContactAction?,
     /** The member still needs a phone or Telegram conversation with Murph. */
     val messagingSetupRequired: Boolean = false,
-    val telegramAwaitingInbound: Boolean = false,
 )
 
 enum class InitialOnboardingCompletionAction(val wireValue: String) {

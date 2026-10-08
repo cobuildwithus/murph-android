@@ -60,15 +60,9 @@ class HostedAuthApiClient(
         }
     }
 
-    override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): TelegramMessagingCompletion {
+    override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): Boolean {
         val response = request("messaging/telegram/complete", JSONObject().put("startId", startId).put("idToken", idToken), credential)
-        return decode {
-            TelegramMessagingCompletion(
-                response.get("linked") as? Boolean ?: throw HostedAuthException.InvalidResponse,
-                response.get("telegramAwaitingInbound") as? Boolean ?: throw HostedAuthException.InvalidResponse,
-                if (response.isNull("telegramUrl")) null else response.string("telegramUrl"),
-            )
-        }
+        return decode { response.get("linked") as? Boolean ?: throw HostedAuthException.InvalidResponse }
     }
 
     private fun phoneBody(phone: String) = JSONObject().put("change", JSONObject()
