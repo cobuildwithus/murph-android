@@ -2,7 +2,8 @@ package ai.withmurph.companion.auth
 
 import android.app.Activity
 import android.net.Uri
-import ai.withmurph.companion.BuildConfig
+import android.content.pm.PackageManager
+import java.security.MessageDigest
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.TimeoutCancellationException
@@ -14,18 +15,20 @@ import org.telegram.login.TelegramLogin
 
 /** Activity-owned, memory-only adapter around the unmodified official SDK. */
 class TelegramLoginService(private val activity: Activity, private val scope: CoroutineScope) {
+    private var redirectUri: Uri? = null
     private var pending: CancellableContinuation<String>? = null
     private var attempt = 0L
     private var leftApp = false
     private var receivedCallback = false
 
     suspend fun login(clientId: String): String {
-        val host = BuildConfig.TELEGRAM_REDIRECT_HOST
-        if (host.isBlank() || pending != null) throw unavailable()
+        if (pending != null) throw unavailable()
+        val redirect = installedRedirect() ?: throw unavailable()
+        redirectUri = Uri.parse(redirect)
         val current = ++attempt
         leftApp = false
         receivedCallback = false
-        TelegramLogin.init(clientId, "https://$host/tglogin", listOf("openid", "profile", "telegram:bot_access"))
+        TelegramLogin.init(clientId, redirect, listOf("openid", "profile", "telegram:bot_access"))
         try {
             return withTimeout(300_000) {
                 suspendCancellableCoroutine { continuation ->
@@ -39,12 +42,23 @@ class TelegramLoginService(private val activity: Activity, private val scope: Co
         } catch (_: TimeoutCancellationException) {
             throw unavailable()
         } finally {
-            if (attempt == current) pending = null
+            if (attempt == current) { pending = null; redirectUri = null }
         }
     }
 
+    private fun installedRedirect(): String? = runCatching {
+        val info = activity.packageManager.getPackageInfo(activity.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        // Only current installed signers qualify; a historical key must not select
+        // an App Link registration for a differently signed installed package.
+        val fingerprints = info.signingInfo?.apkContentsSigners?.map { signature ->
+            MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
+                .joinToString(":") { "%02X".format(it.toInt() and 0xff) }
+        }.orEmpty()
+        TelegramLoginRedirect.forSigners(activity.packageName, fingerprints)
+    }.getOrNull()
+
     fun handle(uri: Uri) {
-        if (pending == null || receivedCallback || uri.scheme != "https" || uri.host != BuildConfig.TELEGRAM_REDIRECT_HOST ||
+        if (pending == null || receivedCallback || uri.scheme != "https" || uri.host != redirectUri?.host ||
             uri.path != "/tglogin" || uri.userInfo != null || uri.port != -1 || uri.fragment != null) return
         receivedCallback = true
         if (uri.getQueryParameter("error") == "access_denied") { cancel(); return }

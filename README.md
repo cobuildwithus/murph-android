@@ -431,17 +431,21 @@ qualify the release identifiers or provider behavior.
 
 The official unmodified dependency is `org.telegram:login-sdk:1.0.0` from
 TelegramMessenger's GitHub Packages repository. Local Gradle reads private
-`gpr.user` / `gpr.key` properties or `TELEGRAM_PACKAGES_USER` /
-`TELEGRAM_PACKAGES_TOKEN` environment variables. The token requires
-`read:packages`; never put credentials in repository files or command arguments.
-CI reads repository variable `TELEGRAM_PACKAGES_USER` and secret
-`TELEGRAM_PACKAGES_TOKEN`. Configure them in GitHub before the SDK build can run.
+`gpr.user` / `gpr.key` properties or `TELEGRAM_PACKAGES_USER` / `GITHUB_TOKEN`
+environment variables. Check `gh auth status` for `read:packages`, then capture
+`gh auth token` only into the Gradle process environment. Never put tokens in
+repository files, command arguments or logs. CI uses `github.actor` and its
+built-in `GITHUB_TOKEN` with `contents: read` and `packages: read`; no custom
+package-token secret is required. Cross-organization registry access must pass
+before this dependency can be qualified.
 
-Set the public `MURPH_TELEGRAM_REDIRECT_HOST` Gradle property to BotFather's
-registered Android host. It feeds both BuildConfig and the verified App Link
-manifest. The registered default is `app397543190-login.tg.dev` for
-`ai.withmurph.app`. The public association currently lists only the certificate
-starting `44:E0`; the separately supplied `0E:3B` certificate still needs its
-association confirmed before builds using that key can be qualified. PR 52
-cannot merge until SDK compilation and App Link verification pass. No store upload or
-canary pin change is part of this work.
+BotFather issues a redirect per signing certificate for `ai.withmurph.app`.
+The installed package's current SHA-256 signing certificate selects the redirect
+at runtime: Play app signing uses `app397543190-login.tg.dev`; upload signing
+uses `app1452659770-login.tg.dev`. Both use `/tglogin` and both hosts have verified
+App Link intent filters. Unknown, absent or multiple signers, and unregistered
+package names fail closed with Telegram unavailable. Signing history cannot
+select a redirect for the current package. Both public association files were
+checked against the expected package and their respective certificates.
+Installed-device App Link resolution remains a release qualification step.
+No store upload or canary pin change is part of this work.

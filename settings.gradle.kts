@@ -16,7 +16,7 @@ dependencyResolutionManagement {
             content { includeModule("org.telegram", "login-sdk") }
             credentials {
                 username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("TELEGRAM_PACKAGES_USER")
-                password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("TELEGRAM_PACKAGES_TOKEN")
+                password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
             }
         }
     }

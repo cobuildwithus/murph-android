@@ -54,9 +54,6 @@ apply(from = rootProject.file("gradle/play-release.gradle.kts"))
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
-// Public BotFather registration; an empty override disables native Telegram login.
-val telegramRedirectHost = providers.gradleProperty("MURPH_TELEGRAM_REDIRECT_HOST").orElse("app397543190-login.tg.dev")
-
 val privyAppId = providers.gradleProperty("MURPH_PRIVY_APP_ID").orElse("")
 val privyAppClientId = providers.gradleProperty("MURPH_PRIVY_APP_CLIENT_ID").orElse("")
 val developmentBackend = providers.gradleProperty("MURPH_BACKEND_BASE_URL_DEV")
@@ -129,10 +126,6 @@ android {
 
     defaultConfig {
         applicationId = "ai.withmurph.app"
-        val telegramHost = telegramRedirectHost.get()
-        require(telegramHost.isEmpty() || Regex("app[0-9]+-login\\.tg\\.dev").matches(telegramHost))
-        buildConfigField("String", "TELEGRAM_REDIRECT_HOST", telegramHost.asBuildConfigString())
-        manifestPlaceholders["telegramRedirectHost"] = telegramHost.ifEmpty { "unregistered.invalid" }
         minSdk = 28
         targetSdk = 36
         versionCode = 5

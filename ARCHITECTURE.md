@@ -161,8 +161,9 @@ Connect Telegram, and quiet top-bar Sign out. SMS reuses login code controls.
 Telegram cancellation and errors appear under its button. Browser settings is
 only an inline conflict/protected-action fallback.
 
-MURPH_TELEGRAM_REDIRECT_HOST is the one build property and BuildConfig value
-for BotFather's host, defaulting to app397543190-login.tg.dev. Empty overrides
-disable native login and emit an unregistered.invalid manifest placeholder.
-Verify the installed build's signing certificate against the public association
-and its App Link resolution before merging PR 52.
+TelegramLoginRedirect selects BotFather's HTTPS redirect from the installed
+package's current signing certificate, not its build variant or signing history.
+Play and upload certificates map to their distinct registered hosts. Both hosts
+have verified App Link intent filters. An unknown certificate or package,
+missing signer, multiple signers or PackageManager failure disables login with
+an inline unavailable error. The active callback must match the selected host.

@@ -8,16 +8,18 @@ Use the official SDK unmodified. Default phone and SMS-code controls match iOS;
 Telegram invokes SDK login, then either continues or shows canonical say-hi.
 Remove the old recipient-proof/custom-scheme flow completely.
 
-The SDK source and tests are implemented. Verification currently stops resolving
-org.telegram:login-sdk:1.0.0 because no GitHub Packages username/token is supplied.
-The preceding 37 script contract checks passed. Required human setup is the
-TELEGRAM_PACKAGES_TOKEN repository secret with read:packages, the
-TELEGRAM_PACKAGES_USER repository variable, equivalent local Gradle credentials.
-No credential values were changed. The public registration file now supplies
-app397543190-login.tg.dev, wired as the single property default. A read-only
-association check confirms ai.withmurph.app and the 44:E0 certificate, but the
-supplied 0E:3B certificate is not yet published by that host. Verify the
-intended installed build certificate and App Link resolution before merge.
+The SDK source and tests are implemented. The human authorized GitHub's built-in
+workflow token with packages:read and contents:read, using github.actor as the
+Maven username. Local use requires the refreshed gh token to show read:packages;
+capture it only in the Gradle process environment. No custom package-token
+secret is required or changed. Cross-organization package resolution is not yet
+qualified.
+
+The installed package's current signing certificate selects the Play or upload
+redirect at runtime, with both hosts declared in verified App Link filters.
+Unit tests cover both certificates and unknown/missing/multiple signers and
+wrong package names. Both published assetlinks files confirm ai.withmurph.app
+and their respective expected certificate. Unknown installed signers fail closed.
 
 Remaining: compile and unit/UI verification, exact-head synthetic captures and
 side-by-side inspection,
@@ -37,3 +39,12 @@ normal control-change split; product ReviewGPT remains separately required.
 No secrets were added or changed. Fork builds still fail closed without access.
 The review-tooling verification passes, including the exact allowed secret
 reference and rejection of all other workflow secret references.
+
+The fresh independent control review passed the built-in workflow-token update
+against the same trusted base checklist: only read permissions, the fixed
+registry/module filter, bounded step environments and exact test allowance.
+Local auth confirms read:packages. The full Gradle verifier passed its 37
+script checks, then the official package POM download returned HTTP 401
+Unauthorized with the refreshed token. No app compile/unit-test pass is claimed.
+Review-tooling verification passed all 13 checks. CI will test the authorized
+built-in token separately.
