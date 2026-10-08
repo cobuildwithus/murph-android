@@ -46,5 +46,7 @@ registry/module filter, bounded step environments and exact test allowance.
 Local auth confirms read:packages. The full Gradle verifier passed its 37
 script checks, then the official package POM download returned HTTP 401
 Unauthorized with the refreshed token. No app compile/unit-test pass is claimed.
-Review-tooling verification passed all 13 checks. CI will test the authorized
-built-in token separately.
+Review-tooling verification passed all 13 checks. CI resolved the SDK with the authorized built-in token and compiled the Debug,
+hosted-E2E and production-canary Kotlin targets. Its license inventory then
+failed because the upstream POM omits license metadata. Added the exact 1.0.0
+MIT fallback using the official immutable source LICENSE; verification continues.
