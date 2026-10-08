@@ -1,225 +1,32 @@
 {
-  "inspection": "All 30 raw captures personally inspected: complete labels and borders, bottom clearance, intact divider, inline errors, maximum-text scroll end and return to Sign out. Four actual Launching admission captures retain the centered confirmation capsule and native Sign out. The capsule intentionally overlays disabled content.",
-  "comparisonToPreviousEvidence": {
-    "contact-in-use.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        958,
-        82
-      ]
-    },
-    "code.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "login.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        311,
-        956
-      ]
-    },
-    "admission-say-hi.png": {
-      "changedPixelBounds": "new admission evidence"
-    },
-    "large-text.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "large-text-say-hi-scrolled.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "telegram-unavailable.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        150,
-        82
-      ]
-    },
-    "large-text-code-scrolled.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        953,
-        82
-      ]
-    },
-    "large-text-contact-in-use-scrolled.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        149,
-        82
-      ]
-    },
-    "large-text-say-hi-returned.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "large-text-code-returned.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        953,
-        82
-      ]
-    },
-    "large-text-contact-in-use-returned.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        149,
-        82
-      ]
-    },
-    "invalid-code.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        953,
-        82
-      ]
-    },
-    "approval.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "fresh-login.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        953,
-        82
-      ]
-    },
-    "large-text-admission-say-hi.png": {
-      "changedPixelBounds": "new admission evidence"
-    },
-    "admission-connected.png": {
-      "changedPixelBounds": "new admission evidence"
-    },
-    "large-text-telegram-conflict-scrolled.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        149,
-        82
-      ]
-    },
-    "large-text-telegram-conflict-returned.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        149,
-        82
-      ]
-    },
-    "phone.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "unavailable.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "waiting.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        958,
-        82
-      ]
-    },
-    "invalid-number.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        958,
-        82
-      ]
-    },
-    "large-text-admission-connected.png": {
-      "changedPixelBounds": "new admission evidence"
-    },
-    "say-hi.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "telegram-conflict.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        149,
-        82
-      ]
-    },
-    "rate-limited.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        958,
-        82
-      ]
-    },
-    "telegram-cancelled.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "large-text-scrolled.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    },
-    "large-text-returned.png": {
-      "changedPixelBounds": [
-        80,
-        54,
-        963,
-        82
-      ]
-    }
-  }
+ "inspection": "All 27 states were recaptured from the synthetic APK at the source head and inspected. admission-phone and large-text-admission-phone are new: a re-check from the phone step shows inline \"Confirming your account\u2026\" in place of the controls. The other 25 committed images are pixel-identical below the status bar to the fresh captures (login differs only by caret/anti-aliasing) and were kept. Progress is inline and never covers a control; labels, borders, divider, scroll-end clearance and return to Sign out pass. Say-hi states were removed with the step.",
+ "pixelsDifferingBelowStatusBarVsCommitted": {
+  "admission-connected.png": 0,
+  "admission-phone.png": "new",
+  "approval.png": 0,
+  "code.png": 0,
+  "contact-in-use.png": 0,
+  "fresh-login.png": 0,
+  "invalid-code.png": 0,
+  "invalid-number.png": 0,
+  "large-text-admission-connected.png": 0,
+  "large-text-admission-phone.png": "new",
+  "large-text-code-returned.png": 0,
+  "large-text-code-scrolled.png": 0,
+  "large-text-contact-in-use-returned.png": 0,
+  "large-text-contact-in-use-scrolled.png": 0,
+  "large-text-returned.png": 0,
+  "large-text-scrolled.png": 0,
+  "large-text-telegram-conflict-returned.png": 0,
+  "large-text-telegram-conflict-scrolled.png": 0,
+  "large-text.png": 0,
+  "login.png": 290,
+  "phone.png": 0,
+  "rate-limited.png": 0,
+  "telegram-cancelled.png": 0,
+  "telegram-conflict.png": 0,
+  "telegram-unavailable.png": 0,
+  "unavailable.png": 0,
+  "waiting.png": 0
+ }
 }
