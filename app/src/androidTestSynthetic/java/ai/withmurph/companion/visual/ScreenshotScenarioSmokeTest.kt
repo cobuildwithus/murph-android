@@ -36,14 +36,21 @@ class ScreenshotScenarioSmokeTest {
     @Test
     fun launchingMessagingAdmissionKeepsProgressAndSignOutReachable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        for (state in listOf("connected", "say-hi")) {
+        for (fontScale in listOf(1.0f, 2.0f)) for (state in listOf("connected", "say-hi")) {
             val intent = Intent(context, ScreenshotActivity::class.java)
                 .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
                 .putExtra("messagingState", state)
+                .putExtra("messagingFontScale", fontScale)
             ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
-                compose.onNodeWithText(if (state == "say-hi") "Say hi to Murph" else "Choose how to message Murph").assertIsDisplayed()
-                compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
-                if (state == "say-hi") compose.onNodeWithText("Message Murph").assertIsNotEnabled()
+                compose.onNodeWithText(if (state == "say-hi") "Say hi to Murph" else "Account connected").assertIsDisplayed()
+                val status = compose.onNodeWithText("Confirming your account…").performScrollTo().assertIsDisplayed()
+                    .fetchSemanticsNode().boundsInRoot
+                if (state == "say-hi") {
+                    compose.onAllNodesWithText("Waiting for your message…").assertCountEquals(0)
+                    // Progress renders inline: it must never cover the say-hi action.
+                    val action = compose.onNodeWithText("Message Murph").assertIsNotEnabled().fetchSemanticsNode().boundsInRoot
+                    assertFalse("Progress covers Message Murph at $fontScale", status.overlaps(action))
+                }
                 // Native linking retains its existing sign-out escape during admission.
                 compose.onNodeWithText("Sign out").performScrollTo().performClick()
                 scenario.onActivity { assertEquals(1, it.signOutRequests) }

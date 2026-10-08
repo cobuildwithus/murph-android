@@ -101,6 +101,28 @@ class MessagingSetupCoordinatorTest {
         }
     }
 
+    @Test fun cancelDuringSuspendedAuthCheckStopsLaterTelegramSteps() = runTest {
+        for (beforeSdk in listOf(true, false)) {
+            val auth = Auth(); val api = Api(); val model = MessagingSetupCoordinator(auth, api)
+            val gate = CompletableDeferred<Unit>()
+            if (beforeSdk) api.afterStart = { auth.suspendNext = gate }
+            var sdkCalls = 0
+            val pending = async {
+                runCatching { model.connectTelegram { sdkCalls++; if (!beforeSdk) auth.suspendNext = gate; "synthetic-id-token" } }
+            }
+            runCurrent()
+            model.cancelTelegram()
+            gate.complete(Unit)
+            pending.await()
+            assertEquals(if (beforeSdk) 0 else 1, sdkCalls)
+            assertTrue(api.completedTokens.isEmpty())
+            assertEquals(MessagingLinkException.Reason.TelegramCancelled.message, model.state.value.error)
+            api.afterStart = null
+            assertTrue(model.connectTelegram { "synthetic-retry-token" })
+            assertEquals(listOf("synthetic-retry-token"), api.completedTokens)
+        }
+    }
+
     @Test fun resetAndMemberChangeRejectLateSdkProof() = runTest {
         for (reset in listOf(true, false)) {
             val api = Api(); val auth = Auth(); val model = MessagingSetupCoordinator(auth, api)
@@ -133,7 +155,11 @@ class MessagingSetupCoordinatorTest {
 
     private class Auth : AuthProvider {
         var member = "synthetic-member"
-        override suspend fun currentState() = AuthSessionState.SignedIn(member, true)
+        var suspendNext: CompletableDeferred<Unit>? = null
+        override suspend fun currentState(): AuthSessionState {
+            suspendNext?.let { suspendNext = null; it.await() }
+            return AuthSessionState.SignedIn(member, true)
+        }
         override suspend fun identityToken() = "synthetic-credential"
         override suspend fun signOut() {}
         override suspend fun sendCode(method: LoginMethod, destination: String) {}
@@ -144,9 +170,10 @@ class MessagingSetupCoordinatorTest {
         var starts = 0; val completedTokens = mutableListOf<String>(); val completedStarts = mutableListOf<String>()
         var failure: Exception? = null; var wait: CompletableDeferred<Unit>? = null
         var waitStart: CompletableDeferred<Unit>? = null
+        var afterStart: (() -> Unit)? = null
         override suspend fun sendMessagingPhoneCode(phone: String, credential: String) { sends++; wait?.await(); failure?.let { throw it } }
         override suspend fun verifyMessagingPhoneCode(phone: String, code: String, credential: String) { failure?.let { throw it }; verifiedPhone = phone }
-        override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; waitStart?.await(); return TelegramMessagingLink("a".repeat(43), "123456789") }
+        override suspend fun startMessagingTelegram(credential: String): TelegramMessagingLink { starts++; waitStart?.await(); afterStart?.invoke(); return TelegramMessagingLink("a".repeat(43), "123456789") }
         override suspend fun completeMessagingTelegram(startId: String, idToken: String, credential: String): TelegramMessagingCompletion {
             completedStarts.add(startId); completedTokens.add(idToken); failure?.let { throw it }; return TelegramMessagingCompletion(true, awaitingInbound, "https://t.me/synthetic_bot")
         }

@@ -49,7 +49,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -84,9 +83,11 @@ fun MessagingSetupScreen(
     onConfirmConnected: () -> Unit,
     onSignOut: () -> Unit,
 ) {
-    // Like iOS, a re-check blocks input without dimming the controls; the
-    // centered capsule carries the progress state.
-    val busy = state.isMessagingSetupRefreshing || link.busy
+    // Like iOS, progress renders inline in the content flow, never over it,
+    // so no control is covered at any text size.
+    val refreshing = state.isMessagingSetupRefreshing
+    val busy = refreshing || link.busy
+    val telegramBusy = link.telegramLogin && link.busy
     var countryPicker by remember { mutableStateOf(false) }
     val codeFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -116,24 +117,39 @@ fun MessagingSetupScreen(
                 MurphLinkButton("Sign out", onSignOut)
             }
             if (link.stage != MessagingStage.Code) {
-                val sayHi = link.stage == MessagingStage.SayHi
+                val (title, body) = when (link.stage) {
+                    MessagingStage.SayHi -> "Say hi to Murph" to "Send Murph a quick message so it can reply to you."
+                    MessagingStage.Connected -> "Account connected" to "Let’s continue setting up Murph."
+                    else -> "Choose how to message Murph" to "Message Murph from your phone."
+                }
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (sayHi) TelegramConnectedBadge()
+                    if (link.stage == MessagingStage.SayHi) TelegramConnectedBadge()
                     Text(
-                        if (sayHi) "Say hi to Murph" else "Choose how to message Murph",
+                        title,
                         modifier = Modifier.semantics { heading() },
                         style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp, lineHeight = 42.sp),
                         color = MurphColors.Slate,
                     )
                 }
                 Text(
-                    if (sayHi) "Send Murph a quick message so it can reply to you."
-                    else "Message Murph from your phone.",
+                    body,
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 22.sp),
                     color = MurphColors.SlateMuted,
                 )
             }
-            if (!(link.telegramLogin && link.busy)) when (link.stage) {
+            val confirmingInPlaceOfControls = telegramBusy ||
+                refreshing && (link.stage == MessagingStage.Phone || link.stage == MessagingStage.Code)
+            if (confirmingInPlaceOfControls) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MessagingStatus("Confirming your account…")
+                    if (telegramBusy) MurphLinkButton("Cancel", onCancelTelegram,
+                        modifier = Modifier.semantics { contentDescription = "Cancel Telegram login" })
+                }
+            } else when (link.stage) {
                 MessagingStage.Phone -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -147,7 +163,12 @@ fun MessagingSetupScreen(
                         }
                         if (!link.telegramError) MessagingError(link, !busy, onOpenAccountSettings)
                     }
-                    MurphPrimaryButton("Send code", onSend, enabled = !busy)
+                    MurphPrimaryButton(
+                        "Send code", onSend, enabled = !busy,
+                        leadingContent = if (link.busy) {
+                            { CircularProgressIndicator(Modifier.size(16.dp), color = MurphColors.OnPrimary, strokeWidth = 2.dp) }
+                        } else null,
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.weight(1f).height(1.dp).background(MurphColors.BorderWarm))
                         Text("or", style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted)
@@ -166,7 +187,7 @@ fun MessagingSetupScreen(
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OtpInput(link.code, onCode, codeFocus, onVerify, !busy)
-                        MessagingError(link, !busy, onOpenAccountSettings)
+                        if (link.busy) MessagingStatus("Checking code…") else MessagingError(link, !busy, onOpenAccountSettings)
                     }
                     MurphLinkButton("Use a different number", onChangeNumber, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
@@ -177,15 +198,7 @@ fun MessagingSetupScreen(
                         verticalArrangement = Arrangement.spacedBy(20.dp),
                     ) {
                         MurphPrimaryButton("Message Murph", onTelegram, enabled = !busy)
-                        Row(
-                            modifier = Modifier.semantics(mergeDescendants = true) {},
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MurphColors.SageDark, strokeWidth = 2.dp)
-                            Text("Waiting for your message…", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                                color = MurphColors.SlateMuted)
-                        }
+                        MessagingStatus(if (refreshing) "Confirming your account…" else "Waiting for your message…")
                         state.messagingSetupMessage?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted)
                         }
@@ -194,7 +207,7 @@ fun MessagingSetupScreen(
                         modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
                 MessagingStage.Connected -> {
-                    Text("Account connected. Let’s continue setting up Murph.", color = MurphColors.SlateMuted)
+                    if (refreshing) MessagingStatus("Confirming your account…", Modifier.align(Alignment.CenterHorizontally))
                     state.messagingSetupMessage?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted)
                         MurphPrimaryButton("Try again", onConfirmConnected, enabled = !busy)
@@ -202,36 +215,19 @@ fun MessagingSetupScreen(
                 }
             }
         }
-        if (busy) {
-            Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MurphColors.NavigationSurface,
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .padding(horizontal = 20.dp, vertical = 14.dp)
-                            .semantics { liveRegion = LiveRegionMode.Polite },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = MurphColors.SageDark,
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Confirming your account…",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                            color = MurphColors.Slate,
-                        )
-                    }
-                }
-                if (link.telegramLogin) MurphLinkButton("Cancel", onCancelTelegram,
-                    modifier = Modifier.semantics { contentDescription = "Cancel Telegram login" })
-            }
-        }
+    }
+}
+
+/** Inline progress line; it sits in the content flow so it never covers a control. */
+@Composable
+private fun MessagingStatus(text: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MurphColors.SageDark, strokeWidth = 2.dp)
+        Text(text, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp), color = MurphColors.SlateMuted)
     }
 }
 

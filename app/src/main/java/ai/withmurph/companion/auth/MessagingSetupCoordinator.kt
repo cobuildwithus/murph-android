@@ -129,7 +129,10 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
     }
 
     private suspend fun requireCurrent(current: Long) {
-        if (current != revision || (auth.currentState() as? AuthSessionState.SignedIn)?.memberKey != owner) throw CancellationException()
+        // Observe auth first: an explicit cancel during that suspension must
+        // still stop the next provider or backend step.
+        val member = (auth.currentState() as? AuthSessionState.SignedIn)?.memberKey
+        if (current != revision || member != owner) throw CancellationException()
     }
 
     private suspend fun perform(action: suspend (String, Long) -> Unit): Boolean {
