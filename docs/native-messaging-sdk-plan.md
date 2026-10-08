@@ -1,132 +1,59 @@
 # Native messaging SDK completion
 
-Status: active
+Status: final evidence and product ReviewGPT pending
 
 Backend PR 4059 owns credential policy and fresh single-use Telegram proofs.
-Android PR 52 stays stacked on PR 51 until backend qualification and PR 51 merge.
-Use the official SDK unmodified. Default phone and SMS-code controls match iOS;
-Telegram invokes SDK login, then either continues or shows canonical say-hi.
-Remove the old recipient-proof/custom-scheme flow completely.
+It merged as 5cc4e681c4b0a90c4f15163911135d61f44b2676; production admission,
+deployment and all 14 unauthenticated auth smoke checks passed. Android PR 52
+remains stacked on PR 51; both now inherit the trusted ZIP review tooling from
+PR 53. Product ReviewGPT and current-head hosted checks remain merge gates.
 
-Say-hi matches iOS: a "Telegram connected" badge, "Say hi to Murph", a primary
-"Message Murph" that opens the bot chat, a "Waiting for your message…" row and
-"Use your phone number instead". While the step is resumed, AppSession reads
-only the onboarding projection every four seconds (immediately on return) and
-re-enters admission once awaiting-inbound clears. Probe failures stay silent.
+## Product behavior
 
-The SDK source and tests are implemented. The human authorized GitHub's built-in
-workflow token with packages:read and contents:read, using github.actor as the
-Maven username. Local use requires the refreshed gh token to show read:packages;
-capture it only in the Gradle process environment. No custom package-token
-secret is required or changed. Cross-organization package resolution is qualified in hosted CI and locally.
+Default phone and SMS-code controls reuse login styling. Send code is followed
+by an or divider and outline Connect Telegram. The official SDK is unmodified.
+Telegram approval either continues after the accepted welcome or shows a
+Telegram connected badge, Say hi to Murph, Message Murph, Waiting for your
+message… and Use your phone number instead. While resumed, AppSession checks
+only the onboarding projection every four seconds and immediately on return,
+then re-enters admission once awaiting-inbound clears. Probe failures stay quiet.
 
-The installed package's current signing certificate selects the Play or upload
-redirect at runtime, with both hosts declared in verified App Link filters.
-Unit tests cover both certificates and unknown/missing/multiple signers and
-wrong package names. Both published assetlinks files confirm ai.withmurph.app
-and their respective expected certificate. Unknown installed signers fail closed.
+The installed signing certificate selects the Play or upload redirect at
+runtime; both hosts have verified App Link filters. Tests cover both known
+certificates and reject unknown/missing/multiple signers and wrong packages.
+The published assetlinks files were checked against both expected fingerprints.
+No bot-link token, recipient proof, bot code or custom return scheme remains.
+Proof, phone and SMS code stay in memory. SDK callbacks, timeout and explicit
+Cancel end pending login; member/session and revision fences reject late results.
 
-Remaining: final pushed-head capture confirmation,
-manual ReviewGPT with normal context/response validation, hosted CI, rebase or
-retarget after PR 51, then merge. Do not change review-gpt, canary pins or publish
-an app. Physical-device SDK approval, real SMS and bot delivery remain unverified.
+## Build and review boundaries
 
-## Independent credential-wiring review
+CI uses only the built-in GitHub token with contents/packages read permissions
+and github.actor as the Maven username. Local Gradle receives the read:packages
+gh token only in its process environment. No package-token secret is required.
+Cross-organization resolution passed locally and in hosted CI. The official
+SDK POM omits license metadata; the existing policy pins its MIT fallback to
+an immutable official source LICENSE.
 
-A fresh read-only reviewer checked settings.gradle.kts and the three affected
-workflow credential environments against origin/main revision
-3fb40c0c1eae151cdaaf38c40f6edbfff3708308. The narrow workflow contract-test allowance was also independently reviewed.
-No code findings: registry scope,
-permissions, verification commands and protected E2E dispatch checks are intact.
-The human-authorized one-PR-per-repo SDK wiring is the narrow exception to the
-normal control-change split; product ReviewGPT remains separately required.
-No secrets were added or changed. Fork builds still fail closed without access.
-The review-tooling verification passes, including the exact allowed secret
-reference and rejection of all other workflow secret references.
+The independent control-plane review for PR 53 covers the exact 0.5.153 pin,
+lockfile integrity, package-specific age exception, disabled lifecycle scripts,
+guarded tracked-source ZIP, capture validation and narrow workflow token wiring.
+PR 52 inherits those controls unchanged. Run normal ZIP ReviewGPT in Hercules
+with the fixed prompt and exact PR/head/body context after verification and
+final capture. Follow docs/review-workflow.md for failures and dispositions.
 
-The fresh independent control review passed the built-in workflow-token update
-against the same trusted base checklist: only read permissions, the fixed
-registry/module filter, bounded step environments and exact test allowance.
-Local auth confirms read:packages. The initial package HTTP 401 was transient;
-a fresh authenticated request and full Gradle verification succeeded. Hosted
-Android CI also resolved the package with its built-in token and passed.
-The official POM omits license metadata, so the existing policy records an
-exact-version MIT fallback linked to the immutable official source LICENSE.
+## Evidence and remaining work
 
-Full local verification passed: Debug 609 tests; Release, hosted-E2E,
-production-canary and synthetic 599 tests each; no failures or skips. Debug and
-Release lint, assembly, merged-manifest checks, license policy and 37 script
-checks passed. All five runtime certificate-selection tests pass. Review tooling
-passed 13 checks. No production credentials or real members were used.
+The earlier 26-state T7 evidence covered ordinary errors and maximum-font full
+containment, scroll-end clearance and return to Sign out. The later say-hi
+redesign changes visible output, so recapture the final rebased head and replace
+stale APK/visual claims before ReviewGPT. Inspect every raw synthetic capture;
+never substitute a mockup or include private member data. Compare corresponding
+Android/iOS states in supplemental sheets while retaining the raw evidence.
 
-Inspected fresh synthetic emulator captures for login baseline and all 15
-messaging states against iOS captures: phone, SMS code, say-hi, confirming,
-invalid number/code, conflict, rate limit, fresh login, approval, network,
-Telegram cancellation/unavailable/conflict, and large text. Retired bot-link
-screens are deleted. Native font scaling differs at maximum accessibility size;
-both screens retain the same control order and scrollable content. The paired
-sheets are supplemental comparisons, not substitutes for raw emulator evidence.
-
-## Shared lifecycle correction
-
-iOS review reproduced premature cancellation when returning during unfinished
-provider login. Android shared that heuristic; delete it here as well. Scene
-activation is not authentication completion. Keep SDK callbacks and the timeout;
-explicit Cancel invalidates the current coordinator revision and cancels pending
-SDK work. A late start or success cannot link after cancellation. Refresh the
-waiting-state visual proof and rerun verification before review.
-
-The correction passes full local verification: Debug 610 tests and 600 tests
-in each remaining variant, plus lint, assembly, manifest/license checks and all
-13 review-tooling checks. Fresh exact-head visual proof and ReviewGPT remain
-required before merge.
-
-T4 captured all 15 messaging states plus the login baseline at source head
-5232dc0def91648ed755662e8ccefbb57f6ec45b. Both the GUI operator and parent
-inspected all 16 raw PNGs. Their recorded hashes match and only raw emulator
-image/color chunks are present. Waiting includes explicit Cancel. Fresh iOS
-captures and final evidence-head confirmation remain pending; no physical
-provider flow is claimed.
-
-The maximum-font-scale instrumented UI check passes at 2.0 across phone, phone
-conflict, Telegram conflict, code, say-hi and waiting. Each relevant control is
-scrolled into view; Sign out remains reachable after returning to the top.
-The matching iOS Accessibility XXXL check also passes. These test-only changes
-do not alter shipped UI or invalidate the captured layout; final-head evidence
-confirmation and product ReviewGPT remain required.
-
-## Full control containment
-
-T6 confirmed the Android layout already fits at font scale 2.0. Unlike the iOS
-outline style, Android uses minimum button heights and unrestricted text wrapping,
-so no Android production layout change is needed. The six-state instrumented
-check now compares each control's clipped bounds with its measured dimensions
-and verifies containment in the root viewport, including the return to Sign out.
-It passes, as do full verify and the 13 review-tooling checks. T7 will recapture
-the paired large-text states after the iOS fixed-height correction; ReviewGPT
-and exact-head evidence remain merge gates.
-
-
-T7 completed 26 raw synthetic captures at a6004c54c80f5c4b23a889128fc1a48c08b1a0c3.
-Every image and capture hash was independently inspected, including scroll end
-and return to Sign out for maximum-text phone, conflicts, code and say-hi.
-All labels, borders and bottom clearance are visible. The evidence commit changes
-only images and these notes; the synthetic APK is byte-identical to T7:
-beaff011410b324ff72683076aa5702d08cc46e7b31abeef8213f7af637cba99.
-All 25 Android/iOS pairs and nine comparison sheets were inspected after iOS
-XCUITest screenshots resolved the GUI capture limitation. No production code
-changed, and real provider/device proof remains open. ReviewGPT remains required.
-
-## Review launcher recovery
-
-The human authorized updating the pinned development-only review launcher to
-0.5.153 for the repaired model picker, using Hercules for the normal automated
-GitHub-connector review. Manifest, lockfile and exact installed-version checks
-move together; the release-age exception stays limited to this exact package
-version and lifecycle scripts remain disabled. A fresh independent read-only
-review verified the registry tarball integrity, unchanged transitive graph and
-unchanged prompt/runner/validator boundaries: no findings. Frozen installation
-and all 13 review-tooling checks pass. No app or synthetic build input changes.
-Backend PR 4059 and iOS PR 177 have merged; backend production admission and all
-14 unauthenticated auth smoke checks passed. Android still requires a valid
-product PASS before merging PR 51 and updating this PR onto main.
+Run full verification and synthetic instrumentation in the foreground. Keep
+both PRs unmerged until the required reviews/checks pass; merge PR 51 before
+PR 52. Do not publish an app or change secrets/canary pins. Real Telegram
+approval and App Link return under both certificates, real SMS/autofill,
+TalkBack/keyboard on physical devices and signed Play qualification remain
+unverified release gates.
