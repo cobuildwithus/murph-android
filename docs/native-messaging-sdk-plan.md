@@ -1,6 +1,6 @@
 # Native messaging SDK completion
 
-Status: T11 evidence inspected; product ReviewGPT pending
+Status: accepted lifecycle finding corrected; fresh evidence and review pending
 
 Backend PR 4059 owns credential policy and fresh single-use Telegram proofs.
 It merged as 5cc4e681c4b0a90c4f15163911135d61f44b2676; production admission,
@@ -60,3 +60,15 @@ PR 52. Do not publish an app or change secrets/canary pins. Real Telegram
 approval and App Link return under both certificates, real SMS/autofill,
 TalkBack/keyboard on physical devices and signed Play qualification remain
 unverified release gates.
+
+## Accepted review correction
+
+Foreground say-hi probes remain lifecycle-cancellable. A successful probe hands
+canonical admission to the existing applicationScope and awaits its independent
+child. Pausing cancels only the caller, not admission. The handoff repeats member,
+epoch, persisted-owner and pending-sign-out checks, and the existing refresh
+flag coalesces duplicate probes. No new scope or state owner is introduced.
+Regressions suspend admission across pause/resume for success and actionable
+failure, cancel an unfinished probe without admission/health work, and reject a
+queued handoff after sign-out. The inherited PR 51 routing correction preserves
+the confirming capsule in Launching. Native sign-out remains available.

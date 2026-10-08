@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(messagingState.stage) {
                 if (messagingState.stage != ai.withmurph.companion.auth.MessagingStage.SayHi) return@LaunchedEffect
                 lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                    graph.messaging.awaitTelegramInbound { graph.session.checkTelegramInbound() }
+                    graph.messaging.awaitTelegramInbound { graph.session.checkTelegramInbound(graph.applicationScope) }
                 }
             }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {

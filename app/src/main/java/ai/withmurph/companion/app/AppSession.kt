@@ -46,6 +46,7 @@ import ai.withmurph.companion.core.UnsupportedAddressBookContactSource
 import ai.withmurph.companion.core.UNKNOWN_HEALTH_RESOURCE_KEY
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -4888,7 +4889,7 @@ class AppSession(
      * Telegram message has made them deliverable. Failures stay silent; the
      * step keeps waiting.
      */
-    suspend fun checkTelegramInbound(): Boolean {
+    suspend fun checkTelegramInbound(applicationScope: CoroutineScope): Boolean {
         val current = _state.value
         val memberKey = currentMemberKey
         if (
@@ -4911,7 +4912,14 @@ class AppSession(
             projection.telegramAwaitingInbound ||
             projection.messagingSetupRequired
         ) return false
-        return refreshMessagingSetup()
+        // Only the probe belongs to the resumed UI. Admission must finish even
+        // when that caller pauses or the say-hi composable leaves composition.
+        return applicationScope.async {
+            if (
+                epoch == sessionEpoch && memberKey == currentMemberKey &&
+                memberKey == localState.memberKey && !localState.signOutPending
+            ) refreshMessagingSetup() else false
+        }.await()
     }
 
     private fun ownsInitialOnboardingWork(memberKey: String, epoch: Int): Boolean =

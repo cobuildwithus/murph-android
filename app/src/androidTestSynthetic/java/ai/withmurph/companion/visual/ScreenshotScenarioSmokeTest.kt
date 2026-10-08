@@ -34,15 +34,20 @@ class ScreenshotScenarioSmokeTest {
     val compose = createEmptyComposeRule()
 
     @Test
-    fun launchingMessagingRefreshKeepsTheCapsuleAndBlocksActions() {
+    fun launchingMessagingAdmissionKeepsProgressAndSignOutReachable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val intent = Intent(context, ScreenshotActivity::class.java)
-            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
-        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
-            compose.onNodeWithText("Choose how to message Murph").assertIsDisplayed()
-            compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
-            compose.onNodeWithText("Sign out").performScrollTo().performClick()
-            scenario.onActivity { assertEquals(0, it.signOutRequests) }
+        for (state in listOf("connected", "say-hi")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
+                .putExtra("messagingState", state)
+            ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+                compose.onNodeWithText(if (state == "say-hi") "Say hi to Murph" else "Choose how to message Murph").assertIsDisplayed()
+                compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                if (state == "say-hi") compose.onNodeWithText("Message Murph").assertIsNotEnabled()
+                // Native linking retains its existing sign-out escape during admission.
+                compose.onNodeWithText("Sign out").performScrollTo().performClick()
+                scenario.onActivity { assertEquals(1, it.signOutRequests) }
+            }
         }
     }
 
