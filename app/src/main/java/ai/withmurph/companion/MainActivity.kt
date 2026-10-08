@@ -113,6 +113,14 @@ class MainActivity : ComponentActivity() {
                 if (appState.phase == ai.withmurph.companion.app.AppPhase.NeedsLogin ||
                     appState.phase == ai.withmurph.companion.app.AppPhase.Ready && !appState.messagingSetupRequired) graph.messaging.reset()
             }
+            // Checks right away on return from Telegram, then keeps checking
+            // while the say-hi step is on screen.
+            LaunchedEffect(messagingState.stage) {
+                if (messagingState.stage != ai.withmurph.companion.auth.MessagingStage.SayHi) return@LaunchedEffect
+                lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    graph.messaging.awaitTelegramInbound { graph.session.checkTelegramInbound() }
+                }
+            }
             LaunchedEffect(appState.pendingHealthPermissionRequestId) {
                 val requestId = appState.pendingHealthPermissionRequestId ?: return@LaunchedEffect
                 lifecycle.withResumed {
@@ -414,9 +422,6 @@ class MainActivity : ComponentActivity() {
                 healthSyncNotificationRecoveryNeeded = false
             }
             graph.applicationScope.launch {
-                if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.SayHi) {
-                    graph.session.refreshMessagingSetup()
-                }
                 graph.session.didBecomeActive()
             }
         }

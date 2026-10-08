@@ -63,7 +63,7 @@ class ScreenshotScenarioSmokeTest {
                         compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertFullyContained()
                         listOf("Use a different number")
                     }
-                    "say-hi" -> listOf("Open Telegram")
+                    "say-hi" -> listOf("Message Murph", "Use your phone number instead")
                     "waiting" -> emptyList()
                     else -> {
                         compose.onNodeWithContentDescription("Country or region", substring = true)

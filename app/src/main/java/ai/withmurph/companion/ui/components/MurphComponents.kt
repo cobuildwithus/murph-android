@@ -64,6 +64,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -184,6 +185,8 @@ fun MurphLinkButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.heightIn(min = 44.dp),
+        // A pill shape clips the ends of a label that wraps at large text.
+        shape = RoundedCornerShape(8.dp),
         contentPadding = PaddingValues(horizontal = 0.dp, vertical = 10.dp),
         colors = ButtonDefaults.textButtonColors(
             contentColor = MurphColors.SageDark,
@@ -193,6 +196,7 @@ fun MurphLinkButton(
         Text(
             text = text,
             style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+            textAlign = TextAlign.Center,
         )
     }
 }

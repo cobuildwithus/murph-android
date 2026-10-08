@@ -51,6 +51,24 @@ class MessagingSetupCoordinatorTest {
         model.restoreAwaitingInbound(model.state.value.telegramUrl)
         assertEquals(1, api.starts)
     }
+    @Test fun sayHiKeepsCheckingUntilDeliverable() = runTest {
+        val model = MessagingSetupCoordinator(Auth(), Api())
+        model.restoreAwaitingInbound("https://t.me/synthetic_bot")
+        var checks = 0
+        model.awaitTelegramInbound(intervalMs = 1) { ++checks == 3 }
+        assertEquals(3, checks)
+    }
+    @Test fun sayHiStopsCheckingAfterSwitchingToPhone() = runTest {
+        val model = MessagingSetupCoordinator(Auth(), Api())
+        model.restoreAwaitingInbound("https://t.me/synthetic_bot")
+        var checks = 0
+        model.awaitTelegramInbound(intervalMs = 1) { checks++; model.changeNumber(); false }
+        assertEquals(1, checks)
+        assertEquals(MessagingStage.Phone, model.state.value.stage)
+        assertNull(model.state.value.telegramUrl)
+        model.awaitTelegramInbound(intervalMs = 1) { checks++; false }
+        assertEquals("The phone step never polls Telegram readiness", 1, checks)
+    }
     @Test fun cancelledAndUnavailableLoginStayInlineAndRetryable() = runTest {
         val api = Api(); val model = MessagingSetupCoordinator(Auth(), api)
         for (reason in listOf(MessagingLinkException.Reason.TelegramCancelled, MessagingLinkException.Reason.TelegramUnavailable)) {

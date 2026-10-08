@@ -25,6 +25,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.autofill.ContentType
 import ai.withmurph.companion.app.AppUiState
+import ai.withmurph.companion.ui.components.MurphIcon
+import ai.withmurph.companion.ui.components.MurphIconKind
 import ai.withmurph.companion.ui.components.MurphLinkButton
 import ai.withmurph.companion.ui.components.MurphLogo
 import ai.withmurph.companion.ui.components.MurphPrimaryButton
@@ -114,14 +116,18 @@ fun MessagingSetupScreen(
                 MurphLinkButton("Sign out", onSignOut)
             }
             if (link.stage != MessagingStage.Code) {
+                val sayHi = link.stage == MessagingStage.SayHi
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (sayHi) TelegramConnectedBadge()
+                    Text(
+                        if (sayHi) "Say hi to Murph" else "Choose how to message Murph",
+                        modifier = Modifier.semantics { heading() },
+                        style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp, lineHeight = 42.sp),
+                        color = MurphColors.Slate,
+                    )
+                }
                 Text(
-                    "Choose how to message Murph",
-                    modifier = Modifier.semantics { heading() },
-                    style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp, lineHeight = 42.sp),
-                    color = MurphColors.Slate,
-                )
-                Text(
-                    if (link.stage == MessagingStage.SayHi) "Say hi to Murph on Telegram."
+                    if (sayHi) "Send Murph a quick message so it can reply to you."
                     else "Message Murph from your phone.",
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 22.sp),
                     color = MurphColors.SlateMuted,
@@ -165,10 +171,27 @@ fun MessagingSetupScreen(
                     MurphLinkButton("Use a different number", onChangeNumber, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
                 MessagingStage.SayHi -> {
-                    MurphPrimaryButton("Open Telegram", onTelegram, enabled = !busy)
-                    state.messagingSetupMessage?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        MurphPrimaryButton("Message Murph", onTelegram, enabled = !busy)
+                        Row(
+                            modifier = Modifier.semantics(mergeDescendants = true) {},
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MurphColors.SageDark, strokeWidth = 2.dp)
+                            Text("Waiting for your message…", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                                color = MurphColors.SlateMuted)
+                        }
+                        state.messagingSetupMessage?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = MurphColors.SlateMuted)
+                        }
                     }
+                    MurphLinkButton("Use your phone number instead", onChangeNumber, enabled = !busy,
+                        modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
                 MessagingStage.Connected -> {
                     Text("Account connected. Let’s continue setting up Murph.", color = MurphColors.SlateMuted)
@@ -209,6 +232,22 @@ fun MessagingSetupScreen(
                     modifier = Modifier.semantics { contentDescription = "Cancel Telegram login" })
             }
         }
+    }
+}
+
+@Composable
+private fun TelegramConnectedBadge() {
+    Row(
+        modifier = Modifier
+            .background(MurphColors.MutedSurface, RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MurphIcon(MurphIconKind.CheckCircle, Modifier.size(18.dp))
+        Text("Telegram connected", style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+            color = MurphColors.SageDark)
     }
 }
 

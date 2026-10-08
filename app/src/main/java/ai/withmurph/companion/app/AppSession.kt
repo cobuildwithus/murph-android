@@ -4867,7 +4867,11 @@ class AppSession(
             _state.update {
                 it.copy(
                     isMessagingSetupRefreshing = false,
-                    messagingSetupMessage = if (it.phase == AppPhase.Ready && it.messagingSetupRequired) {
+                    // The say-hi step already explains a Telegram link that is
+                    // waiting for the member's first message.
+                    messagingSetupMessage = if (
+                        it.phase == AppPhase.Ready && it.messagingSetupRequired && !it.telegramAwaitingInbound
+                    ) {
                         MESSAGING_SETUP_PENDING_MESSAGE
                     } else {
                         null
@@ -4876,6 +4880,38 @@ class AppSession(
             }
         }
         return _state.value.phase == AppPhase.Ready && !_state.value.messagingSetupRequired
+    }
+
+    /**
+     * Cheap readiness probe for the Telegram say-hi step. Reads only the
+     * onboarding projection and re-enters admission once the member's first
+     * Telegram message has made them deliverable. Failures stay silent; the
+     * step keeps waiting.
+     */
+    suspend fun checkTelegramInbound(): Boolean {
+        val current = _state.value
+        val memberKey = currentMemberKey
+        if (
+            current.phase != AppPhase.Ready ||
+            !current.messagingSetupRequired ||
+            current.isMessagingSetupRefreshing ||
+            memberKey == null
+        ) return false
+        val epoch = sessionEpoch
+        val projection = try {
+            api.fetchInitialOnboarding(memberKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return false
+        }
+        if (
+            epoch != sessionEpoch ||
+            memberKey != currentMemberKey ||
+            projection.telegramAwaitingInbound ||
+            projection.messagingSetupRequired
+        ) return false
+        return refreshMessagingSetup()
     }
 
     private fun ownsInitialOnboardingWork(memberKey: String, epoch: Int): Boolean =

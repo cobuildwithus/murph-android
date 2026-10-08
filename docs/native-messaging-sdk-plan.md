@@ -8,6 +8,12 @@ Use the official SDK unmodified. Default phone and SMS-code controls match iOS;
 Telegram invokes SDK login, then either continues or shows canonical say-hi.
 Remove the old recipient-proof/custom-scheme flow completely.
 
+Say-hi matches iOS: a "Telegram connected" badge, "Say hi to Murph", a primary
+"Message Murph" that opens the bot chat, a "Waiting for your message…" row and
+"Use your phone number instead". While the step is resumed, AppSession reads
+only the onboarding projection every four seconds (immediately on return) and
+re-enters admission once awaiting-inbound clears. Probe failures stay silent.
+
 The SDK source and tests are implemented. The human authorized GitHub's built-in
 workflow token with packages:read and contents:read, using github.actor as the
 Maven username. Local use requires the refreshed gh token to show read:packages;

@@ -3,6 +3,7 @@ package ai.withmurph.companion.auth
 import ai.withmurph.companion.core.AuthProvider
 import ai.withmurph.companion.core.AuthSessionState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -113,6 +114,14 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         revision++
         mutableState.value = state.value.copy(busy = false, telegramLogin = false,
             error = MessagingLinkException.Reason.TelegramCancelled.message)
+    }
+
+    /** Re-checks readiness while the say-hi step is showing; returns once the member is deliverable or leaves the step. */
+    suspend fun awaitTelegramInbound(intervalMs: Long = 4_000, check: suspend () -> Boolean) {
+        while (state.value.stage == MessagingStage.SayHi) {
+            if (check()) return
+            delay(intervalMs)
+        }
     }
 
     fun restoreAwaitingInbound(url: String?) {

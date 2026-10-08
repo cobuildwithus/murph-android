@@ -1759,6 +1759,41 @@ class AppSessionTest {
     }
 
     @Test
+    fun telegramInboundProbeWaitsQuietlyThenEntersAdmission() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = completedInitialOnboarding().copy(telegramAwaitingInbound = true)
+        fixture.session.start()
+        val fetchesAfterStart = fixture.api.initialOnboardingFetches.size
+
+        assertFalse(fixture.session.checkTelegramInbound())
+
+        assertTrue(fixture.session.state.value.messagingSetupRequired)
+        assertTrue(fixture.session.state.value.telegramAwaitingInbound)
+        assertNull(fixture.session.state.value.messagingSetupMessage)
+        assertEquals(fetchesAfterStart + 1, fixture.api.initialOnboardingFetches.size)
+        assertEquals(0, fixture.health.identifyCalls)
+
+        fixture.api.initialOnboarding = completedInitialOnboarding()
+        assertTrue(fixture.session.checkTelegramInbound())
+
+        assertFalse(fixture.session.state.value.messagingSetupRequired)
+        assertFalse(fixture.session.state.value.telegramAwaitingInbound)
+        assertNull(fixture.session.state.value.messagingSetupMessage)
+    }
+
+    @Test
+    fun telegramAwaitingRefreshLeavesSayHiWithoutRetryMessage() = runTest {
+        val fixture = fixture()
+        fixture.api.initialOnboarding = completedInitialOnboarding().copy(telegramAwaitingInbound = true)
+        fixture.session.start()
+
+        assertFalse(fixture.session.refreshMessagingSetup())
+
+        assertTrue(fixture.session.state.value.telegramAwaitingInbound)
+        assertNull(fixture.session.state.value.messagingSetupMessage)
+    }
+
+    @Test
     fun messagingSetupRequirementHoldsMemberWithoutStartingHealth() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding =
