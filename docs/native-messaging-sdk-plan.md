@@ -1,12 +1,12 @@
 # Native messaging SDK completion
 
-Status: final evidence and product ReviewGPT pending
+Status: T11 evidence inspected; product ReviewGPT pending
 
 Backend PR 4059 owns credential policy and fresh single-use Telegram proofs.
 It merged as 5cc4e681c4b0a90c4f15163911135d61f44b2676; production admission,
 deployment and all 14 unauthenticated auth smoke checks passed. Android PR 52
 remains stacked on PR 51; both now inherit the trusted ZIP review tooling from
-PR 53. Product ReviewGPT and current-head hosted checks remain merge gates.
+PRs 53 and 54. Product ReviewGPT and current-head hosted checks remain merge gates.
 
 ## Product behavior
 
@@ -38,18 +38,21 @@ an immutable official source LICENSE.
 The independent control-plane review for PR 53 covers the exact 0.5.153 pin,
 lockfile integrity, package-specific age exception, disabled lifecycle scripts,
 guarded tracked-source ZIP, capture validation and narrow workflow token wiring.
-PR 52 inherits those controls unchanged. Run normal ZIP ReviewGPT in Hercules
+PR 52 inherits those controls unchanged. Run normal ZIP ReviewGPT in a signed-in managed lane
 with the fixed prompt and exact PR/head/body context after verification and
 final capture. Follow docs/review-workflow.md for failures and dispositions.
 
 ## Evidence and remaining work
 
-The earlier 26-state T7 evidence covered ordinary errors and maximum-font full
-containment, scroll-end clearance and return to Sign out. The later say-hi
-redesign changes visible output, so recapture the final rebased head and replace
-stale APK/visual claims before ReviewGPT. Inspect every raw synthetic capture;
-never substitute a mockup or include private member data. Compare corresponding
-Android/iOS states in supplemental sheets while retaining the raw evidence.
+T11 captured all 26 ordinary/error/maximum-font states at source head
+19748fb3fe050e95a36c8f95c3730a285afbe5bd. Both the capture agent and parent
+inspected every raw image, full control containment, scroll-end bottom clearance
+and return to Sign out. The synthetic APK SHA-256 is
+7dc00c274b213ac28bac2e3d57da6a804c6961b78ecce4982983989fbbffd79e.
+Capture metadata and image hashes are retained beside the durable images.
+Evidence-only commits do not change application/build inputs. Supplemental
+T11 sheets pair 25 corresponding states with iOS PR 177 and the merged PR 183
+say-hi redesign. Platform font scaling differs, but labels/actions are complete.
 
 Run full verification and synthetic instrumentation in the foreground. Keep
 both PRs unmerged until the required reviews/checks pass; merge PR 51 before

@@ -1,0 +1,60 @@
+{
+  "capturedBy": "claude-code (adb screencap, no GUI)",
+  "task": "T11",
+  "gitHeadStart": "19748fb3fe050e95a36c8f95c3730a285afbe5bd",
+  "gitHeadEnd": "19748fb3fe050e95a36c8f95c3730a285afbe5bd",
+  "startUtc": "2026-10-08T17:58:15Z",
+  "endUtc": "2026-10-08T18:02:51Z",
+  "device": {
+    "serial": "emulator-5584",
+    "avd": "murph_native_sdk_evidence",
+    "model": "Pixel 7 API 36",
+    "systemFontScale": 1.0,
+    "density": 420,
+    "size": "1080x2400"
+  },
+  "package": "ai.withmurph.app.synthetic",
+  "apkSha256": "7dc00c274b213ac28bac2e3d57da6a804c6961b78ecce4982983989fbbffd79e",
+  "settleSeconds": 8,
+  "images": {
+    "approval.png": "943cab5f9c151f72a6a6e12405f30c8c8182423a61fb41c6a0881781fb4ca72b",
+    "code.png": "6d4a334cd65fd6d9f8aa43cc24cb1610c1bed83e8e2f1e70a50003a0e6be0933",
+    "contact-in-use.png": "c92f69a58d9c2d538ae4c9c2894b3e162c6860c46d490f10d4fcf2a9fe70953e",
+    "fresh-login.png": "556e6f53d605eea6c199c9933dc9f814e968185789b8cf95929ffd2f55580ca3",
+    "invalid-code.png": "4014a68118c54c351b73743a2378d7ffafb4c3fc4b5f7381fc967fcdeb067319",
+    "invalid-number.png": "345e92ac85ca5dfb3072a168a1eafdd56c41bf0a1fab2f8e1c64153b76991b5a",
+    "large-text-code-returned.png": "bda930d61bad24ba824b143fafb0a9328fb7b7e379cbcd1468a4e8d2721fde3f",
+    "large-text-code-scrolled.png": "bda930d61bad24ba824b143fafb0a9328fb7b7e379cbcd1468a4e8d2721fde3f",
+    "large-text-contact-in-use-returned.png": "8dc7566e44575eac8430d669daa0994dc2d1d201f69d2a5f18c63fce7273adc8",
+    "large-text-contact-in-use-scrolled.png": "352313f01a4527414efc61b9dbe4919ac4f70731cd62cbbfc430ca8274c420c2",
+    "large-text-returned.png": "a6d0620f6601b31423bca3cffbb4ce94083013d8118fd5eb866251cd62e57e52",
+    "large-text-say-hi-returned.png": "09299417d892596fddb280cf3e0b4a6a9a7449dd4f1e011bcf7a1753fe230aa2",
+    "large-text-say-hi-scrolled.png": "09299417d892596fddb280cf3e0b4a6a9a7449dd4f1e011bcf7a1753fe230aa2",
+    "large-text-scrolled.png": "a6d0620f6601b31423bca3cffbb4ce94083013d8118fd5eb866251cd62e57e52",
+    "large-text-telegram-conflict-returned.png": "723c23cd58c5b1946434f113b216715d87d8beba9b0af4bbb29a81ef591cd743",
+    "large-text-telegram-conflict-scrolled.png": "eebb5c2d2c28efba7e919e435beb9d1eff0a1542bbc50ce6ca72e14a162f8f55",
+    "large-text.png": "a6d0620f6601b31423bca3cffbb4ce94083013d8118fd5eb866251cd62e57e52",
+    "login.png": "0312233d99a9116e3d4c22801e761f283dee6688bc5ab82198006b3adf70c55e",
+    "phone.png": "af6eae88e4a451382ea5340356955faa3ddce8adf946873bbb4da7e9165c6205",
+    "rate-limited.png": "dd5c9afffbb31eb86c51ad63edd0079d3c551333815e837fa2774df607b71bab",
+    "say-hi.png": "b2c9dcdea1ddba9cb67ed298ab7df3b6afcd89a9f3d0a4e201e10afa36952bc2",
+    "telegram-cancelled.png": "3b784be7274375209ce1d6adae2f10e9072961ab4e9ac32d5ca8ead79fef05b5",
+    "telegram-conflict.png": "7809e2cab63e65f8669362053ea832034c8eaaa297028ddc1c1615713adc07f3",
+    "telegram-unavailable.png": "a4d78735e30a488b47f5d7044136e279554ac45a0252d572b77cad98e7b374c4",
+    "unavailable.png": "2a50b3b663f220b2999da9e80f86b539e99bb25395581a18edfcfa32f5df5e71",
+    "waiting.png": "afae021f5edf212912280581c60377ce2774b04fa5815332601832320f88dd38"
+  },
+  "inspection": {
+    "result": "pass",
+    "sayHi": "Shows Telegram connected badge, Say hi to Murph, Message Murph, Waiting for your message\u2026 and Use your phone number instead; at 2.0 the wrapped link is centered and unclipped.",
+    "maximumText": "At font scale 2.0 phone, code and say-hi fit without scrolling, so scrolled and returned match (no scroll displacement needed). contact-in-use and telegram-conflict scroll; their final actions are fully visible with bottom clearance, and Sign out is reachable on return.",
+    "controls": "All labels complete, primary/outline borders intact, or-divider intact, inline recovery links present, top Sign out reachable in every capture.",
+    "differences": "Below the status bar 14 captures are pixel-identical to committed evidence. code/invalid-code (Resend), large-text-code-* (Resend, Use a different number) and login (Use email instead) differ only by anti-aliasing from the link-button TextAlign/shape change, with no visible movement. Max-text phone/conflict captures differ by 8 pixels at the scrollbar fade."
+  },
+  "parentInspection": {
+    "reviewer": "codex-cli",
+    "result": "pass",
+    "imagesInspected": 26,
+    "notes": "Every raw image inspected. Complete control labels and borders; maximum-text scroll-end controls have bottom clearance and returning exposes Sign out. Raw screenshot bytes preserved."
+  }
+}
