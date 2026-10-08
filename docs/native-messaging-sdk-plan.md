@@ -12,8 +12,7 @@ The SDK source and tests are implemented. The human authorized GitHub's built-in
 workflow token with packages:read and contents:read, using github.actor as the
 Maven username. Local use requires the refreshed gh token to show read:packages;
 capture it only in the Gradle process environment. No custom package-token
-secret is required or changed. Cross-organization package resolution is not yet
-qualified.
+secret is required or changed. Cross-organization package resolution is qualified in hosted CI and locally.
 
 The installed package's current signing certificate selects the Play or upload
 redirect at runtime, with both hosts declared in verified App Link filters.
@@ -21,8 +20,7 @@ Unit tests cover both certificates and unknown/missing/multiple signers and
 wrong package names. Both published assetlinks files confirm ai.withmurph.app
 and their respective expected certificate. Unknown installed signers fail closed.
 
-Remaining: compile and unit/UI verification, exact-head synthetic captures and
-side-by-side inspection,
+Remaining: final pushed-head capture confirmation,
 manual ReviewGPT with normal context/response validation, hosted CI, rebase or
 retarget after PR 51, then merge. Do not change review-gpt, canary pins or publish
 an app. Physical-device SDK approval, real SMS and bot delivery remain unverified.
@@ -43,10 +41,22 @@ reference and rejection of all other workflow secret references.
 The fresh independent control review passed the built-in workflow-token update
 against the same trusted base checklist: only read permissions, the fixed
 registry/module filter, bounded step environments and exact test allowance.
-Local auth confirms read:packages. The full Gradle verifier passed its 37
-script checks, then the official package POM download returned HTTP 401
-Unauthorized with the refreshed token. No app compile/unit-test pass is claimed.
-Review-tooling verification passed all 13 checks. CI resolved the SDK with the authorized built-in token and compiled the Debug,
-hosted-E2E and production-canary Kotlin targets. Its license inventory then
-failed because the upstream POM omits license metadata. Added the exact 1.0.0
-MIT fallback using the official immutable source LICENSE; verification continues.
+Local auth confirms read:packages. The initial package HTTP 401 was transient;
+a fresh authenticated request and full Gradle verification succeeded. Hosted
+Android CI also resolved the package with its built-in token and passed.
+The official POM omits license metadata, so the existing policy records an
+exact-version MIT fallback linked to the immutable official source LICENSE.
+
+Full local verification passed: Debug 609 tests; Release, hosted-E2E,
+production-canary and synthetic 599 tests each; no failures or skips. Debug and
+Release lint, assembly, merged-manifest checks, license policy and 37 script
+checks passed. All five runtime certificate-selection tests pass. Review tooling
+passed 13 checks. No production credentials or real members were used.
+
+Inspected fresh synthetic emulator captures for login baseline and all 15
+messaging states against iOS captures: phone, SMS code, say-hi, confirming,
+invalid number/code, conflict, rate limit, fresh login, approval, network,
+Telegram cancellation/unavailable/conflict, and large text. Retired bot-link
+screens are deleted. Native font scaling differs at maximum accessibility size;
+both screens retain the same control order and scrollable content. The paired
+sheets are supplemental comparisons, not substitutes for raw emulator evidence.
