@@ -162,6 +162,11 @@ internal fun readyAppShellState(
     )
 }
 
+internal fun showsMessagingSetup(state: AppUiState): Boolean =
+    state.messagingSetupRequired && state.launchConsentRecovery == null &&
+        (state.phase == AppPhase.Ready ||
+            state.phase == AppPhase.Launching && state.isMessagingSetupRefreshing)
+
 @Composable
 fun MurphApp(
     appState: AppUiState,
@@ -175,17 +180,17 @@ fun MurphApp(
     showLoginFormInitially: Boolean = false,
     showReminderSetup: Boolean = false,
 ) {
-    when (val phase = appState.phase) {
+    if (showsMessagingSetup(appState)) {
+        MessagingSetupScreen(
+            state = appState,
+            onOpenAccountSettings = actions.onOpenMessagingSettings,
+            onConfirmConnected = actions.onRefreshMessagingSetup,
+            onSignOut = actions.onSignOut,
+        )
+    } else when (val phase = appState.phase) {
         AppPhase.Launching -> LoadingScreen()
         AppPhase.NeedsLogin -> SignedOutApp(loginState, actions, showLoginFormInitially)
-        AppPhase.Ready -> if (appState.messagingSetupRequired && appState.launchConsentRecovery == null) {
-            MessagingSetupScreen(
-                state = appState,
-                onOpenAccountSettings = actions.onOpenMessagingSettings,
-                onConfirmConnected = actions.onRefreshMessagingSetup,
-                onSignOut = actions.onSignOut,
-            )
-        } else ReadyApp(
+        AppPhase.Ready -> ReadyApp(
             state = appState,
             showReminderSetup = showReminderSetup,
             healthSyncNotificationsAllowed = healthSyncNotificationsAllowed,

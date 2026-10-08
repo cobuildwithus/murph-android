@@ -11,6 +11,23 @@ import org.junit.Test
 
 class MurphAppShellStateTest {
     @Test
+    fun messagingProgressDoesNotOverrideStartupConsentLoginOrFailure() {
+        val refreshing = ai.withmurph.companion.app.AppUiState(
+            phase = AppPhase.Launching, messagingSetupRequired = true, isMessagingSetupRefreshing = true,
+        )
+        assertTrue(showsMessagingSetup(refreshing))
+        assertFalse(showsMessagingSetup(refreshing.copy(isMessagingSetupRefreshing = false)))
+        assertFalse(showsMessagingSetup(refreshing.copy(messagingSetupRequired = false)))
+        assertFalse(showsMessagingSetup(refreshing.copy(phase = AppPhase.NeedsLogin)))
+        assertFalse(showsMessagingSetup(refreshing.copy(phase = AppPhase.Failed("Unavailable"))))
+        assertFalse(showsMessagingSetup(refreshing.copy(
+            launchConsentRecovery = ai.withmurph.companion.app.LaunchConsentRecoveryUiState(
+                phase = ai.withmurph.companion.app.LaunchConsentRecoveryPhase.Required,
+            ),
+        )))
+    }
+
+    @Test
     fun suspendedBoundMemberKeepsSupportAccountAndLegalActionsReachable() {
         val invoked = mutableListOf<String>()
         val actions = failureExternalActions(

@@ -32,6 +32,19 @@ class ScreenshotScenarioSmokeTest {
     val compose = createEmptyComposeRule()
 
     @Test
+    fun launchingMessagingRefreshKeepsTheCapsuleAndBlocksActions() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
+        ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
+            compose.onNodeWithText("Choose how to message Murph").assertIsDisplayed()
+            compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+            compose.onNodeWithText("Sign out").performScrollTo().performClick()
+            scenario.onActivity { assertEquals(0, it.signOutRequests) }
+        }
+    }
+
+    @Test
     fun optionalReminderRequiresExplicitChoiceAndCanBeSkipped() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val intent = Intent(context, ScreenshotActivity::class.java)

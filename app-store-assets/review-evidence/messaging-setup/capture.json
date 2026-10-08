@@ -1,0 +1,24 @@
+{
+  "task": "resumed findings round 2",
+  "gitHeadStart": "55369811598ffced66ab845a95e845e52a18a312",
+  "gitHeadEnd": "55369811598ffced66ab845a95e845e52a18a312",
+  "startUtc": "2026-10-08T18:58:52.982692+00:00",
+  "endUtc": "2026-10-08T18:59:26.851488+00:00",
+  "device": {
+    "serial": "emulator-5584",
+    "model": "Pixel 7 API 36",
+    "systemFontScale": 1.0
+  },
+  "apkSha256": "69b450a479b2cc5de5e34c14040100291970404f9b3929efdfa25f2fd3eca6c8",
+  "images": {
+    "login.png": "b9ebec74c680fbc4f9b276579e83ffca469bd5a00d2e761eacf379909bbb7430",
+    "messaging-setup.png": "510dd505d2910952f3289d624a4703c20c1701633f75b247d25213e727fe8443",
+    "messaging-setup-pending.png": "fec5a62a98a5d7ee7fc86fcfd8b013a5ee1e010770d564ff33d645f90b3f0bd2",
+    "messaging-setup-confirming.png": "eb0a640db3a4ccfbdf64d7c3cd9156c630b7a15b29b6c50f822e0e465158d6a6"
+  },
+  "parentInspection": {
+    "result": "pass",
+    "imagesInspected": 4,
+    "notes": "Raw labels and borders complete. Confirming fixture now renders the production Launching phase, with centered capsule; callbacks remain blocked. Status bar and spinner frame differ from earlier evidence."
+  }
+}

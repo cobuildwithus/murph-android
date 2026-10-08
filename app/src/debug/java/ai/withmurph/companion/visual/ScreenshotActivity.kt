@@ -245,6 +245,7 @@ internal enum class ScreenshotScenario {
     ReminderNotification,
     MessagingSetup,
     MessagingSetupPending,
+    MessagingSetupConfirming,
     AccountFailure,
     Failure;
 
@@ -389,6 +390,11 @@ internal enum class ScreenshotScenario {
         ReminderOn, ReminderBlocked, ReminderNotification ->
             ready(HealthSyncState.Synced(now)).copy(healthSyncReminderEnabled = true)
         MessagingSetup -> ready(HealthSyncState.NotConnected).copy(messagingSetupRequired = true)
+        MessagingSetupConfirming -> ready(HealthSyncState.NotConnected).copy(
+            phase = AppPhase.Launching,
+            messagingSetupRequired = true,
+            isMessagingSetupRefreshing = true,
+        )
         MessagingSetupPending -> ready(HealthSyncState.NotConnected).copy(
             messagingSetupRequired = true,
             messagingSetupMessage = "That account was linked, but Murph is still confirming it. Try again.",
@@ -467,6 +473,7 @@ internal enum class ScreenshotScenario {
     ReminderNotification,
     MessagingSetup,
     MessagingSetupPending,
+    MessagingSetupConfirming,
     AccountFailure,
     Failure -> LoginUiState()
     }

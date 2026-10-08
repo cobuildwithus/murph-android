@@ -1779,6 +1779,43 @@ class AppSessionTest {
     }
 
     @Test
+    fun suspendedMessagingAdmissionKeepsTheProductionRouteForManualAndBrowserRefresh() = runTest {
+        for (browserReturn in listOf(false, true)) {
+            for (outcome in listOf("confirmed", "pending", "failed")) {
+                val fixture = fixture()
+                fixture.api.initialOnboarding = completedInitialOnboarding().copy(messagingSetupRequired = true)
+                fixture.session.start()
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                fixture.api.admissionHandler = { entered.complete(Unit); release.await() }
+                if (browserReturn) {
+                    fixture.session.noteMessagingSettingsOpened()
+                    fixture.session.didEnterBackground()
+                }
+                val refresh = async {
+                    if (browserReturn) fixture.session.didBecomeActive() else fixture.session.refreshMessagingSetup()
+                }
+                entered.await()
+                val pending = fixture.session.state.value
+                assertEquals(AppPhase.Launching, pending.phase)
+                assertTrue(pending.isMessagingSetupRefreshing)
+                assertTrue(ai.withmurph.companion.ui.showsMessagingSetup(pending))
+                // A second click cannot take ownership while admission is suspended.
+                assertFalse(fixture.session.refreshMessagingSetup())
+                if (outcome == "confirmed") fixture.api.initialOnboarding = completedInitialOnboarding()
+                if (outcome == "failed") fixture.api.admissionError = CompanionApiException.AdmissionRetryable
+                release.complete(Unit)
+                refresh.await()
+                val settled = fixture.session.state.value
+                assertFalse(settled.isMessagingSetupRefreshing)
+                assertEquals(outcome == "pending", ai.withmurph.companion.ui.showsMessagingSetup(settled))
+                if (outcome == "failed") assertTrue(settled.phase is AppPhase.Failed)
+                else assertEquals(AppPhase.Ready, settled.phase)
+            }
+        }
+    }
+
+    @Test
     fun refreshMessagingSetupReleasesGateOnceChannelIsConfirmed() = runTest {
         val fixture = fixture()
         fixture.api.initialOnboarding =
