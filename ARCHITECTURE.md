@@ -167,3 +167,8 @@ Play and upload certificates map to their distinct registered hosts. Both hosts
 have verified App Link intent filters. An unknown certificate or package,
 missing signer, multiple signers or PackageManager failure disables login with
 an inline unavailable error. The active callback must match the selected host.
+
+Telegram authentication remains pending across Activity pause/resume. Only the
+SDK callback, explicit Cancel, or bounded timeout completes it. Explicit Cancel
+invalidates the coordinator revision before cancelling SDK work, so an in-flight
+start request or late proof cannot complete a cancelled link.

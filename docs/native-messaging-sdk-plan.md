@@ -60,3 +60,17 @@ Telegram cancellation/unavailable/conflict, and large text. Retired bot-link
 screens are deleted. Native font scaling differs at maximum accessibility size;
 both screens retain the same control order and scrollable content. The paired
 sheets are supplemental comparisons, not substitutes for raw emulator evidence.
+
+## Shared lifecycle correction
+
+iOS review reproduced premature cancellation when returning during unfinished
+provider login. Android shared that heuristic; delete it here as well. Scene
+activation is not authentication completion. Keep SDK callbacks and the timeout;
+explicit Cancel invalidates the current coordinator revision and cancels pending
+SDK work. A late start or success cannot link after cancellation. Refresh the
+waiting-state visual proof and rerun verification before review.
+
+The correction passes full local verification: Debug 610 tests and 600 tests
+in each remaining variant, plus lint, assembly, manifest/license checks and all
+13 review-tooling checks. Fresh exact-head visual proof and ReviewGPT remain
+required before merge.

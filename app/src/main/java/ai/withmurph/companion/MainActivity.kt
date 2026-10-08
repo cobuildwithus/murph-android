@@ -339,6 +339,10 @@ class MainActivity : ComponentActivity() {
                         onMessagingVerify = { graph.applicationScope.launch {
                             if (graph.messaging.verifyCode()) graph.session.refreshMessagingSetup()
                         } },
+                        onMessagingCancelTelegram = {
+                            graph.messaging.cancelTelegram()
+                            telegramLogin.cancel()
+                        },
                         onMessagingTelegram = { lifecycleScope.launch {
                             if (graph.messaging.state.value.stage == ai.withmurph.companion.auth.MessagingStage.SayHi) {
                                 (graph.messaging.state.value.telegramUrl ?: appState.telegramChatUrl)?.let { openUri(it) }
@@ -403,7 +407,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        telegramLogin.setActive(true)
         if (::graph.isInitialized) {
             graph.healthSyncReminder.didEnterForeground()
             healthSyncNotificationsAllowed = graph.healthSyncReminder.notificationsAllowed()
@@ -417,11 +420,6 @@ class MainActivity : ComponentActivity() {
                 graph.session.didBecomeActive()
             }
         }
-    }
-
-    override fun onPause() {
-        telegramLogin.setActive(false)
-        super.onPause()
     }
 
     override fun onStop() {

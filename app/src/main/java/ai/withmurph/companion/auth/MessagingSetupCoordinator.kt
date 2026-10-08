@@ -108,6 +108,13 @@ class MessagingSetupCoordinator(private val auth: AuthProvider, private val api:
         }
     }
 
+    fun cancelTelegram() {
+        if (!state.value.telegramLogin || !state.value.busy) return
+        revision++
+        mutableState.value = state.value.copy(busy = false, telegramLogin = false,
+            error = MessagingLinkException.Reason.TelegramCancelled.message)
+    }
+
     fun restoreAwaitingInbound(url: String?) {
         if (!state.value.busy) mutableState.value = state.value.copy(stage = MessagingStage.SayHi, telegramUrl = url)
     }

@@ -53,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -75,6 +76,7 @@ fun MessagingSetupScreen(
     onSend: () -> Unit = {},
     onVerify: () -> Unit = {},
     onTelegram: () -> Unit = {},
+    onCancelTelegram: () -> Unit = {},
     onChangeNumber: () -> Unit = {},
     onOpenAccountSettings: () -> Unit,
     onConfirmConnected: () -> Unit,
@@ -178,29 +180,33 @@ fun MessagingSetupScreen(
             }
         }
         if (busy) {
-            Surface(
-                modifier = Modifier.align(Alignment.Center),
-                shape = RoundedCornerShape(50),
-                color = MurphColors.NavigationSurface,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 20.dp, vertical = 14.dp)
-                        .semantics { liveRegion = LiveRegionMode.Polite },
-                    horizontalAlignment = Alignment.CenterHorizontally,
+            Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MurphColors.NavigationSurface,
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = MurphColors.SageDark,
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "Confirming your account…",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                        color = MurphColors.Slate,
-                    )
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp, vertical = 14.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = MurphColors.SageDark,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Confirming your account…",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                            color = MurphColors.Slate,
+                        )
+                    }
                 }
+                if (link.telegramLogin) MurphLinkButton("Cancel", onCancelTelegram,
+                    modifier = Modifier.semantics { contentDescription = "Cancel Telegram login" })
             }
         }
     }

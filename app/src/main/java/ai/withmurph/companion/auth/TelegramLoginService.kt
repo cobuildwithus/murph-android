@@ -7,7 +7,6 @@ import java.security.MessageDigest
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -18,7 +17,6 @@ class TelegramLoginService(private val activity: Activity, private val scope: Co
     private var redirectUri: Uri? = null
     private var pending: CancellableContinuation<String>? = null
     private var attempt = 0L
-    private var leftApp = false
     private var receivedCallback = false
 
     suspend fun login(clientId: String): String {
@@ -26,7 +24,6 @@ class TelegramLoginService(private val activity: Activity, private val scope: Co
         val redirect = installedRedirect() ?: throw unavailable()
         redirectUri = Uri.parse(redirect)
         val current = ++attempt
-        leftApp = false
         receivedCallback = false
         TelegramLogin.init(clientId, redirect, listOf("openid", "profile", "telegram:bot_access"))
         try {
@@ -67,19 +64,6 @@ class TelegramLoginService(private val activity: Activity, private val scope: Co
             onSuccess = { if (attempt == current) finish(Result.success(it.idToken)) },
             onError = { if (attempt == current) finish(Result.failure(unavailable())) },
         )
-    }
-
-    fun setActive(active: Boolean) {
-        if (pending == null) return
-        if (!active) { leftApp = true; return }
-        if (!leftApp) return
-        val current = attempt
-        scope.launch {
-            // App-link dispatch can follow onResume. Do not cancel an accepted
-            // callback while the SDK exchanges its code using its PKCE verifier.
-            delay(1_000)
-            if (attempt == current && !receivedCallback) cancel()
-        }
     }
 
     fun cancel() = finish(Result.failure(MessagingLinkException(MessagingLinkException.Reason.TelegramCancelled)))
