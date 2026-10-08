@@ -113,6 +113,8 @@ node scripts/review-gpt-contract.mjs create \
   "$installed_review_tool_version" \
   "$expected_context_dir" >/dev/null
 
+REVIEW_GPT_PR_URL="$pr_number" node scripts/review-package.mjs verify "$response_file.package.json"
+
 node scripts/review-gpt-contract.mjs validate \
   "$response_file" \
   "$expected_context_dir/review-context.json"

@@ -5,7 +5,7 @@ The repository has three independent hosted checks:
 - **Android CI** runs the full unit-test, Debug/Release lint, and Debug/Release
   assembly surface on every pull-request head and on `main`.
 - **Review Tooling** installs the lockfile-pinned `@cobuild/review-gpt` package
-  without lifecycle scripts, verifies the connector-only response contract,
+  without lifecycle scripts, verifies the guarded ZIP and response contract,
   and lists the registered presets on the same heads.
 - **Android Visual Proof** runs the trusted default-branch workflow revision of
   the screenshot verifier against the candidate's exact Git objects and
@@ -30,7 +30,7 @@ pnpm review:validate output-packages/pr-review.md <pr-number> "$reviewed_head"
 
 `review:pr` accepts only the PR identity and response path, then invokes the
 fixed `android-pr-review` preset without user-supplied prompt or preset
-arguments. It disables artifacts explicitly, selects the GitHub connector,
+arguments. It attaches a guarded ZIP, retains the current ChatGPT app setting,
 and adds a small runner-generated invocation containing:
 
 - canonical repository, PR URL/number, and base and head commits;
@@ -39,10 +39,34 @@ and adds a small runner-generated invocation containing:
 - the pinned ReviewGPT package version;
 - the response context digest and exact checked head.
 
-No repository ZIP or Repomix artifact is generated or uploaded. ReviewGPT reads
-the repository and complete PR diff through the connected GitHub app. The
-runner fails closed unless the worktree is clean and local `HEAD` equals the
-pushed PR head.
+The ZIP is the sole repository-content source; no GitHub connector is required.
+`scripts/package-audit-context.sh --zip --with-tests` reads only committed Git
+blobs at the exact head. `REVIEW_GPT_PR_URL` identifies the PR. Like iOS, its
+explicit text allowlist excludes private paths, local.properties/gradle.properties,
+signing material, generated/build output and evidence binaries. Changed private
+or generated paths, symlinks, invalid UTF-8, NULs, credential markers and local
+home paths fail closed. No worktree file bytes enter the snapshot.
+
+The ZIP includes `review-gpt-pr-context/` with the exact context, PR description,
+text-only full PR diff, changed-file list, omitted-path list and SHA-256 file
+manifest. Archive member names and bytes are read back and compared to the
+snapshot. The runner writes `<response-file>.package.json` containing its
+archive path, SHA-256, head and context digest beside the tool's normal turn/model
+capture metadata. The launcher uploads a disposable byte-identical copy so its
+cleanup cannot delete the retained archive. After a successful waited run, the
+receipt also binds the completed user/assistant turn capture and response hashes
+(and model sidecar when present). Keep the receipt, capture sidecars and retained
+ZIP with the response. Validation rebuilds the current snapshot and verifies
+those hashes, archive members and bytes before accepting the response. Excluded binary pixels require the
+parent's separately recorded visual inspection; the review must not claim it
+saw them. The runner rejects dirty or unpushed work.
+
+Pin a signed-in managed browser with `REVIEW_GPT_BROWSER_LANE=hercules`
+(port 9444); eragon, phlebas and mountain remain supported. The override checks
+the existing listener's profile and port before use. No browser auth tokens are
+read or copied. An unavailable login/model/upload is a tooling failure, not a
+review result. Report it and use the shared GUI handoff when human action is
+needed.
 
 The response must echo the attested context digest and checked head exactly
 once. Its final three non-empty lines must be a structured finding count, a
@@ -75,5 +99,6 @@ fresh independent local review against the fixed checklist from the base
 revision. Keep review control changes separate from product behavior so later
 product PRs inherit a trusted gate.
 
-Both ordinary and exact-PR review use the connected GitHub repository as their
-sole repository-content boundary.
+Both ordinary and exact-PR review require the guarded ZIP and PR identity.
+The standalone packager repeats the control-plane gate, so a direct launcher
+invocation cannot certify protected changes.

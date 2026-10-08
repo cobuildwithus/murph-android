@@ -21,8 +21,10 @@ export MURPH_KEYTOOL_EXECUTABLE="$play_java_bin/keytool"
 bash -n scripts/review-gpt.config.sh
 bash -n scripts/review-pr.sh
 bash -n scripts/validate-review-gpt-response.sh
+bash -n scripts/package-audit-context.sh
+node --check scripts/review-package.mjs
 node --check scripts/review-gpt-contract.mjs
-node --test scripts/review-gpt-contract.test.mjs
+node --test scripts/review-gpt-contract.test.mjs scripts/review-package.test.mjs
 
 node <<'NODE'
 const pkg = require("./package.json");
@@ -35,33 +37,33 @@ if (pkg.scripts?.["review:pr"] !== "bash scripts/review-pr.sh") {
 if (pkg.scripts?.["review:validate"] !== "bash scripts/validate-review-gpt-response.sh") {
   throw new Error("review:validate must use the exact-head response validator");
 }
-if (pkg.devDependencies?.["@cobuild/review-gpt"] !== "0.5.151") {
+if (pkg.devDependencies?.["@cobuild/review-gpt"] !== "0.5.153") {
   throw new Error("@cobuild/review-gpt must stay exactly pinned");
 }
 NODE
 
 installed_review_version="$(node -p 'require("@cobuild/review-gpt/package.json").version')"
-[[ "$installed_review_version" == "0.5.151" ]]
+[[ "$installed_review_version" == "0.5.153" ]]
 if bash scripts/review-pr.sh 1 output-packages/review.md --prompt bypass >/dev/null 2>&1; then
   echo "Fixed PR review runner accepted pass-through arguments." >&2
   exit 1
 fi
 
 grep -Fq 'model="gpt-6-pro"' scripts/review-gpt.config.sh
-grep -Fq 'app_connector="github"' scripts/review-gpt.config.sh
-grep -Fq 'repo_context_url="https://github.com/cobuildwithus/murph-android"' scripts/review-gpt.config.sh
-grep -Fq 'attach_artifacts=0' scripts/review-gpt.config.sh
+grep -Fq 'app_connector="current"' scripts/review-gpt.config.sh
+grep -Fq 'repo_context_url=""' scripts/review-gpt.config.sh
+grep -Fq 'attach_artifacts=1' scripts/review-gpt.config.sh
 grep -Fq 'browser_lanes=(eragon phlebas mountain)' scripts/review-gpt.config.sh
-! grep -Fq 'package_script=' scripts/review-gpt.config.sh
+grep -Fq 'package_script="scripts/package-audit-context.sh"' scripts/review-gpt.config.sh
 [[ ! -e scripts/package-review-context.sh ]]
 [[ ! -e scripts/repo-tools.config.sh ]]
 
-grep -Fq -- '--no-zip' scripts/review-pr.sh
-grep -Fq -- '--connector github' scripts/review-pr.sh
+grep -Fq -- '--zip' scripts/review-pr.sh
+grep -Fq -- '--connector current' scripts/review-pr.sh
 grep -Fq 'review-gpt-contract.mjs invocation' scripts/review-pr.sh
 grep -Fq 'review_gpt_register_dir_preset "android-review"' scripts/review-gpt.config.sh
 grep -Fq 'review_gpt_register_dir_preset "android-pr-review"' scripts/review-gpt.config.sh
-grep -Fq 'Use the connected GitHub repository as the sole repository-content source.' scripts/chatgpt-review-presets/android-deep-review.md
+grep -Fq 'Use the attached guarded ZIP as the sole repository-content source.' scripts/chatgpt-review-presets/android-deep-review.md
 grep -Fq 'server-owned initial' scripts/chatgpt-review-presets/android-deep-review.md
 grep -Fq 'optional foreground-only Friendly Names' scripts/chatgpt-review-presets/android-deep-review.md
 grep -Fq 'For PR merge review, honor the evidence boundary in `AGENTS.md`' scripts/chatgpt-review-presets/android-deep-review.md
@@ -83,4 +85,4 @@ grep -Fq 'pull_request:' .github/workflows/review-tooling.yml
 grep -Fq 'pnpm install --frozen-lockfile --ignore-scripts' .github/workflows/review-tooling.yml
 grep -Fq 'pnpm review:verify' .github/workflows/review-tooling.yml
 
-printf '%s\n' "ReviewGPT connector-only workflow verified."
+printf '%s\n' "ReviewGPT guarded ZIP workflow verified."
