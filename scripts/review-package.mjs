@@ -37,7 +37,7 @@ export function includePath(path) {
 export function checkText(bytes) {
   if (bytes.includes(0)) fail("Non-text content in review snapshot");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  const home = new RegExp("/(?:" + "Users|home" + ")/[^<\\s/]+", "u");
+  const home = new RegExp("(?<![A-Za-z0-9_.-])/(?:" + "Users|home" + ")/[^<\\s/]+", "u");
   const credentials = /BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(?:live|proj)-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}/u;
   if (home.test(text) || credentials.test(text)) fail("Private identifier or credential marker in review snapshot");
   return bytes;
