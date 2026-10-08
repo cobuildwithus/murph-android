@@ -391,6 +391,7 @@ internal enum class ScreenshotScenario {
             ready(HealthSyncState.Synced(now)).copy(healthSyncReminderEnabled = true)
         MessagingSetup -> ready(HealthSyncState.NotConnected).copy(messagingSetupRequired = true)
         MessagingSetupConfirming -> ready(HealthSyncState.NotConnected).copy(
+            phase = AppPhase.Launching,
             messagingSetupRequired = true,
             isMessagingSetupRefreshing = true,
         )
