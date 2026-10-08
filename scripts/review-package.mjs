@@ -114,7 +114,8 @@ export function validateCapture(response, capture, model) {
       !/^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9-]+$/u.test(capture.chatUrl ?? "") ||
       !capture.targetId || !assistant?.assistantTurnId || !user?.turnId ||
       !Number.isInteger(user.turnIndex) || user.turnIndex < 0 ||
-      !Number.isInteger(assistant.assistantTurnIndex) || assistant.assistantTurnIndex <= user.turnIndex ||
+      // ReviewGPT indexes user and assistant role lists independently.
+      !Number.isInteger(assistant.assistantTurnIndex) || assistant.assistantTurnIndex < 0 ||
       assistant.precedingUserTurnId !== user.turnId ||
       assistant.precedingUserTurnIndex !== user.turnIndex ||
       !/^sha256:[0-9a-f]{64}$/u.test(user.signature ?? "") ||

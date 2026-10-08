@@ -86,12 +86,23 @@ test("capture validation requires a complete matching turn, response bytes and c
   const capture = buildThreadCaptureIdentity({
     browserEndpoint: "http://127.0.0.1:9444", chatUrl: "https://chatgpt.com/c/synthetic", targetId: "target",
     committedUserTurn: { turnId: "user", turnIndex: 0, signature: "submitted prompt" },
-    assistantSnapshot: { assistantTurnId: "assistant", assistantTurnIndex: 1, precedingUserTurnId: "user", precedingUserTurnIndex: 0,
+    assistantSnapshot: { assistantTurnId: "assistant", assistantTurnIndex: 0, precedingUserTurnId: "user", precedingUserTurnIndex: 0,
       precedingUserMessageSignature: "submitted prompt", text: response.toString(), signature: "completed response" },
   });
   const model = { requestedModel: "gpt-6-pro", responseModelSlug: "gpt-6-pro", responseSha256: sha256(response) };
   validateCapture(response, capture, model);
   validateCapture(response, capture, null); // Successful launcher enforces the timed fallback when attribution is absent.
+  // Both role-relative indexes are zero for the first real pinned-tool exchange.
+  for (const assistantTurnIndex of [-1, 0.5, undefined]) {
+    assert.throws(() => validateCapture(response, { ...capture, assistantResponse: { ...capture.assistantResponse, assistantTurnIndex } }, model), /completed-turn/u);
+  }
+  for (const mismatch of [
+    { precedingUserTurnIndex: 1 },
+    { precedingUserTurnId: "different-user" },
+    { precedingUserMessageSignature: "sha256:" + "0".repeat(64) },
+  ]) {
+    assert.throws(() => validateCapture(response, { ...capture, assistantResponse: { ...capture.assistantResponse, ...mismatch } }, model), /completed-turn/u);
+  }
   assert.throws(() => validateCapture(response, null, model), /completed-turn/u);
   assert.throws(() => validateCapture(response, { ...capture, assistantResponse: null }, model), /completed-turn/u);
   assert.throws(() => validateCapture(Buffer.from("other"), capture, model), /completed-turn/u);
