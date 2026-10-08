@@ -81,6 +81,8 @@ Activity recreation never focuses an unattached field.
 A submitted SMS code or Telegram proof whose response is lost returns an Unknown
 outcome; the app then re-reads canonical readiness instead of reporting a dead
 end, so a link the backend committed still continues setup. Nothing is resent.
+A messaging 5xx without a recognized domain code stays indeterminate
+(HostedAuthException.Response), not a definitive rejection.
 
 Cancel during the suspended auth observation in requireCurrent now stops the
 next SDK launch or completion: auth is observed first, then revision and member

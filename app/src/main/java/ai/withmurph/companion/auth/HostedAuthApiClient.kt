@@ -87,9 +87,12 @@ class HostedAuthApiClient(
                     "AUTH_MESSAGING_APPROVAL_REQUIRED" -> MessagingLinkException.Reason.Approval
                     "AUTH_CREDENTIAL_REQUEST_INVALID" -> MessagingLinkException.Reason.InvalidNumber
                     "AUTH_TELEGRAM_INVALID" -> MessagingLinkException.Reason.TelegramUnavailable
-                    else -> when (response.status) {
-                        429 -> MessagingLinkException.Reason.RateLimited
-                        401 -> MessagingLinkException.Reason.FreshLogin
+                    else -> when {
+                        response.status == 429 -> MessagingLinkException.Reason.RateLimited
+                        response.status == 401 -> MessagingLinkException.Reason.FreshLogin
+                        // A server or gateway error does not say whether the request took
+                        // effect, so it stays a non-domain failure the caller can reconcile.
+                        response.status >= 500 -> throw HostedAuthException.Response(response.status)
                         else -> MessagingLinkException.Reason.Unavailable
                     }
                 }
