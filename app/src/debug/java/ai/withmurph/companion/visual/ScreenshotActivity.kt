@@ -806,6 +806,7 @@ private fun messagingFixture(name: String?): ai.withmurph.companion.auth.Messagi
         "code" -> code
         "connected" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
         "waiting" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Approving, busy = true)
+        "telegram-confirming" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Confirming, busy = true)
         else -> phone
     }
 }

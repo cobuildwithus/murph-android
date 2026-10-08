@@ -55,6 +55,23 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
+    fun submittedTelegramProofHidesCancel() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (state in listOf("waiting", "telegram-confirming")) {
+            val intent = Intent(context, ScreenshotActivity::class.java)
+                .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
+                .putExtra("messagingState", state)
+            ActivityScenario.launch<ScreenshotActivity>(intent).use {
+                compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                // Only approval in Telegram can be cancelled; a submitted proof
+                // always finishes confirming.
+                compose.onAllNodesWithContentDescription("Cancel Telegram login")
+                    .assertCountEquals(if (state == "waiting") 1 else 0)
+            }
+        }
+    }
+
+    @Test
     fun recheckFromCodeStepNeverFocusesHiddenCodeEntry() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         for (scenarioName in listOf("messagingSetupConfirming", "messagingSetup")) {
