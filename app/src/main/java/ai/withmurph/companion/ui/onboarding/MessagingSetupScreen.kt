@@ -184,7 +184,16 @@ fun MessagingSetupScreen(
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OtpInput(link.code, onCode, codeFocus, onVerify, !busy)
-                        if (link.busy) MessagingStatus("Checking code…") else MessagingError(link, !busy, onOpenAccountSettings)
+                        if (link.busy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.align(Alignment.CenterHorizontally).size(16.dp)
+                                    .semantics { contentDescription = "Checking code" },
+                                color = MurphColors.SageDark,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            MessagingError(link, !busy, onOpenAccountSettings)
+                        }
                     }
                     MurphLinkButton("Use a different number", onChangeNumber, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally))
                 }

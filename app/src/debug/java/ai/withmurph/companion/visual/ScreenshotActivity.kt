@@ -804,6 +804,7 @@ private fun messagingFixture(name: String?): ai.withmurph.companion.auth.Messagi
     if (error != null) return (if (name == "invalid-code") code else phone).copy(error = error.message, telegramError = name?.startsWith("telegram-") == true)
     return when (name) {
         "code" -> code
+        "checking-code" -> code.copy(busy = true)
         "connected" -> phone.copy(stage = ai.withmurph.companion.auth.MessagingStage.Connected)
         "waiting" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Approving, busy = true)
         "telegram-confirming" -> phone.copy(telegram = ai.withmurph.companion.auth.TelegramProgress.Confirming, busy = true)

@@ -72,6 +72,19 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
+    fun checkingCodeShowsOnlyASpinner() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, ScreenshotActivity::class.java)
+            .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
+            .putExtra("messagingState", "checking-code")
+        ActivityScenario.launch<ScreenshotActivity>(intent).use {
+            compose.onNodeWithContentDescription("Checking code").assertIsDisplayed()
+            compose.onAllNodesWithText("Checking code…").assertCountEquals(0)
+            compose.onNodeWithContentDescription("6-digit verification code").assertIsDisplayed()
+        }
+    }
+
+    @Test
     fun recheckFromCodeStepNeverFocusesHiddenCodeEntry() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         for (scenarioName in listOf("messagingSetupConfirming", "messagingSetup")) {
