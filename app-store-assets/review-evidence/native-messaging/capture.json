@@ -1,9 +1,9 @@
 {
-  "task": "Code-check spinner capture (claude-code, adb screencap)",
-  "gitHeadStart": "25f1640d56179fa6ffb466c3382a161b865ded53",
-  "gitHeadEnd": "25f1640d56179fa6ffb466c3382a161b865ded53",
-  "startUtc": "2026-10-11T16:56:00Z",
-  "endUtc": "2026-10-11T17:02:00Z",
+  "task": "Telegram in-button progress capture (claude-code, adb screencap)",
+  "gitHeadStart": "9eea6e0d39776681a650a346fd700f0eca9c9b49",
+  "gitHeadEnd": "9eea6e0d39776681a650a346fd700f0eca9c9b49",
+  "startUtc": "2026-10-11T18:06:00Z",
+  "endUtc": "2026-10-11T18:08:00Z",
   "device": {
     "serial": "emulator-5584",
     "avd": "murph_native_sdk_evidence",
@@ -11,11 +11,11 @@
     "systemFontScale": 1.0
   },
   "apkSha256": {
-    "25f1640 (checking-code, large-text-checking-code)": "29fe4f30b589aa11a9f1423e0e5bbae3bffd42118aeef5a848533288d93af146"
+    "9eea6e0 (8 progress states)": "62de82d5d98b42062c2a03fd8e0ec67e0dcf16e9f84c8be0ae3f19d14bfc7b92"
   },
   "images": {
     "admission-connected.png": "a8589e5e692decec31245ef1a76be51ef3aa1d169f4ab528562839f1b18bb7c0",
-    "admission-phone.png": "4628f6b77fbc6191527307ff13b13e70f00b5724ace5526898236f4916e13de0",
+    "admission-phone.png": "5d5f7aab94a997e7d9d96085f2d7de7ba1583837fa6dc68720b82231d20a290c",
     "approval.png": "e88ccb15ad8babf7add488a1e2eeaafa0f83455311bd83399eed5775d5376bb3",
     "code.png": "2e6a84db9683d4cfa1d950eaae60839e58519bed905e99806ee4ea9ce39e2791",
     "contact-in-use.png": "d617ba55766c95e1e467ab3807ecc25f5ca88150d219893d5f7568f7541cd34c",
@@ -23,14 +23,14 @@
     "invalid-code.png": "4345d5d598abd697718ad1b92fcef0bea10f09b95b7ad44da3aff73620c32e29",
     "invalid-number.png": "2521130a843048b7e4b67841d22ae4395310daa21dd689046e958965d3ee5158",
     "large-text-admission-connected.png": "1fc2e7d48f24b51699d5756a1af0a9be5e27988fdc00e0c35efcfbfe4f401f12",
-    "large-text-admission-phone.png": "0c336270a7a8cf1d15bcbd9079a0f27dfe2b8d7f848f865d158d6d2db5e721fc",
+    "large-text-admission-phone.png": "d6d3a8ebdacd145c73388b2335dc5ad676d832f196e92edca3d077d9986ee480",
     "large-text-code-returned.png": "409907502f905e3d1478e385260712e43b3964b2b25fa2963c30e26fd41b6643",
     "large-text-code-scrolled.png": "409907502f905e3d1478e385260712e43b3964b2b25fa2963c30e26fd41b6643",
     "large-text-contact-in-use-returned.png": "d8f2d931fb6949c16c97365d7514d8f54cc85ab3f3cd7970668a3580c885d734",
     "large-text-contact-in-use-scrolled.png": "8b8828fe3a5f7a406f9f8e0237669c630e9a983f7ff911b8174359c1753cb310",
     "large-text-returned.png": "2ea25a45cf6283704fd738a79c8d5d71e60e8a918f2a1c35527d98b827328b11",
     "large-text-scrolled.png": "2ea25a45cf6283704fd738a79c8d5d71e60e8a918f2a1c35527d98b827328b11",
-    "large-text-telegram-confirming.png": "bd745d644fc7c777d5d768d073158d61fc58d217a44f54812a0ccf40221f31a7",
+    "large-text-telegram-confirming.png": "d3d22b626d20bc6aa690a3520fb991d9bb6fef2161f68ceb7eca5f33d9fd8ba6",
     "large-text-telegram-conflict-returned.png": "a3d40c2ea1ac4792cd9d7f1105d4b1ea32b998d7fbe4f9119377163288e16a34",
     "large-text-telegram-conflict-scrolled.png": "45346340089f695643883255bb4ece3b3a723c3f3d6298be52882583564bb363",
     "large-text.png": "2ea25a45cf6283704fd738a79c8d5d71e60e8a918f2a1c35527d98b827328b11",
@@ -38,13 +38,16 @@
     "phone.png": "65766fc0bd2a8d4b6020376c1a2cd2583a78fd23b1630aeb18b0ad7ce6af196e",
     "rate-limited.png": "3e88b401aedf00a6546c5da1bcad52f6ae2f69540911c3a0f023fcd19b017a41",
     "telegram-cancelled.png": "9d143977b1a296502832b705d7633b843a450d7bf7415e27ab9cc5a2df5b2419",
-    "telegram-confirming.png": "7167e797f673fdc90f524ae1428f1623e84a13df85bcd3010c27db286c99186b",
+    "telegram-confirming.png": "f856312142fe35873d294011646b111d7a6872b1067c688af52d85479b3afb7c",
     "telegram-conflict.png": "ffd48183891ff4db72f220e92f35f502c883fd0508ce94bde2ce80745dca2296",
     "telegram-unavailable.png": "4967cee9b3fe8bf2d7de7aca66719cb22fdba09a38a1dc38a23f73d66370c025",
     "unavailable.png": "9a9393be0afbf681773a868097bf0102a0b86c34fcda5f816d784c93b7563d45",
-    "waiting.png": "8ae4fd95cbd857b91a64b52138b61820a4c3da2c7de7f9a06a5fd20b39da18a3",
+    "waiting.png": "46c4e7014027cfad84f9d4c30e69cccc24cb2fbb7a20f51da412bdf8a4448708",
     "checking-code.png": "f9b9615d8216bcb23a3a3119e2cc4abfbbcc9e80ab2b9bff73aad76b0ab9daf3",
-    "large-text-checking-code.png": "6c34b6a6f1b4847e814797b2357a7a593f10601c3d0378ad7dbd7385642310da"
+    "large-text-checking-code.png": "6c34b6a6f1b4847e814797b2357a7a593f10601c3d0378ad7dbd7385642310da",
+    "large-text-waiting.png": "1c1cf96bc7ac621f9006e3c8d03ccab87358cac7b7ac4bca8cabbdb5d03a3510",
+    "admission-code.png": "95844f5055cd1c0c73fc94ff0f3ce5e6c1b15162e0ea5a4ae0ce21bd66df491d",
+    "large-text-admission-code.png": "e3844977ee3ab9207383a4b0cdc792a29a20d8d6943a36c69ce6f83736ba1357"
   },
-  "parentInspection": "checking-code and large-text-checking-code are new: a centered spinner under the code boxes replaces \"Checking code\u2026\" text. The evidence AVD runs with animator_duration_scale 0, which freezes the indeterminate indicator on a dot frame; it was set to 1.0 only for these captures and restored to 0, and the clearest arc frame was kept. A fresh capture of code at this head is pixel-identical below the status bar to the committed code.png. All other committed images are unchanged from the previous capture set."
+  "parentInspection": "waiting, telegram-confirming, admission-phone and admission-code (ordinary and maximum text) were recaptured: Connect Telegram keeps an in-button spinner with every control in place and disabled, Cancel appears below it only while approving, and a code-step re-check shows the spinner under the retained code entry. large-text-waiting and admission-code/large-text-admission-code are new. Animator scale was set to 1.0 only for these captures and restored to 0; the frame with the clearest arc was kept. A fresh capture of phone at this head is pixel-identical below the status bar to the committed phone.png; all other committed images are unchanged."
 }

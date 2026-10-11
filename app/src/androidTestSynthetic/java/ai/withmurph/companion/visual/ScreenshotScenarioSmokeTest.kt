@@ -36,17 +36,31 @@ class ScreenshotScenarioSmokeTest {
     @Test
     fun launchingMessagingAdmissionKeepsProgressAndSignOutReachable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        for (fontScale in listOf(1.0f, 2.0f)) for (state in listOf("connected", "phone")) {
+        for (fontScale in listOf(1.0f, 2.0f)) for (state in listOf("connected", "phone", "code")) {
             val intent = Intent(context, ScreenshotActivity::class.java)
                 .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetupConfirming")
                 .putExtra("messagingState", state)
                 .putExtra("messagingFontScale", fontScale)
             ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
-                compose.onNodeWithText(if (state == "phone") "Choose how to message Murph" else "Account connected").assertIsDisplayed()
-                // Progress renders inline in the content flow; a re-check from the
-                // phone step replaces its controls instead of covering them.
-                compose.onNodeWithText("Confirming your account…").performScrollTo().assertIsDisplayed()
-                if (state == "phone") compose.onAllNodesWithText("Send code").assertCountEquals(0)
+                // Progress stays in the control that started it; controls stay
+                // in place, disabled, instead of being replaced by a status line.
+                when (state) {
+                    "phone" -> {
+                        compose.onNodeWithText("Choose how to message Murph").assertIsDisplayed()
+                        compose.onNodeWithText("Connect Telegram").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
+                        compose.onNodeWithText("Send code").assertIsNotEnabled()
+                        compose.onAllNodesWithText("Confirming your account…").assertCountEquals(0)
+                    }
+                    "code" -> {
+                        compose.onNodeWithContentDescription("6-digit verification code").assertIsDisplayed()
+                        compose.onNodeWithContentDescription("Checking code").assertIsDisplayed()
+                        compose.onAllNodesWithText("Confirming your account…").assertCountEquals(0)
+                    }
+                    else -> {
+                        compose.onNodeWithText("Account connected").assertIsDisplayed()
+                        compose.onNodeWithText("Confirming your account…").performScrollTo().assertIsDisplayed()
+                    }
+                }
                 // Native linking retains its existing sign-out escape during admission.
                 compose.onNodeWithText("Sign out").performScrollTo().performClick()
                 scenario.onActivity { assertEquals(1, it.signOutRequests) }
@@ -62,7 +76,9 @@ class ScreenshotScenarioSmokeTest {
                 .putExtra(ScreenshotActivity.SCENARIO_EXTRA, "messagingSetup")
                 .putExtra("messagingState", state)
             ActivityScenario.launch<ScreenshotActivity>(intent).use {
-                compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                compose.onNodeWithText("Connect Telegram").assertIsDisplayed().assertIsNotEnabled()
+                compose.onNodeWithText("Send code").assertIsNotEnabled()
+                compose.onAllNodesWithText("Confirming your account…").assertCountEquals(0)
                 // Only approval in Telegram can be cancelled; a submitted proof
                 // always finishes confirming.
                 compose.onAllNodesWithContentDescription("Cancel Telegram login")
@@ -85,23 +101,24 @@ class ScreenshotScenarioSmokeTest {
     }
 
     @Test
-    fun recheckFromCodeStepNeverFocusesHiddenCodeEntry() {
+    fun recheckFromCodeStepNeverFocusesDisabledCodeEntry() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         for (scenarioName in listOf("messagingSetupConfirming", "messagingSetup")) {
             val intent = Intent(context, ScreenshotActivity::class.java)
                 .putExtra(ScreenshotActivity.SCENARIO_EXTRA, scenarioName)
                 .putExtra("messagingState", "code")
                 .putExtra("messagingAutofocus", true)
-            // A recreated Activity during a code-step re-check must not request
-            // focus for the OTP field that progress has replaced.
+            // A recreated Activity during a code-step re-check keeps the OTP field
+            // disabled (unfocusable) and must not request focus for it.
             ActivityScenario.launch<ScreenshotActivity>(intent).use { scenario ->
                 compose.waitForIdle()
                 if (scenarioName == "messagingSetupConfirming") {
-                    compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
-                    compose.onAllNodesWithContentDescription("6-digit verification code").assertCountEquals(0)
+                    compose.onNodeWithContentDescription("Checking code").assertIsDisplayed()
+                    compose.onNodeWithContentDescription("6-digit verification code").assertIsNotEnabled()
                     scenario.recreate()
                     compose.waitForIdle()
-                    compose.onNodeWithText("Confirming your account…").assertIsDisplayed()
+                    compose.onNodeWithContentDescription("Checking code").assertIsDisplayed()
+                    compose.onNodeWithContentDescription("6-digit verification code").assertIsNotEnabled()
                 } else {
                     compose.onNodeWithContentDescription("6-digit verification code").assertIsDisplayed()
                 }
@@ -126,7 +143,7 @@ class ScreenshotScenarioSmokeTest {
                         compose.onNodeWithContentDescription("6-digit verification code").performScrollTo().assertFullyContained()
                         listOf("Use a different number")
                     }
-                    "waiting" -> emptyList()
+                    "waiting" -> listOf("Connect Telegram")
                     else -> {
                         compose.onNodeWithContentDescription("Country or region", substring = true)
                             .performScrollTo().assertFullyContained().assertHasClickAction()
@@ -143,7 +160,8 @@ class ScreenshotScenarioSmokeTest {
                     compose.onNodeWithText(label).performScrollTo().assertFullyContained().assertHasClickAction()
                 }
                 if (state == "waiting") {
-                    compose.onNodeWithContentDescription("Cancel Telegram login").assertFullyContained().assertHasClickAction()
+                    compose.onNodeWithContentDescription("Cancel Telegram login").performScrollTo().assertFullyContained()
+                        .assertHasClickAction()
                 }
                 // Returning to the top must also leave the exit action reachable.
                 compose.onNodeWithText("Sign out").performScrollTo().assertFullyContained().assertHasClickAction()
