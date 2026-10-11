@@ -135,6 +135,7 @@ fun MurphOutlineButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    leadingContent: @Composable (() -> Unit)? = null,
 ) {
     OutlinedButton(
         onClick = onClick,
@@ -148,7 +149,10 @@ fun MurphOutlineButton(
             disabledContentColor = MurphColors.SlateMuted.copy(alpha = 0.5f),
         ),
     ) {
-        Text(text = text, style = MaterialTheme.typography.bodyLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            leadingContent?.invoke()
+            Text(text = text, style = MaterialTheme.typography.bodyLarge)
+        }
     }
 }
 
