@@ -1,9 +1,9 @@
 {
-  "task": "Telegram in-button progress capture (claude-code, adb screencap)",
-  "gitHeadStart": "9eea6e0d39776681a650a346fd700f0eca9c9b49",
-  "gitHeadEnd": "9eea6e0d39776681a650a346fd700f0eca9c9b49",
-  "startUtc": "2026-10-11T18:06:00Z",
-  "endUtc": "2026-10-11T18:08:00Z",
+  "task": "Telegram logo capture (claude-code, adb screencap)",
+  "gitHeadStart": "948dbdda963cf65895f51d76f773ddebfad13685",
+  "gitHeadEnd": "948dbdda963cf65895f51d76f773ddebfad13685",
+  "startUtc": "2026-10-12T14:45:00Z",
+  "endUtc": "2026-10-12T14:48:00Z",
   "device": {
     "serial": "emulator-5584",
     "avd": "murph_native_sdk_evidence",
@@ -11,7 +11,7 @@
     "systemFontScale": 1.0
   },
   "apkSha256": {
-    "9eea6e0 (8 progress states)": "62de82d5d98b42062c2a03fd8e0ec67e0dcf16e9f84c8be0ae3f19d14bfc7b92"
+    "948dbdd (phone, large-text)": "56cbf1844a3f332ac9a07f5972eba9d839d40cc26912e6cb21e1aeb2774cd3c9"
   },
   "images": {
     "admission-connected.png": "a8589e5e692decec31245ef1a76be51ef3aa1d169f4ab528562839f1b18bb7c0",
@@ -33,9 +33,9 @@
     "large-text-telegram-confirming.png": "d3d22b626d20bc6aa690a3520fb991d9bb6fef2161f68ceb7eca5f33d9fd8ba6",
     "large-text-telegram-conflict-returned.png": "a3d40c2ea1ac4792cd9d7f1105d4b1ea32b998d7fbe4f9119377163288e16a34",
     "large-text-telegram-conflict-scrolled.png": "45346340089f695643883255bb4ece3b3a723c3f3d6298be52882583564bb363",
-    "large-text.png": "2ea25a45cf6283704fd738a79c8d5d71e60e8a918f2a1c35527d98b827328b11",
+    "large-text.png": "99aa00230fdc8ba46ae63d9578be00dfd4b0c57d6895c526629f1e6bd8026761",
     "login.png": "b825ff52140a8434ede1e6c2bdd8e546273b67b38aaf2b8f95795ff89dad2893",
-    "phone.png": "65766fc0bd2a8d4b6020376c1a2cd2583a78fd23b1630aeb18b0ad7ce6af196e",
+    "phone.png": "06df59554dcebe8efa4cb50fa542c6fe5347a2a4180d7062ee978286f15862a9",
     "rate-limited.png": "3e88b401aedf00a6546c5da1bcad52f6ae2f69540911c3a0f023fcd19b017a41",
     "telegram-cancelled.png": "9d143977b1a296502832b705d7633b843a450d7bf7415e27ab9cc5a2df5b2419",
     "telegram-confirming.png": "f856312142fe35873d294011646b111d7a6872b1067c688af52d85479b3afb7c",
@@ -49,5 +49,5 @@
     "admission-code.png": "95844f5055cd1c0c73fc94ff0f3ce5e6c1b15162e0ea5a4ae0ce21bd66df491d",
     "large-text-admission-code.png": "e3844977ee3ab9207383a4b0cdc792a29a20d8d6943a36c69ce6f83736ba1357"
   },
-  "parentInspection": "waiting, telegram-confirming, admission-phone and admission-code (ordinary and maximum text) were recaptured: Connect Telegram keeps an in-button spinner with every control in place and disabled, Cancel appears below it only while approving, and a code-step re-check shows the spinner under the retained code entry. large-text-waiting and admission-code/large-text-admission-code are new. Animator scale was set to 1.0 only for these captures and restored to 0; the frame with the clearest arc was kept. A fresh capture of phone at this head is pixel-identical below the status bar to the committed phone.png; all other committed images are unchanged."
+  "parentInspection": "phone and large-text were recaptured after a cold emulator restart (the long-running instance showed a system ANR dialog): Connect Telegram now leads with the Telegram logo, which scales with the font scale. All other committed images are unchanged; states where the button is busy show the spinner in place of the logo, as before."
 }

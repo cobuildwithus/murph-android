@@ -1,6 +1,10 @@
 package ai.withmurph.companion.ui.onboarding
 
 import ai.withmurph.companion.auth.MessagingSetupState
+import ai.withmurph.companion.R
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.Icon
 import ai.withmurph.companion.auth.MessagingStage
 import ai.withmurph.companion.auth.TelegramProgress
 import ai.withmurph.companion.auth.CountryDialCode
@@ -163,9 +167,13 @@ fun MessagingSetupScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         MurphOutlineButton(
                             "Connect Telegram", onTelegram, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                            // Like the website, the spinner takes the logo's place; the logo scales with text.
                             leadingContent = if (telegramBusy) {
                                 { CircularProgressIndicator(Modifier.size(16.dp), color = MurphColors.Slate, strokeWidth = 2.dp) }
-                            } else null,
+                            } else {
+                                { Icon(painterResource(R.drawable.ic_telegram), contentDescription = null,
+                                    modifier = Modifier.size(with(LocalDensity.current) { 20.sp.toDp() }), tint = MurphColors.Slate) }
+                            },
                         )
                         if (link.telegram == TelegramProgress.Approving) MurphLinkButton("Cancel", onCancelTelegram,
                             modifier = Modifier.align(Alignment.CenterHorizontally)
