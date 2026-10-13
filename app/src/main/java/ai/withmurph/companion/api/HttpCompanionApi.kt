@@ -750,6 +750,15 @@ internal object InitialOnboardingApiContract {
     fun safeSameOriginHttpsUrl(rawValue: Any?, backendOrigin: URI): String =
         LaunchConsentApiContract.safeDocumentUrl(rawValue, backendOrigin)
 
+    // The backend serves voice previews from Murph's canonical product origin
+    // in every environment (iOS streaming needs it), so a development or
+    // staging backend also accepts that one origin for previews only.
+    private fun safeVoicePreviewUrl(rawValue: Any?, backendOrigin: URI): String =
+        runCatching { safeSameOriginHttpsUrl(rawValue, backendOrigin) }
+            .getOrElse { safeSameOriginHttpsUrl(rawValue, MurphProductOrigin) }
+
+    private val MurphProductOrigin = URI("https://www.withmurph.ai")
+
     fun completionBody(request: InitialOnboardingCompletionRequest): Map<String, Any> =
         buildMap {
             put("action", request.action.wireValue)
@@ -785,7 +794,7 @@ internal object InitialOnboardingApiContract {
                 id = strictString(voice["id"]),
                 label = strictString(voice["label"]),
                 description = strictString(voice["description"]),
-                previewUrl = safeSameOriginHttpsUrl(voice["previewURL"], backendOrigin),
+                previewUrl = safeVoicePreviewUrl(voice["previewURL"], backendOrigin),
             )
         }
         val tones = requiredMaps(catalog["tones"]).map { tone ->
