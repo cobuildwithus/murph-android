@@ -1,0 +1,18 @@
+{
+  "task": "Voice preview origin evidence (claude-code, adb screencap)",
+  "gitHeadStart": "e3175ed2f0afa5f3d5235d48325ed6ef5d33f219",
+  "gitHeadEnd": "e3175ed2f0afa5f3d5235d48325ed6ef5d33f219",
+  "device": {
+    "serial": "emulator-5584",
+    "avd": "murph_native_sdk_evidence",
+    "model": "Pixel 7 API 36",
+    "systemFontScale": 1.0
+  },
+  "apkSha256": {
+    "e3175ed (onboarding-voice)": "c88e6ea70556dad38ee6759331ff56a2cefc9ec1e6d25cf438152eef61e34271"
+  },
+  "images": {
+    "onboarding-voice.png": "3912243248eeb791709ba73b1184d1d62ecba2dda2198e7e0f11bc5840ac6ad7"
+  },
+  "parentInspection": "onboarding-voice shows the synthetic Choose a voice step whose preview buttons use the parsed previewURL values; this change only widens which origins those URLs may use, so the rendering is the existing design. Captured after a cold emulator restart."
+}

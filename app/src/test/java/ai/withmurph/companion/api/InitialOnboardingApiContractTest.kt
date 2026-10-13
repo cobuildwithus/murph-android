@@ -30,6 +30,35 @@ class InitialOnboardingApiContractTest {
     }
 
     @Test
+    fun developmentBackendAcceptsProductOriginVoicePreviewsOnly() {
+        val development = URI("https://linq-webhook-dev.ourrevolution.wtf")
+        fun parseFrom(previewUrl: String) = InitialOnboardingApiContract.parse(
+            schema = SCHEMA,
+            status = "pending",
+            completedNow = null,
+            preferences = emptyPreferences(),
+            catalog = catalog(previewUrl = previewUrl),
+            contactCard = null,
+            contactAction = contactAction(),
+            backendOrigin = development,
+        )
+
+        assertEquals(
+            "https://www.withmurph.ai/audio/murph.mp3",
+            parseFrom("https://www.withmurph.ai/audio/murph.mp3").catalog?.voices?.single()?.previewUrl,
+        )
+        assertEquals(
+            "https://linq-webhook-dev.ourrevolution.wtf/audio/murph.mp3",
+            parseFrom("/audio/murph.mp3").catalog?.voices?.single()?.previewUrl,
+        )
+        try {
+            parseFrom("https://example.com/audio.mp3")
+            fail("A foreign preview origin must be rejected")
+        } catch (_: CompanionApiException.InvalidResponse) {
+        }
+    }
+
+    @Test
     fun parsesCompletedProjectionWithoutCatalog() {
         val onboarding = InitialOnboardingApiContract.parse(
             schema = SCHEMA,
